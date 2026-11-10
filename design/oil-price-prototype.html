@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>油势 · 微信小程序设计评审稿</title>
+  <style>
+    :root {
+      --paper: #f5f2e9;
+      --paper-deep: #eae6da;
+      --ink: #17231e;
+      --muted: #6f7771;
+      --line: #dcd8cc;
+      --green: #137a52;
+      --green-soft: #e2f1e8;
+      --red: #ce493b;
+      --red-soft: #fae8e3;
+      --amber: #e9a928;
+      --amber-soft: #f7e8bc;
+      --night: #142c23;
+      --white: #fffef9;
+      --shadow: 0 30px 80px rgba(29, 37, 31, .16), 0 4px 16px rgba(29, 37, 31, .08);
+    }
+
+    * { box-sizing: border-box; }
+    html { color-scheme: light; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      background:
+        radial-gradient(circle at 12% 10%, rgba(233, 169, 40, .12), transparent 26%),
+        linear-gradient(120deg, #efede5 0%, #e6e4dc 100%);
+      color: var(--ink);
+      font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input { font: inherit; }
+    button { color: inherit; }
+    button:focus-visible { outline: 3px solid rgba(233, 169, 40, .5); outline-offset: 3px; }
+    .svg-sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+    .icon { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    .review-shell {
+      width: min(1440px, 100%);
+      min-height: 100vh;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 246px minmax(470px, 1fr) 292px;
+    }
+
+    .review-sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 34px 24px 24px;
+      background: rgba(250, 248, 241, .86);
+      border-right: 1px solid rgba(23, 35, 30, .09);
+      backdrop-filter: blur(18px);
+      display: flex;
+      flex-direction: column;
+      z-index: 5;
+    }
+
+    .review-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+    .brand-mark {
+      width: 42px;
+      height: 42px;
+      border-radius: 13px 13px 13px 4px;
+      background: var(--night);
+      color: var(--amber);
+      display: grid;
+      place-items: center;
+      transform: rotate(-3deg);
+    }
+    .brand-mark .icon { width: 24px; height: 24px; }
+    .brand-name { font-family: "STSong", "Songti SC", serif; font-size: 25px; font-weight: 800; letter-spacing: .12em; }
+    .brand-en { font-family: "Bahnschrift", "DIN Alternate", sans-serif; font-size: 9px; letter-spacing: .22em; color: var(--muted); margin-top: 1px; }
+    .version-pill { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; color: var(--muted); margin: 0 0 34px 54px; }
+    .version-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); }
+
+    .nav-caption { font-size: 10px; color: #8a8f89; letter-spacing: .18em; margin: 0 0 12px 10px; }
+    .side-nav { display: grid; gap: 6px; }
+    .side-nav button {
+      border: 0;
+      background: transparent;
+      border-radius: 12px;
+      padding: 12px 12px;
+      display: grid;
+      grid-template-columns: 24px 22px 1fr 18px;
+      align-items: center;
+      gap: 9px;
+      text-align: left;
+      cursor: pointer;
+      transition: background .2s, transform .2s;
+    }
+    .side-nav button:hover { background: #eeebe1; transform: translateX(2px); }
+    .side-nav button.active { background: var(--night); color: #fffdf5; }
+    .side-num { font-family: "Bahnschrift", sans-serif; font-size: 11px; opacity: .48; }
+    .side-label { font-size: 13px; font-weight: 650; }
+    .side-arrow { font-size: 16px; opacity: .45; }
+
+    .sidebar-bottom { margin-top: auto; }
+    .demo-note { border-top: 1px solid var(--line); padding: 20px 8px 0; }
+    .demo-note strong { display: block; font-size: 11px; margin-bottom: 7px; }
+    .demo-note p { margin: 0; font-size: 11px; line-height: 1.75; color: var(--muted); }
+    .legend { display: flex; gap: 12px; margin-top: 14px; font-size: 10px; color: var(--muted); }
+    .legend span { display: inline-flex; align-items: center; gap: 5px; }
+    .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+    .dot.up { background: var(--red); }
+    .dot.down { background: var(--green); }
+
+    .stage { min-width: 0; padding: 26px 28px 34px; display: flex; flex-direction: column; align-items: center; }
+    .stage-header { width: min(100%, 580px); display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 20px; }
+    .stage-eyebrow { font-family: "Bahnschrift", sans-serif; font-size: 10px; letter-spacing: .18em; color: var(--muted); margin-bottom: 5px; }
+    .stage-title { margin: 0; font-family: "STSong", "Songti SC", serif; font-size: 23px; letter-spacing: .04em; }
+    .page-count { font-family: "Bahnschrift", sans-serif; font-size: 12px; color: var(--muted); }
+    .page-count b { color: var(--ink); font-size: 21px; font-weight: 500; }
+
+    .phone {
+      position: relative;
+      width: 402px;
+      height: 824px;
+      max-height: calc(100vh - 132px);
+      min-height: 640px;
+      padding: 10px;
+      border-radius: 43px;
+      background: #1a201d;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .phone::before { content: ""; position: absolute; top: 16px; left: 50%; width: 92px; height: 24px; border-radius: 20px; background: #1a201d; transform: translateX(-50%); z-index: 20; }
+    .phone-screen { height: 100%; border-radius: 34px; background: var(--paper); overflow: hidden; position: relative; }
+    .status-bar { height: 38px; padding: 11px 20px 0; display: flex; justify-content: space-between; align-items: center; font-family: "Bahnschrift", sans-serif; font-size: 11px; font-weight: 700; position: relative; z-index: 12; }
+    .status-icons { display: flex; align-items: center; gap: 5px; }
+    .signal { display: flex; align-items: flex-end; gap: 1.5px; height: 10px; }
+    .signal i { display: block; width: 2.5px; background: currentColor; border-radius: 1px; }
+    .signal i:nth-child(1) { height: 4px; }
+    .signal i:nth-child(2) { height: 6px; }
+    .signal i:nth-child(3) { height: 8px; }
+    .signal i:nth-child(4) { height: 10px; }
+    .battery { width: 19px; height: 9px; border: 1.4px solid currentColor; border-radius: 2px; padding: 1px; position: relative; }
+    .battery::before { content: ""; display: block; height: 100%; width: 78%; background: currentColor; }
+    .battery::after { content: ""; position: absolute; right: -3px; top: 2px; height: 3px; width: 1.5px; background: currentColor; border-radius: 0 1px 1px 0; }
+    .mini-capsule { position: absolute; z-index: 15; top: 45px; right: 16px; height: 29px; width: 77px; border: 1px solid rgba(23, 35, 30, .14); border-radius: 16px; background: rgba(255, 255, 255, .55); display: flex; align-items: center; justify-content: space-evenly; }
+    .mini-capsule span:first-child { letter-spacing: 2px; font-size: 14px; line-height: 1; transform: translateY(-3px); }
+    .capsule-divider { height: 15px; width: 1px; background: rgba(23, 35, 30, .14); }
+    .capsule-ring { width: 12px; height: 12px; border: 1.5px solid currentColor; border-radius: 50%; display: grid; place-items: center; }
+    .capsule-ring::after { content: ""; width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+
+    .app-page { position: absolute; inset: 38px 0 68px; overflow-y: auto; overflow-x: hidden; padding: 12px 18px 24px; scrollbar-width: none; animation: pageIn .28s ease both; }
+    .app-page::-webkit-scrollbar { display: none; }
+    .app-page[hidden] { display: none; }
+    @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+    .app-header { min-height: 48px; padding-right: 80px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; }
+    .app-header h1 { font-size: 23px; margin: 0 0 3px; font-family: "STSong", "Songti SC", serif; letter-spacing: .04em; }
+    .app-header p { font-size: 10px; color: var(--muted); margin: 0; }
+    .location-button { border: 0; background: transparent; padding: 4px 0; display: flex; align-items: center; gap: 5px; font-weight: 700; font-size: 16px; cursor: pointer; }
+    .location-button .icon { width: 16px; height: 16px; }
+    .header-kicker { font-size: 9px; letter-spacing: .15em; color: var(--muted); margin-bottom: 3px; }
+    .icon-button { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--line); background: rgba(255, 255, 255, .5); display: grid; place-items: center; cursor: pointer; }
+    .icon-button .icon { width: 16px; height: 16px; }
+
+    .card { background: rgba(255, 254, 249, .88); border: 1px solid rgba(23, 35, 30, .07); border-radius: 18px; padding: 16px; margin-bottom: 12px; box-shadow: 0 2px 0 rgba(23, 35, 30, .025); }
+    .card-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 13px; }
+    .card-title { font-size: 13px; font-weight: 750; }
+    .card-link { border: 0; background: transparent; padding: 0; color: var(--muted); font-size: 10px; cursor: pointer; }
+    .card-link:hover { color: var(--ink); }
+    .micro { font-size: 9px; color: var(--muted); line-height: 1.6; }
+    .num { font-family: "Bahnschrift", "DIN Alternate", sans-serif; font-variant-numeric: tabular-nums; }
+    .up { color: var(--red) !important; }
+    .down { color: var(--green) !important; }
+    .badge { display: inline-flex; align-items: center; border-radius: 5px; padding: 4px 6px; font-size: 9px; font-weight: 700; white-space: nowrap; }
+    .badge.down { background: var(--green-soft); }
+    .badge.up { background: var(--red-soft); }
+    .badge.neutral { background: #eceae2; color: #626a64; }
+    .badge.amber { background: var(--amber-soft); color: #79510a; }
+
+    .price-hero { background: var(--night); color: #fffdf6; border-radius: 23px; padding: 20px 19px 17px; position: relative; overflow: hidden; margin-bottom: 12px; }
+    .price-hero::after { content: "92"; position: absolute; right: -7px; top: -27px; font-family: "Bahnschrift", sans-serif; font-size: 138px; line-height: 1; color: rgba(255, 255, 255, .035); font-weight: 800; }
+    .price-topline { display: flex; align-items: center; justify-content: space-between; position: relative; z-index: 1; }
+    .fuel-label { display: flex; align-items: center; gap: 7px; font-size: 12px; color: rgba(255, 255, 255, .72); }
+    .fuel-label b { width: 25px; height: 25px; border-radius: 8px; background: var(--amber); color: var(--night); display: grid; place-items: center; font-family: "Bahnschrift", sans-serif; font-size: 12px; }
+    .updated { font-size: 9px; color: rgba(255, 255, 255, .46); }
+    .hero-price { display: flex; align-items: flex-end; gap: 8px; margin: 11px 0 13px; position: relative; z-index: 1; }
+    .hero-price strong { font-family: "Bahnschrift", "DIN Alternate", sans-serif; font-size: 57px; line-height: .95; font-weight: 500; letter-spacing: -.035em; }
+    .hero-price span { font-size: 11px; color: rgba(255, 255, 255, .56); padding-bottom: 7px; }
+    .price-change { display: flex; align-items: center; justify-content: space-between; position: relative; z-index: 1; }
+    .price-change .badge { background: rgba(91, 202, 147, .15); color: #8de0b4; }
+    .text-button { border: 0; background: transparent; color: inherit; padding: 0; font-size: 10px; cursor: pointer; display: inline-flex; gap: 4px; align-items: center; }
+    .price-change .text-button { color: rgba(255, 255, 255, .68); }
+    .other-fuels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .other-fuel { border: 1px solid var(--line); background: rgba(255, 255, 255, .45); border-radius: 12px; padding: 11px 10px; cursor: pointer; text-align: left; transition: border .2s, background .2s; }
+    .other-fuel:hover { border-color: var(--amber); background: #fffaf0; }
+    .other-fuel.selected { display: none; }
+    .other-fuel span { display: block; color: var(--muted); font-size: 10px; margin-bottom: 5px; }
+    .other-fuel strong { font-size: 18px; font-weight: 550; }
+    .other-fuel small { font-size: 9px; color: var(--muted); }
+
+    .next-card { background: #ece8dc; border-radius: 18px; padding: 16px; margin-bottom: 12px; position: relative; overflow: hidden; }
+    .next-card::before { content: ""; position: absolute; left: 0; top: 16px; bottom: 16px; width: 3px; border-radius: 0 3px 3px 0; background: var(--amber); }
+    .next-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .next-title { font-size: 11px; color: var(--muted); }
+    .countdown { font-size: 10px; color: var(--muted); }
+    .countdown b { color: var(--ink); font-weight: 600; }
+    .next-main { display: flex; align-items: flex-end; justify-content: space-between; gap: 8px; }
+    .next-date strong { display: block; font-size: 19px; margin-bottom: 4px; font-weight: 650; }
+    .next-date span { font-size: 9px; color: var(--muted); }
+    .forecast { text-align: right; }
+    .forecast strong { display: block; font-family: "Bahnschrift", sans-serif; font-size: 22px; font-weight: 550; }
+    .forecast span { font-size: 9px; color: var(--muted); }
+    .primary-button { width: 100%; border: 0; background: var(--amber); color: #272315; border-radius: 13px; min-height: 44px; padding: 11px 15px; font-size: 12px; font-weight: 800; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 7px; transition: transform .18s, filter .18s; }
+    .primary-button:hover { filter: brightness(1.03); transform: translateY(-1px); }
+    .primary-button .icon { width: 17px; height: 17px; }
+    .primary-button.dark { background: var(--night); color: #fff; }
+    .secondary-button { border: 1px solid var(--line); background: #fffdf7; border-radius: 12px; min-height: 40px; padding: 9px 14px; font-size: 11px; cursor: pointer; }
+    .home-alert-button { margin: 0 0 12px; }
+
+    .mini-chart { width: 100%; height: 70px; display: block; overflow: visible; }
+    .mini-chart .grid { stroke: #dedbd1; stroke-width: 1; stroke-dasharray: 3 4; }
+    .mini-chart .line { fill: none; stroke: var(--night); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+    .mini-chart .area { fill: url(#homeArea); }
+    .mini-chart .point { fill: var(--amber); stroke: #fff; stroke-width: 2; }
+    .chart-labels { display: flex; justify-content: space-between; margin-top: 4px; font-size: 8px; color: #92968f; }
+    .notice-preview { display: flex; gap: 11px; align-items: flex-start; }
+    .notice-date-block { width: 43px; flex: 0 0 43px; border-right: 1px solid var(--line); text-align: left; }
+    .notice-date-block strong { display: block; font-family: "Bahnschrift", sans-serif; font-size: 20px; font-weight: 500; }
+    .notice-date-block span { font-size: 9px; color: var(--muted); }
+    .notice-preview h3 { margin: 0 0 5px; font-size: 12px; line-height: 1.5; }
+    .notice-preview p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+    .data-footnote { text-align: center; color: #969a94; font-size: 8px; line-height: 1.6; padding: 5px 12px 0; }
+
+    .segmented { padding: 3px; border-radius: 12px; background: #e8e5db; display: flex; gap: 2px; margin-bottom: 13px; }
+    .segmented button { flex: 1; border: 0; background: transparent; border-radius: 9px; padding: 8px 5px; font-size: 10px; color: var(--muted); cursor: pointer; }
+    .segmented button.active { background: #fffef9; color: var(--ink); font-weight: 750; box-shadow: 0 2px 6px rgba(23, 35, 30, .07); }
+    .trend-summary { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 8px; }
+    .trend-summary .big-num { font-size: 34px; font-weight: 500; line-height: 1; }
+    .trend-summary .unit { font-size: 10px; color: var(--muted); margin-left: 4px; }
+    .trend-summary .delta { text-align: right; font-size: 10px; }
+    .trend-summary .delta strong { display: block; font-size: 15px; margin-bottom: 2px; }
+    .trend-chart { width: 100%; height: 176px; display: block; overflow: visible; }
+    .trend-chart .grid-line { stroke: #e1ded4; stroke-width: 1; stroke-dasharray: 3 4; }
+    .trend-chart .axis-text { fill: #979b95; font-family: "Bahnschrift", sans-serif; font-size: 8px; }
+    .trend-chart .trend-area { fill: url(#trendArea); }
+    .trend-chart .trend-line { fill: none; stroke: var(--night); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+    .trend-chart .end-dot { fill: var(--amber); stroke: #fffef9; stroke-width: 3; }
+    .period-row { display: flex; gap: 7px; margin: 6px 0 15px; }
+    .period-row button { border: 1px solid var(--line); background: transparent; border-radius: 8px; font-size: 9px; padding: 6px 11px; color: var(--muted); cursor: pointer; }
+    .period-row button.active { border-color: var(--night); color: var(--night); background: #fffef9; font-weight: 700; }
+    .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--line); padding-top: 12px; }
+    .stat { text-align: center; border-right: 1px solid var(--line); }
+    .stat:last-child { border-right: 0; }
+    .stat span { display: block; font-size: 8px; color: var(--muted); margin-bottom: 4px; }
+    .stat strong { font-size: 15px; font-weight: 550; }
+    .event-list { display: grid; gap: 0; }
+    .event-item { display: grid; grid-template-columns: 48px 13px 1fr auto; gap: 8px; min-height: 51px; align-items: start; }
+    .event-date { font-family: "Bahnschrift", sans-serif; font-size: 10px; color: var(--muted); padding-top: 2px; }
+    .event-track { position: relative; height: 100%; display: flex; justify-content: center; }
+    .event-track::before { content: ""; width: 1px; background: var(--line); position: absolute; top: 9px; bottom: -3px; }
+    .event-item:last-child .event-track::before { display: none; }
+    .event-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); margin-top: 5px; position: relative; z-index: 1; box-shadow: 0 0 0 3px var(--paper); }
+    .event-item.rise .event-dot { background: var(--red); }
+    .event-content strong { display: block; font-size: 11px; margin-bottom: 4px; }
+    .event-content span { font-size: 9px; color: var(--muted); }
+    .event-value { font-size: 11px; font-weight: 700; padding-top: 2px; }
+
+    .window-card { border-radius: 20px; background: var(--night); color: #fff; padding: 18px; margin-bottom: 14px; }
+    .window-label { font-size: 10px; color: rgba(255, 255, 255, .58); margin-bottom: 8px; }
+    .window-date { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 15px; }
+    .window-date strong { font-family: "Bahnschrift", sans-serif; font-size: 28px; font-weight: 500; }
+    .window-date span { font-size: 10px; color: rgba(255, 255, 255, .55); padding-bottom: 4px; }
+    .window-progress { height: 4px; background: rgba(255, 255, 255, .12); border-radius: 3px; overflow: hidden; margin-bottom: 8px; }
+    .window-progress i { display: block; width: 62%; height: 100%; background: var(--amber); border-radius: 3px; }
+    .window-meta { display: flex; justify-content: space-between; font-size: 8px; color: rgba(255, 255, 255, .46); }
+    .sync-line { display: flex; align-items: center; justify-content: space-between; margin: 0 3px 13px; font-size: 9px; color: var(--muted); }
+    .sync-status { display: inline-flex; align-items: center; gap: 5px; }
+    .sync-status::before { content: ""; width: 6px; height: 6px; background: var(--green); border-radius: 50%; }
+    .filter-row { display: flex; gap: 15px; border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+    .filter-row button { border: 0; background: transparent; padding: 8px 1px 10px; font-size: 10px; color: var(--muted); cursor: pointer; position: relative; }
+    .filter-row button.active { color: var(--ink); font-weight: 750; }
+    .filter-row button.active::after { content: ""; height: 2px; background: var(--night); position: absolute; left: 0; right: 0; bottom: -1px; }
+    .notice-list { display: grid; }
+    .notice-item { border: 0; border-bottom: 1px solid var(--line); background: transparent; padding: 15px 1px; text-align: left; cursor: pointer; }
+    .notice-item:hover { background: rgba(255, 255, 255, .3); }
+    .notice-meta { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; }
+    .notice-meta time { font-family: "Bahnschrift", sans-serif; font-size: 9px; color: var(--muted); }
+    .notice-item h3 { margin: 0 0 7px; font-size: 12px; line-height: 1.55; }
+    .notice-bottom { display: flex; justify-content: space-between; align-items: center; font-size: 9px; color: var(--muted); }
+    .notice-change { font-family: "Bahnschrift", sans-serif; font-size: 11px; font-weight: 700; }
+
+    .market-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-bottom: 12px; }
+    .market-tab { border: 1px solid var(--line); border-radius: 15px; background: rgba(255, 255, 255, .4); padding: 13px; text-align: left; cursor: pointer; }
+    .market-tab.active { border-color: var(--night); background: var(--night); color: #fff; }
+    .market-tab-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .market-tab-top strong { font-family: "Bahnschrift", sans-serif; font-size: 13px; letter-spacing: .03em; }
+    .market-tab-top span { font-size: 8px; opacity: .58; }
+    .market-quote { display: flex; align-items: baseline; justify-content: space-between; }
+    .market-quote b { font-family: "Bahnschrift", sans-serif; font-size: 24px; font-weight: 500; }
+    .market-quote span { font-family: "Bahnschrift", sans-serif; font-size: 10px; }
+    .market-tab.active .up { color: #ff8d80 !important; }
+    .market-tab.active .down { color: #7edbad !important; }
+    .market-main { border-radius: 20px; background: #fffef9; border: 1px solid rgba(23, 35, 30, .07); padding: 17px; margin-bottom: 12px; }
+    .market-heading { display: flex; justify-content: space-between; align-items: flex-start; }
+    .market-heading h2 { font-size: 14px; margin: 0 0 4px; }
+    .market-heading p { font-size: 9px; color: var(--muted); margin: 0; }
+    .market-time { text-align: right; font-family: "Bahnschrift", sans-serif; font-size: 9px; color: var(--muted); }
+    .market-big { margin: 17px 0 2px; display: flex; align-items: baseline; gap: 6px; }
+    .market-big strong { font-family: "Bahnschrift", sans-serif; font-size: 45px; font-weight: 500; letter-spacing: -.025em; }
+    .market-big span { font-size: 10px; color: var(--muted); }
+    .market-change { font-family: "Bahnschrift", sans-serif; font-size: 12px; font-weight: 700; }
+    .market-chart { width: 100%; height: 145px; display: block; margin-top: 10px; }
+    .market-chart .m-grid { stroke: #e5e1d7; stroke-width: 1; stroke-dasharray: 3 5; }
+    .market-chart .m-area { fill: url(#marketArea); }
+    .market-chart .m-line { fill: none; stroke: var(--red); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+    .market-chart.down-market .m-line { stroke: var(--green); }
+    .market-chart.down-market .m-area { fill: url(#marketAreaDown); }
+    .market-axis { display: flex; justify-content: space-between; color: #969a94; font-family: "Bahnschrift", sans-serif; font-size: 8px; }
+    .info-strip { display: flex; gap: 10px; padding: 13px 14px; border-radius: 14px; background: #ece8dc; margin-bottom: 12px; }
+    .info-strip .icon { flex: 0 0 17px; width: 17px; height: 17px; margin-top: 1px; color: #7f6b39; }
+    .info-strip strong { display: block; font-size: 10px; margin-bottom: 4px; }
+    .info-strip p { margin: 0; font-size: 9px; line-height: 1.6; color: var(--muted); }
+    .market-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .market-detail { background: rgba(255, 255, 255, .45); border-radius: 11px; padding: 10px; }
+    .market-detail span { display: block; color: var(--muted); font-size: 8px; margin-bottom: 4px; }
+    .market-detail strong { font-family: "Bahnschrift", sans-serif; font-size: 14px; font-weight: 500; }
+
+    .subscription-card { border-radius: 19px; padding: 16px; background: #ede9dd; margin-bottom: 12px; display: flex; align-items: center; gap: 12px; }
+    .subscription-icon { width: 40px; height: 40px; border-radius: 13px; background: #fffdf6; display: grid; place-items: center; flex: 0 0 40px; }
+    .subscription-icon .icon { width: 20px; height: 20px; }
+    .subscription-copy { flex: 1; min-width: 0; }
+    .subscription-copy strong { display: block; font-size: 12px; margin-bottom: 4px; }
+    .subscription-copy p { margin: 0; font-size: 9px; color: var(--muted); line-height: 1.4; }
+    .subscription-card button { border: 0; background: var(--night); color: #fff; border-radius: 9px; padding: 8px 10px; font-size: 9px; cursor: pointer; white-space: nowrap; }
+    .rule-card { position: relative; }
+    .rule-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .rule-title { display: flex; gap: 10px; align-items: center; }
+    .rule-symbol { width: 33px; height: 33px; border-radius: 11px; background: var(--green-soft); color: var(--green); display: grid; place-items: center; }
+    .rule-symbol .icon { width: 17px; height: 17px; }
+    .rule-title strong { display: block; font-size: 12px; margin-bottom: 3px; }
+    .rule-title span { font-size: 9px; color: var(--muted); }
+    .switch { width: 39px; height: 23px; flex: 0 0 39px; border: 0; border-radius: 20px; background: #cccac2; padding: 3px; cursor: pointer; transition: background .2s; }
+    .switch::after { content: ""; display: block; width: 17px; height: 17px; background: #fff; border-radius: 50%; box-shadow: 0 1px 4px rgba(0, 0, 0, .18); transition: transform .2s; }
+    .switch[aria-checked="true"] { background: var(--green); }
+    .switch[aria-checked="true"]::after { transform: translateX(16px); }
+    .rule-summary { margin: 13px 0 0; border-radius: 10px; background: #f2f0e8; padding: 10px 11px; color: var(--muted); font-size: 9px; line-height: 1.65; }
+    .rule-summary b { color: var(--ink); font-weight: 650; }
+    .target-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 13px; }
+    .target-head strong { font-size: 12px; }
+    .target-head span { font-size: 9px; color: var(--muted); }
+    .stepper { display: grid; grid-template-columns: 42px 1fr 42px; align-items: center; gap: 12px; }
+    .stepper button { width: 42px; height: 42px; border: 1px solid var(--line); border-radius: 12px; background: #f3f0e7; font-size: 20px; cursor: pointer; }
+    .stepper-value { text-align: center; }
+    .stepper-value strong { font-family: "Bahnschrift", sans-serif; font-size: 31px; font-weight: 500; }
+    .stepper-value span { font-size: 9px; color: var(--muted); margin-left: 3px; }
+    .target-caption { text-align: center; margin: 8px 0 0; font-size: 9px; color: var(--green); }
+    .condition-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 12px; }
+    .condition { border-radius: 10px; background: #f2f0e8; padding: 10px; }
+    .condition span { display: block; font-size: 8px; color: var(--muted); margin-bottom: 4px; }
+    .condition strong { font-size: 11px; }
+    .alert-history { display: grid; gap: 12px; }
+    .history-item { display: flex; align-items: center; gap: 10px; }
+    .history-check { width: 27px; height: 27px; border-radius: 50%; background: var(--green-soft); color: var(--green); display: grid; place-items: center; flex: 0 0 27px; }
+    .history-check .icon { width: 14px; height: 14px; }
+    .history-copy { flex: 1; }
+    .history-copy strong { display: block; font-size: 10px; margin-bottom: 3px; }
+    .history-copy span { display: block; font-size: 8px; color: var(--muted); }
+    .history-price { font-family: "Bahnschrift", sans-serif; font-size: 13px; color: var(--green); }
+
+    .tab-bar { position: absolute; bottom: 0; left: 0; right: 0; height: 68px; padding: 7px 9px 11px; background: rgba(255, 254, 249, .95); border-top: 1px solid rgba(23, 35, 30, .07); display: grid; grid-template-columns: repeat(5, 1fr); z-index: 10; backdrop-filter: blur(15px); }
+    .tab-item { border: 0; background: transparent; color: #929790; display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; padding: 4px 0 0; }
+    .tab-item .icon { width: 20px; height: 20px; }
+    .tab-item span { font-size: 8px; }
+    .tab-item.active { color: var(--night); }
+    .tab-item.active .icon { stroke-width: 2.3; }
+    .tab-item.active span { font-weight: 800; }
+    .home-indicator { position: absolute; z-index: 15; bottom: 14px; left: 50%; width: 118px; height: 4px; border-radius: 4px; background: rgba(23, 35, 30, .75); transform: translateX(-50%); pointer-events: none; }
+
+    .notes-panel { position: sticky; top: 0; height: 100vh; overflow-y: auto; padding: 34px 26px 26px 4px; scrollbar-width: thin; }
+    .notes-inner { border-left: 1px solid rgba(23, 35, 30, .1); padding-left: 24px; }
+    .notes-kicker { font-family: "Bahnschrift", sans-serif; font-size: 9px; letter-spacing: .18em; color: var(--muted); margin-bottom: 9px; }
+    .notes-panel h2 { margin: 0 0 9px; font-family: "STSong", "Songti SC", serif; font-size: 22px; }
+    .notes-intro { margin: 0 0 24px; font-size: 11px; line-height: 1.8; color: var(--muted); }
+    .notes-section { margin-bottom: 22px; }
+    .notes-section h3 { margin: 0 0 10px; font-size: 10px; letter-spacing: .08em; }
+    .notes-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 11px; }
+    .notes-list li { display: grid; grid-template-columns: 17px 1fr; gap: 7px; font-size: 10px; line-height: 1.65; color: #5f6861; }
+    .notes-list li::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--amber); margin-top: 6px; margin-left: 3px; }
+    .review-tip { background: rgba(255, 254, 249, .64); border: 1px solid rgba(23, 35, 30, .08); border-radius: 14px; padding: 14px; }
+    .review-tip strong { font-size: 10px; display: block; margin-bottom: 5px; }
+    .review-tip p { margin: 0; color: var(--muted); font-size: 9px; line-height: 1.7; }
+    .review-status { display: flex; align-items: center; gap: 7px; margin-top: 15px; font-size: 9px; color: var(--muted); }
+    .review-status::before { content: ""; width: 6px; height: 6px; background: var(--green); border-radius: 50%; }
+
+    .sheet-backdrop { position: absolute; inset: 0; z-index: 30; background: rgba(10, 20, 15, .46); backdrop-filter: blur(3px); display: flex; align-items: flex-end; opacity: 0; pointer-events: none; transition: opacity .22s; }
+    .sheet-backdrop.open { opacity: 1; pointer-events: auto; }
+    .sheet { width: 100%; max-height: 84%; overflow-y: auto; background: var(--paper); border-radius: 25px 25px 34px 34px; padding: 12px 20px 28px; transform: translateY(100%); transition: transform .25s ease; }
+    .sheet-backdrop.open .sheet { transform: translateY(0); }
+    .sheet-handle { width: 36px; height: 4px; border-radius: 4px; background: #cbc9c0; margin: 0 auto 18px; }
+    .sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+    .sheet-head h2 { margin: 0; font-size: 17px; font-family: "STSong", "Songti SC", serif; }
+    .sheet-close { border: 0; background: #e8e5db; width: 28px; height: 28px; border-radius: 50%; cursor: pointer; font-size: 17px; }
+    .sheet p { font-size: 11px; line-height: 1.8; color: var(--muted); }
+    .city-options { display: grid; gap: 8px; }
+    .city-option { border: 1px solid var(--line); background: #fffef9; border-radius: 13px; padding: 13px; display: flex; align-items: center; justify-content: space-between; cursor: pointer; text-align: left; }
+    .city-option strong { display: block; font-size: 12px; margin-bottom: 3px; }
+    .city-option span { font-size: 9px; color: var(--muted); }
+    .city-option.active { border-color: var(--amber); }
+    .city-option.active::after { content: "✓"; color: var(--green); font-weight: 800; }
+    .notice-detail-label { display: flex; gap: 7px; margin-bottom: 12px; }
+    .detail-price-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 16px 0; }
+    .detail-price { border-radius: 12px; background: #ebe8dd; padding: 12px; }
+    .detail-price span { display: block; font-size: 9px; color: var(--muted); margin-bottom: 4px; }
+    .detail-price strong { font-family: "Bahnschrift", sans-serif; font-size: 18px; font-weight: 500; }
+    .source-box { border-left: 2px solid var(--amber); padding-left: 10px; margin: 16px 0; }
+    .source-box strong { display: block; font-size: 10px; margin-bottom: 4px; }
+    .source-box span { font-size: 9px; color: var(--muted); }
+    .permission-list { display: grid; gap: 10px; margin: 16px 0; }
+    .permission-item { display: flex; align-items: center; gap: 10px; background: #ebe8dd; border-radius: 12px; padding: 12px; }
+    .permission-item .icon { width: 18px; height: 18px; color: var(--green); }
+    .permission-item strong { display: block; font-size: 10px; margin-bottom: 3px; }
+    .permission-item span { display: block; font-size: 8px; color: var(--muted); }
+
+    .mobile-review-nav { display: none; }
+    .toast { position: absolute; z-index: 50; left: 50%; bottom: 86px; transform: translate(-50%, 12px); border-radius: 10px; background: rgba(20, 44, 35, .94); color: #fff; font-size: 10px; padding: 10px 14px; opacity: 0; pointer-events: none; transition: .22s; white-space: nowrap; }
+    .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+    @media (max-width: 1100px) {
+      .review-shell { grid-template-columns: 214px 1fr; }
+      .notes-panel { display: none; }
+      .review-sidebar { padding-left: 18px; padding-right: 18px; }
+    }
+
+    @media (max-width: 740px) {
+      body { background: var(--paper-deep); }
+      .review-shell { display: block; }
+      .review-sidebar { display: none; }
+      .stage { padding: 0; display: block; }
+      .stage-header { display: none; }
+      .mobile-review-nav { height: 57px; padding: 10px 14px; display: flex; gap: 7px; overflow-x: auto; background: #faf8f1; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 40; scrollbar-width: none; }
+      .mobile-review-nav button { border: 1px solid var(--line); background: transparent; border-radius: 9px; padding: 7px 12px; font-size: 10px; white-space: nowrap; }
+      .mobile-review-nav button.active { background: var(--night); color: #fff; border-color: var(--night); }
+      .phone { width: 100%; height: calc(100vh - 57px); max-height: none; min-height: 600px; padding: 0; border-radius: 0; box-shadow: none; background: var(--paper); }
+      .phone::before { display: none; }
+      .phone-screen { border-radius: 0; }
+      .sheet { border-radius: 25px 25px 0 0; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <svg class="svg-sprite" aria-hidden="true">
+    <symbol id="i-fuel" viewBox="0 0 24 24"><path d="M5 21V4a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v17M3 21h14M7 7h6v5H7zM15 8h2l3 3v7a1.5 1.5 0 0 1-3 0v-4"/></symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5M5.5 9v12h13V9M9 21v-7h6v7"/></symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24"><path d="M4 19V5M4 19h16M7 15l4-5 3 3 5-7M16 6h3v3"/></symbol>
+    <symbol id="i-notice" viewBox="0 0 24 24"><path d="M6 3h12v18H6zM9 8h6M9 12h6M9 16h4"/></symbol>
+    <symbol id="i-global" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.4 3 14.6 0 18M12 3c-3 3.4-3 14.6 0 18"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 8h18c0-1-3-1-3-8M9 21h6"/></symbol>
+    <symbol id="i-pin" viewBox="0 0 24 24"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 13.5v-3l-2-.7a7 7 0 0 0-.7-1.6l.9-1.9-2.1-2.1-1.9.9a7 7 0 0 0-1.7-.7L10.5 2h-3l-.7 2a7 7 0 0 0-1.6.7l-1.9-.9-2.1 2.1.9 1.9a7 7 0 0 0-.7 1.7l-2 .7v3l2 .7a7 7 0 0 0 .7 1.6l-.9 1.9 2.1 2.1 1.9-.9a7 7 0 0 0 1.7.7l.7 2h3l.7-2a7 7 0 0 0 1.6-.7l1.9.9 2.1-2.1-.9-1.9a7 7 0 0 0 .7-1.7Z" transform="translate(2.5 0) scale(.8)"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M14 7l5 5-5 5"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></symbol>
+  </svg>
+
+  <div class="review-shell">
+    <aside class="review-sidebar">
+      <div class="review-brand">
+        <div class="brand-mark"><svg class="icon"><use href="#i-fuel"/></svg></div>
+        <div><div class="brand-name">油势</div><div class="brand-en">OIL PULSE</div></div>
+      </div>
+      <div class="version-pill">小程序设计评审稿 · V0.1</div>
+      <div class="nav-caption">页面地图 / 05</div>
+      <nav class="side-nav" aria-label="设计页面">
+        <button class="active" data-page="home"><span class="side-num">01</span><svg class="icon"><use href="#i-home"/></svg><span class="side-label">油价首页</span><span class="side-arrow">›</span></button>
+        <button data-page="trend"><span class="side-num">02</span><svg class="icon"><use href="#i-trend"/></svg><span class="side-label">价格走势</span><span class="side-arrow">›</span></button>
+        <button data-page="notices"><span class="side-num">03</span><svg class="icon"><use href="#i-notice"/></svg><span class="side-label">调价通知</span><span class="side-arrow">›</span></button>
+        <button data-page="global"><span class="side-num">04</span><svg class="icon"><use href="#i-global"/></svg><span class="side-label">国际油价</span><span class="side-arrow">›</span></button>
+        <button data-page="alerts"><span class="side-num">05</span><svg class="icon"><use href="#i-bell"/></svg><span class="side-label">降价提醒</span><span class="side-arrow">›</span></button>
+      </nav>
+      <div class="sidebar-bottom">
+        <div class="demo-note">
+          <strong>评审说明</strong>
+          <p>可点击底部 Tab、油品、时间周期、通知、地区及提醒开关。所有价格与日期均为演示数据。</p>
+          <div class="legend"><span><i class="dot up"></i>上涨为红</span><span><i class="dot down"></i>下降为绿</span></div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="stage">
+      <div class="stage-header">
+        <div><div class="stage-eyebrow">WECHAT MINI PROGRAM</div><h1 class="stage-title" id="stageTitle">油价首页</h1></div>
+        <div class="page-count"><b id="pageNow">01</b> / 05</div>
+      </div>
+      <nav class="mobile-review-nav" aria-label="移动端设计页面">
+        <button class="active" data-page="home">01 油价</button><button data-page="trend">02 走势</button><button data-page="notices">03 调价</button><button data-page="global">04 国际</button><button data-page="alerts">05 提醒</button>
+      </nav>
+
+      <div class="phone">
+        <div class="phone-screen">
+          <div class="status-bar"><span>18:41</span><div class="status-icons"><span class="signal"><i></i><i></i><i></i><i></i></span><span>5G</span><span class="battery"></span></div></div>
+          <div class="mini-capsule" aria-hidden="true"><span>•••</span><i class="capsule-divider"></i><i class="capsule-ring"></i></div>
+
+          <section class="app-page" id="page-home">
+            <header class="app-header">
+              <div><div class="header-kicker">当前油价</div><button class="location-button" data-open="citySheet"><svg class="icon"><use href="#i-pin"/></svg><span class="city-name">广东 · 广州</span><svg class="icon"><use href="#i-chevron"/></svg></button></div>
+              <button class="icon-button" aria-label="设置" onclick="showToast('设置入口将在开发阶段接入')"><svg class="icon"><use href="#i-settings"/></svg></button>
+            </header>
+
+            <div class="price-hero">
+              <div class="price-topline"><div class="fuel-label"><b id="heroFuelBadge">92</b><span id="heroFuelName">92# 汽油</span></div><span class="updated">今日 08:30 更新</span></div>
+              <div class="hero-price"><strong id="heroPrice">7.36</strong><span>元 / 升</span></div>
+              <div class="price-change"><span class="badge down" id="heroChange">↓ 0.08　较上次调价</span><button class="text-button" data-page-link="trend">查看走势 <span>→</span></button></div>
+            </div>
+
+            <div class="other-fuels">
+              <button class="other-fuel selected" data-fuel="92" data-price="7.36" data-change="↓ 0.08　较上次调价" aria-pressed="true"><span>92# 汽油</span><strong class="num">7.36</strong> <small>元/升</small></button>
+              <button class="other-fuel" data-fuel="95" data-price="7.98" data-change="↓ 0.09　较上次调价" aria-pressed="false"><span>95# 汽油</span><strong class="num">7.98</strong> <small>元/升</small></button>
+              <button class="other-fuel" data-fuel="98" data-price="8.82" data-change="↓ 0.10　较上次调价" aria-pressed="false"><span>98# 汽油</span><strong class="num">8.82</strong> <small>元/升</small></button>
+              <button class="other-fuel" data-fuel="0" data-price="7.02" data-change="↓ 0.08　较上次调价" aria-pressed="false"><span>0# 柴油</span><strong class="num">7.02</strong> <small>元/升</small></button>
+            </div>
+
+            <div class="next-card" style="margin-top:12px">
+              <div class="next-top"><span class="next-title">下一次调价窗口</span><span class="countdown">距窗口 <b class="num">14</b> 天</span></div>
+              <div class="next-main"><div class="next-date"><strong>11月24日 24:00</strong><span>预计时间 · 以官方公告为准</span></div><div class="forecast"><strong class="down" id="forecastValue">↓ 0.12</strong><span id="forecastCaption">92# · 元/升 · 非官方</span></div></div>
+            </div>
+
+            <button class="primary-button home-alert-button" data-page-link="alerts"><svg class="icon"><use href="#i-bell"/></svg>降价时提醒我</button>
+
+            <div class="card">
+              <div class="card-title-row"><span class="card-title">近 30 天走势</span><button class="card-link" id="homeTrendFuel" data-page-link="trend">92# 汽油　›</button></div>
+              <svg class="mini-chart" viewBox="0 0 330 70" preserveAspectRatio="none" aria-label="近30天油价走势演示">
+                <defs><linearGradient id="homeArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#142c23" stop-opacity=".14"/><stop offset="1" stop-color="#142c23" stop-opacity="0"/></linearGradient></defs>
+                <path class="grid" d="M0 16H330M0 52H330"/>
+                <path class="area" id="homeTrendArea" d="M0 16 L38 16 L38 22 L83 22 L83 10 L131 10 L131 30 L176 30 L176 26 L220 26 L220 45 L267 45 L267 50 L310 50 L330 50 L330 70 L0 70Z"/>
+                <path class="line" id="homeTrendLine" d="M0 16 L38 16 L38 22 L83 22 L83 10 L131 10 L131 30 L176 30 L176 26 L220 26 L220 45 L267 45 L267 50 L310 50 L330 50"/>
+                <circle class="point" id="homeTrendPoint" cx="327" cy="50" r="4"/>
+              </svg>
+              <div class="chart-labels"><span>10月11日</span><span>10月25日</span><span>11月10日</span></div>
+            </div>
+
+            <div class="card">
+              <div class="card-title-row"><span class="card-title">最新调价通知</span><button class="card-link" data-page-link="notices">全部通知　›</button></div>
+              <button class="notice-preview" style="border:0;background:transparent;padding:0;width:100%;text-align:left;cursor:pointer" data-open="noticeSheet">
+                <div class="notice-date-block"><strong>02</strong><span>11月 · 周一</span></div>
+                <div><h3>国内成品油价格按机制下调</h3><p><span class="down" id="homeNoticeChange">92# 汽油每升下调 0.08 元</span>　·　查看通知详情 ›</p></div>
+              </button>
+            </div>
+            <div class="data-footnote">演示价格仅用于界面评审<br>正式版本将展示数据来源与有效更新时间</div>
+          </section>
+
+          <section class="app-page" id="page-trend" hidden>
+            <header class="app-header"><div><div class="header-kicker">PRICE HISTORY</div><h1>价格走势</h1><p><span class="city-name">广东 · 广州</span> · 国内成品油历史价格</p></div></header>
+            <div class="segmented fuel-segment"><button class="active">92#</button><button>95#</button><button>98#</button><button>0#</button></div>
+            <div class="card">
+              <div class="trend-summary"><div><strong class="big-num num" id="trendPrice">7.36</strong><span class="unit">元/升</span></div><div class="delta"><strong class="down num" id="trendDelta">-2.13%</strong><span class="micro" id="trendRangeLabel">近 3 个月</span></div></div>
+              <svg class="trend-chart" viewBox="0 0 330 176" aria-label="国内油价历史走势演示">
+                <defs><linearGradient id="trendArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#142c23" stop-opacity=".16"/><stop offset="1" stop-color="#142c23" stop-opacity="0"/></linearGradient></defs>
+                <path class="grid-line" d="M29 24H322M29 65H322M29 106H322M29 147H322"/>
+                <text class="axis-text" x="0" y="27">7.60</text><text class="axis-text" x="0" y="68">7.50</text><text class="axis-text" x="0" y="109">7.40</text><text class="axis-text" x="0" y="150">7.30</text>
+                <path class="trend-area" id="trendAreaPath" d=""/><path class="trend-line" id="trendLinePath" d=""/><circle class="end-dot" id="trendEndDot" cx="0" cy="0" r="4.5"/>
+                <text class="axis-text" x="29" y="169" id="trendAxisStart">08月</text><text class="axis-text" x="157" y="169" id="trendAxisMid">09月</text><text class="axis-text" x="294" y="169" id="trendAxisEnd">11月</text>
+              </svg>
+              <div class="period-row" id="trendPeriods"><button class="active" data-period="3m">近3月</button><button data-period="6m">近6月</button><button data-period="1y">近1年</button></div>
+              <div class="stat-grid"><div class="stat"><span>区间最低</span><strong class="num" id="trendLow">7.32</strong></div><div class="stat"><span>区间最高</span><strong class="num" id="trendHigh">7.58</strong></div><div class="stat"><span>调价次数</span><strong class="num" id="trendCount">6 次</strong></div></div>
+            </div>
+            <div class="card">
+              <div class="card-title-row"><span class="card-title">调价节点</span><span class="micro">单位：元/升</span></div>
+              <div class="event-list">
+                <div class="event-item"><time class="event-date">11 / 02</time><div class="event-track"><i class="event-dot"></i></div><div class="event-content"><strong>成品油价格下调</strong><span>92# 调整后 7.36</span></div><span class="event-value down">-0.08</span></div>
+                <div class="event-item rise"><time class="event-date">10 / 20</time><div class="event-track"><i class="event-dot"></i></div><div class="event-content"><strong>成品油价格上调</strong><span>92# 调整后 7.44</span></div><span class="event-value up">+0.06</span></div>
+                <div class="event-item"><time class="event-date">09 / 28</time><div class="event-track"><i class="event-dot"></i></div><div class="event-content"><strong>成品油价格下调</strong><span>92# 调整后 7.38</span></div><span class="event-value down">-0.10</span></div>
+                <div class="event-item rise"><time class="event-date">09 / 07</time><div class="event-track"><i class="event-dot"></i></div><div class="event-content"><strong>成品油价格上调</strong><span>92# 调整后 7.48</span></div><span class="event-value up">+0.04</span></div>
+              </div>
+            </div>
+            <div class="data-footnote">国内价格按调价节点展示 · 演示数据</div>
+          </section>
+
+          <section class="app-page" id="page-notices" hidden>
+            <header class="app-header"><div><div class="header-kicker">PRICE ADJUSTMENT</div><h1>调价通知</h1><p>正式结果与市场预测分开呈现</p></div></header>
+            <div class="window-card">
+              <div class="window-label">下一次调价窗口</div>
+              <div class="window-date"><strong>11 / 24</strong><span>24:00 · 预计时间</span></div>
+              <div class="window-progress"><i></i></div>
+              <div class="window-meta"><span>本轮周期已开始</span><span>还有 14 天</span></div>
+            </div>
+            <div class="sync-line"><span class="sync-status">自动同步正常</span><span>今天 18:20 检查更新</span></div>
+            <div class="filter-row" id="noticeFilters"><button class="active" data-filter="all">全部</button><button data-filter="official">正式结果</button><button data-filter="forecast">市场预测</button></div>
+            <div class="notice-list">
+              <button class="notice-item" data-kind="official" data-open="noticeSheet"><div class="notice-meta"><span class="badge neutral">正式结果</span><time>2026-11-02</time></div><h3>国内成品油价格按机制下调</h3><div class="notice-bottom"><span>11月02日 24:00 起执行</span><span class="notice-change down">92# ↓ 0.08</span></div></button>
+              <button class="notice-item" data-kind="forecast" data-open="forecastSheet"><div class="notice-meta"><span class="badge amber">市场预测</span><time>2026-11-10</time></div><h3>本轮变化率暂为负值，预计下调 0.12 元/升</h3><div class="notice-bottom"><span>非官方 · 可能随行情变化</span><span>查看依据 ›</span></div></button>
+              <button class="notice-item" data-kind="official" data-open="noticeSheet"><div class="notice-meta"><span class="badge neutral">正式结果</span><time>2026-10-20</time></div><h3>国内成品油价格按机制上调</h3><div class="notice-bottom"><span>10月20日 24:00 起执行</span><span class="notice-change up">92# ↑ 0.06</span></div></button>
+              <button class="notice-item" data-kind="official" data-open="noticeSheet"><div class="notice-meta"><span class="badge neutral">正式结果</span><time>2026-09-28</time></div><h3>国内成品油价格按机制下调</h3><div class="notice-bottom"><span>09月28日 24:00 起执行</span><span class="notice-change down">92# ↓ 0.10</span></div></button>
+            </div>
+            <div class="data-footnote">通知正文及来源为版式演示<br>正式版本将提供来源名称与原文链接</div>
+          </section>
+
+          <section class="app-page" id="page-global" hidden>
+            <header class="app-header"><div><div class="header-kicker">GLOBAL CRUDE</div><h1>国际油价</h1><p>原油市场参考 · 美元 / 桶</p></div><span class="badge neutral">行情时间以源为准</span></header>
+            <div class="market-tabs">
+              <button class="market-tab active" data-market="brent"><div class="market-tab-top"><strong>BRENT</strong><span>布伦特</span></div><div class="market-quote"><b>78.42</b><span class="up">+0.82%</span></div></button>
+              <button class="market-tab" data-market="wti"><div class="market-tab-top"><strong>WTI</strong><span>纽约原油</span></div><div class="market-quote"><b>74.16</b><span class="down">-0.35%</span></div></button>
+            </div>
+            <div class="market-main">
+              <div class="market-heading"><div><h2 id="marketName">布伦特原油</h2><p id="marketCode">BRENT CRUDE · USD / BBL</p></div><div class="market-time">11-10 15:42:08<br>行情演示</div></div>
+              <div class="market-big"><strong id="marketPrice">78.42</strong><span>美元 / 桶</span></div>
+              <div class="market-change up num" id="marketChange">+0.64　+0.82%</div>
+              <svg class="market-chart" id="marketChart" viewBox="0 0 330 145" preserveAspectRatio="none" aria-label="国际原油行情演示">
+                <defs><linearGradient id="marketArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ce493b" stop-opacity=".17"/><stop offset="1" stop-color="#ce493b" stop-opacity="0"/></linearGradient><linearGradient id="marketAreaDown" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#137a52" stop-opacity=".17"/><stop offset="1" stop-color="#137a52" stop-opacity="0"/></linearGradient></defs>
+                <path class="m-grid" d="M0 20H330M0 65H330M0 110H330"/>
+                <path class="m-area" id="marketAreaPath" d="M0 111 L25 104 L50 108 L75 90 L100 94 L125 75 L150 82 L175 60 L200 68 L225 48 L250 53 L275 31 L305 40 L330 22 L330 140 L0 140Z"/>
+                <path class="m-line" id="marketLinePath" d="M0 111 L25 104 L50 108 L75 90 L100 94 L125 75 L150 82 L175 60 L200 68 L225 48 L250 53 L275 31 L305 40 L330 22"/>
+              </svg>
+              <div class="market-axis"><span>09:30</span><span>12:00</span><span>15:42</span></div>
+              <div class="period-row" style="margin:13px 0 0"><button class="active">1日</button><button>1周</button><button>1月</button><button>3月</button></div>
+            </div>
+            <div class="info-strip"><svg class="icon"><use href="#i-info"/></svg><div><strong>国际油价不等于国内加油价</strong><p>国内成品油还受定价周期、汇率、税费及流通成本等因素影响，此页仅作市场趋势参考。</p></div></div>
+            <div class="card"><div class="card-title-row"><span class="card-title">今日市场快照</span><span class="micro">USD / BBL</span></div><div class="market-detail-grid"><div class="market-detail"><span>今开</span><strong id="marketOpen">77.81</strong></div><div class="market-detail"><span>昨收</span><strong id="marketPrev">77.78</strong></div><div class="market-detail"><span>最高</span><strong id="marketHigh">78.67</strong></div><div class="market-detail"><span>最低</span><strong id="marketLow">77.56</strong></div></div></div>
+            <div class="data-footnote">实时或延时状态由正式数据源决定<br>当前所有报价均为演示数据</div>
+          </section>
+
+          <section class="app-page" id="page-alerts" hidden>
+            <header class="app-header"><div><div class="header-kicker">PRICE ALERT</div><h1>降价提醒</h1><p>只在符合你的条件时通知</p></div></header>
+            <div class="subscription-card" id="subscriptionCard"><div class="subscription-icon"><svg class="icon"><use href="#i-bell"/></svg></div><div class="subscription-copy"><strong id="subscriptionTitle">微信提醒未开启</strong><p id="subscriptionText">开启订阅消息后，规则才能在后台触发</p></div><button data-open="permissionSheet" id="subscriptionButton">去开启</button></div>
+
+            <div class="card rule-card">
+              <div class="rule-top"><div class="rule-title"><div class="rule-symbol"><svg class="icon"><use href="#i-bell"/></svg></div><div><strong>官方降价就提醒我</strong><span>正式公告发布后触发，不含预测</span></div></div><button class="switch" role="switch" aria-checked="true" aria-label="官方降价提醒"></button></div>
+              <div class="condition-grid"><div class="condition"><span>监控地区</span><strong class="city-name">广东 · 广州</strong></div><div class="condition"><span>监控油品</span><strong>92# 汽油</strong></div></div>
+              <p class="rule-summary">当 <b class="city-name">广东 · 广州</b> 的 <b>92# 汽油</b> 出现正式降价公告时，向我发送微信订阅消息。</p>
+            </div>
+
+            <div class="card">
+              <div class="target-head"><strong>目标价提醒</strong><span>当前 7.36 元/升</span><button class="switch" role="switch" aria-checked="true" aria-label="目标价提醒"></button></div>
+              <div class="stepper"><button id="targetMinus" aria-label="降低目标价">−</button><div class="stepper-value"><strong id="targetPrice">7.20</strong><span>元/升</span></div><button id="targetPlus" aria-label="提高目标价">＋</button></div>
+              <p class="target-caption" id="targetCaption">低于目标价 0.16 元时提醒</p>
+            </div>
+
+            <div class="card">
+              <div class="rule-top"><div class="rule-title"><div class="rule-symbol" style="background:#f7e8bc;color:#79510a"><svg class="icon"><use href="#i-target"/></svg></div><div><strong>预测下调提醒</strong><span>仅供参考，默认不开启</span></div></div><button class="switch" role="switch" aria-checked="false" aria-label="预测下调提醒"></button></div>
+            </div>
+
+            <div class="card">
+              <div class="card-title-row"><span class="card-title">最近提醒</span><span class="micro">演示记录</span></div>
+              <div class="alert-history"><div class="history-item"><div class="history-check"><svg class="icon"><use href="#i-check"/></svg></div><div class="history-copy"><strong>92# 汽油官方降价</strong><span>11月02日 20:03 · 订阅消息</span></div><span class="history-price">7.36</span></div><div class="history-item"><div class="history-check"><svg class="icon"><use href="#i-check"/></svg></div><div class="history-copy"><strong>已达到目标价 7.40</strong><span>09月28日 20:06 · 订阅消息</span></div><span class="history-price">7.38</span></div></div>
+            </div>
+            <div class="data-footnote">微信订阅消息需用户主动授权<br>可发送次数以微信平台规则为准</div>
+          </section>
+
+          <nav class="tab-bar" aria-label="小程序底部导航">
+            <button class="tab-item active" data-page="home"><svg class="icon"><use href="#i-home"/></svg><span>油价</span></button>
+            <button class="tab-item" data-page="trend"><svg class="icon"><use href="#i-trend"/></svg><span>走势</span></button>
+            <button class="tab-item" data-page="notices"><svg class="icon"><use href="#i-notice"/></svg><span>调价</span></button>
+            <button class="tab-item" data-page="global"><svg class="icon"><use href="#i-global"/></svg><span>国际</span></button>
+            <button class="tab-item" data-page="alerts"><svg class="icon"><use href="#i-bell"/></svg><span>提醒</span></button>
+          </nav>
+          <div class="home-indicator"></div>
+
+          <div class="sheet-backdrop" id="citySheet" role="dialog" aria-modal="true" aria-label="选择地区">
+            <div class="sheet"><div class="sheet-handle"></div><div class="sheet-head"><h2>选择油价地区</h2><button class="sheet-close" data-close>×</button></div><p>不同地区零售价可能不同，首版将记住你的选择。</p><div class="city-options"><button class="city-option active" data-city="广东 · 广州"><div><strong>广东 · 广州</strong><span>92# 7.36 元/升 · 演示</span></div></button><button class="city-option" data-city="浙江 · 杭州"><div><strong>浙江 · 杭州</strong><span>92# 7.34 元/升 · 演示</span></div></button><button class="city-option" data-city="四川 · 成都"><div><strong>四川 · 成都</strong><span>92# 7.45 元/升 · 演示</span></div></button></div></div>
+          </div>
+
+          <div class="sheet-backdrop" id="noticeSheet" role="dialog" aria-modal="true" aria-label="调价通知详情">
+            <div class="sheet"><div class="sheet-handle"></div><div class="sheet-head"><h2>调价通知详情</h2><button class="sheet-close" data-close>×</button></div><div class="notice-detail-label"><span class="badge neutral">正式结果</span><span class="badge down">降价</span></div><h3 style="font-size:16px;line-height:1.6;margin:0">国内成品油价格按机制下调</h3><p>2026年11月02日 24:00 起执行。以下为本地各油品调整后的零售价格演示。</p><div class="detail-price-grid"><div class="detail-price"><span>92# 汽油</span><strong>7.36</strong><small class="down"> ↓0.08</small></div><div class="detail-price"><span>95# 汽油</span><strong>7.98</strong><small class="down"> ↓0.09</small></div><div class="detail-price"><span>98# 汽油</span><strong>8.82</strong><small class="down"> ↓0.10</small></div><div class="detail-price"><span>0# 柴油</span><strong>7.02</strong><small class="down"> ↓0.08</small></div></div><div class="source-box"><strong>来源与原文</strong><span>正式版本展示发布机构、发布时间及可访问的原文链接；此稿仅演示布局。</span></div><button class="primary-button dark" data-close>知道了</button></div>
+          </div>
+
+          <div class="sheet-backdrop" id="forecastSheet" role="dialog" aria-modal="true" aria-label="市场预测说明">
+            <div class="sheet"><div class="sheet-handle"></div><div class="sheet-head"><h2>市场预测说明</h2><button class="sheet-close" data-close>×</button></div><div class="notice-detail-label"><span class="badge amber">非官方预测</span></div><h3 style="font-size:16px;line-height:1.6;margin:0">预计下调 0.12 元/升</h3><p>预测会随国际行情和计价周期变化，不代表最终调价结果。正式版本将展示计算口径、更新时间与引用数据。</p><div class="info-strip"><svg class="icon"><use href="#i-info"/></svg><div><strong>默认不发送预测提醒</strong><p>如需接收预测变化，可在“提醒”页主动开启。</p></div></div><button class="primary-button dark" data-close>我知道了</button></div>
+          </div>
+
+          <div class="sheet-backdrop" id="permissionSheet" role="dialog" aria-modal="true" aria-label="开启降价提醒">
+            <div class="sheet"><div class="sheet-handle"></div><div class="sheet-head"><h2>开启降价提醒</h2><button class="sheet-close" data-close>×</button></div><p>正式开发时，此处将调用微信订阅消息授权。你可以自由选择提醒类型，未授权不会影响油价查询。</p><div class="permission-list"><div class="permission-item"><svg class="icon"><use href="#i-check"/></svg><div><strong>正式降价通知</strong><span>地区、油品、调整后价格与执行时间</span></div></div><div class="permission-item"><svg class="icon"><use href="#i-check"/></svg><div><strong>目标价到达通知</strong><span>当前价格、目标价格与查看入口</span></div></div></div><button class="primary-button" id="confirmPermission">模拟开启订阅</button><button class="secondary-button" style="width:100%;margin-top:9px" data-close>暂不开启</button></div>
+          </div>
+          <div class="toast" id="toast">操作成功</div>
+        </div>
+      </div>
+    </main>
+
+    <aside class="notes-panel">
+      <div class="notes-inner">
+        <div class="notes-kicker">DESIGN RATIONALE</div>
+        <h2 id="notesTitle">油价首页</h2>
+        <p class="notes-intro" id="notesIntro">先回答“现在多少钱”，再回答“下一轮会不会降”，最后把注意力导向降价提醒。</p>
+        <div class="notes-section"><h3>本页设计重点</h3><ul class="notes-list" id="notesList"><li>默认展示用户所在地区的 92# 汽油，其他油品无需跳转即可比较。</li><li>调价窗口与预测幅度同屏，但明确标记“非官方”。</li><li>降价提醒作为主按钮，点击可预览完整规则。</li></ul></div>
+        <div class="notes-section"><h3>建议交互</h3><ul class="notes-list" id="interactionList"><li>点击地区可切换城市；点击油品可切换主价格。</li><li>迷你走势与通知都可进入对应详情。</li></ul></div>
+        <div class="review-tip"><strong>首版推荐</strong><p id="reviewTip">手动选择地区并记住，定位仅作为可选增强；不要在首屏强制索取定位。</p></div>
+        <div class="review-status">当前为交互评审稿，尚未进入开发</div>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    const pageMeta = {
+      home: {
+        title: "油价首页", index: "01",
+        intro: "先回答“现在多少钱”，再回答“下一轮会不会降”，最后把注意力导向降价提醒。",
+        notes: ["默认展示用户所在地区的 92# 汽油，其他油品无需跳转即可比较。", "调价窗口与预测幅度同屏，但明确标记“非官方”。", "降价提醒作为主按钮，点击可预览完整规则。"],
+        interactions: ["点击地区可切换城市；点击油品可切换主价格。", "迷你走势与通知都可进入对应详情。"],
+        tip: "手动选择地区并记住，定位仅作为可选增强；不要在首屏强制索取定位。"
+      },
+      trend: {
+        title: "价格走势", index: "02",
+        intro: "国内油价不是连续交易行情，因此用历史调价节点串起趋势，并保留每次变化的解释。",
+        notes: ["支持油品和近 3 月、6 月、1 年切换。", "价格、区间涨跌、高低点和调价次数形成一组摘要。", "节点列表采用上涨红、下降绿，并同时提供文字与数值。"],
+        interactions: ["点击时间范围可更新图表与统计。", "油品分段控件用于切换 92#、95#、98# 和柴油。"],
+        tip: "正式版优先使用官方历史调价数据，不把每日抓取值伪装成高频价格变化。"
+      },
+      notices: {
+        title: "调价通知", index: "03",
+        intro: "把“已发生的正式结果”和“仍可能变化的预测”分开，建立产品可信度。",
+        notes: ["下一轮窗口突出日期，不用倒计时制造焦虑。", "同步状态与最近检查时间可见，异常时不假装实时。", "通知详情预留发布机构、原文来源与执行日期。"],
+        interactions: ["点击通知可查看详情底部弹层。", "顶部筛选可分别查看正式结果和市场预测。"],
+        tip: "默认只把正式降价作为提醒触发条件；预测类消息由用户主动开启。"
+      },
+      global: {
+        title: "国际油价", index: "04",
+        intro: "只提供 Brent 与 WTI 两个最有参考价值的品种，避免把工具做成复杂交易终端。",
+        notes: ["统一显示美元/桶、报价时间和涨跌状态。", "实时或延时由最终数据源决定，界面必须如实标记。", "固定解释国际原油与国内零售油价之间的差异。"],
+        interactions: ["点击 Brent / WTI 卡片可切换主图与行情摘要。", "周期控件预留给日、周、月走势。"],
+        tip: "首版不必加入汇率换算和大量能源品种，先把来源、时间和单位讲清楚。"
+      },
+      alerts: {
+        title: "降价提醒", index: "05",
+        intro: "用一句自然语言复述提醒规则，让用户在授权前明确知道何时会收到消息。",
+        notes: ["默认开启“官方降价即提醒”，预测提醒默认关闭。", "支持目标价、地区和油品条件，并沿用首页选择。", "订阅消息状态、历史提醒和未授权原因都可见。"],
+        interactions: ["开关可切换；目标价支持步进调整。", "点击“去开启”可预览微信订阅授权流程。"],
+        tip: "微信提醒必须主动订阅，不能承诺无限制后台推送；设计稿中的“模拟开启”不是实际授权。"
+      }
+    };
+
+    let currentPage = "home";
+    const pages = document.querySelectorAll(".app-page");
+    const pageButtons = document.querySelectorAll("[data-page]");
+    const notesList = document.getElementById("notesList");
+    const interactionList = document.getElementById("interactionList");
+
+    function showPage(page) {
+      if (!pageMeta[page]) return;
+      currentPage = page;
+      pages.forEach(el => { el.hidden = el.id !== "page-" + page; if (el.id === "page-" + page) el.scrollTop = 0; });
+      pageButtons.forEach(btn => btn.classList.toggle("active", btn.dataset.page === page));
+      const meta = pageMeta[page];
+      document.getElementById("stageTitle").textContent = meta.title;
+      document.getElementById("pageNow").textContent = meta.index;
+      document.getElementById("notesTitle").textContent = meta.title;
+      document.getElementById("notesIntro").textContent = meta.intro;
+      document.getElementById("reviewTip").textContent = meta.tip;
+      notesList.innerHTML = meta.notes.map(item => "<li>" + item + "</li>").join("");
+      interactionList.innerHTML = meta.interactions.map(item => "<li>" + item + "</li>").join("");
+      closeSheets();
+    }
+
+    pageButtons.forEach(btn => btn.addEventListener("click", () => showPage(btn.dataset.page)));
+    document.querySelectorAll("[data-page-link]").forEach(btn => btn.addEventListener("click", () => showPage(btn.dataset.pageLink)));
+
+    function openSheet(id) {
+      closeSheets();
+      const sheet = document.getElementById(id);
+      if (sheet) sheet.classList.add("open");
+    }
+    function closeSheets() { document.querySelectorAll(".sheet-backdrop.open").forEach(el => el.classList.remove("open")); }
+    document.querySelectorAll("[data-open]").forEach(btn => btn.addEventListener("click", () => openSheet(btn.dataset.open)));
+    document.querySelectorAll("[data-close]").forEach(btn => btn.addEventListener("click", closeSheets));
+    document.querySelectorAll(".sheet-backdrop").forEach(backdrop => backdrop.addEventListener("click", event => { if (event.target === backdrop) closeSheets(); }));
+    document.addEventListener("keydown", event => { if (event.key === "Escape") closeSheets(); });
+
+    document.querySelectorAll(".city-option").forEach(option => option.addEventListener("click", () => {
+      document.querySelectorAll(".city-option").forEach(el => el.classList.remove("active"));
+      option.classList.add("active");
+      document.querySelectorAll(".city-name").forEach(el => el.textContent = option.dataset.city);
+      closeSheets();
+      showToast("已切换至" + option.dataset.city + "（演示）");
+    }));
+
+    const homeFuelDetails = {
+      "92": { forecast: "0.12", noticeChange: "0.08", trend: [7.52, 7.52, 7.48, 7.44, 7.44, 7.38, 7.44, 7.36] },
+      "95": { forecast: "0.13", noticeChange: "0.09", trend: [8.14, 8.14, 8.09, 8.05, 8.05, 7.99, 8.07, 7.98] },
+      "98": { forecast: "0.14", noticeChange: "0.10", trend: [8.96, 8.96, 8.91, 8.86, 8.86, 8.79, 8.92, 8.82] },
+      "0": { forecast: "0.11", noticeChange: "0.08", trend: [7.17, 7.17, 7.12, 7.09, 7.09, 7.04, 7.10, 7.02] }
+    };
+    const fuelButtons = Array.from(document.querySelectorAll(".other-fuel"));
+
+    function renderHomeTrend(fuel) {
+      const values = homeFuelDetails[fuel].trend;
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const range = max - min || 1;
+      const points = values.map((value, index) => ({
+        x: index * 327 / (values.length - 1),
+        y: 59 - (value - min) / range * 49
+      }));
+      let linePath = "M" + points[0].x.toFixed(1) + " " + points[0].y.toFixed(1);
+      points.slice(1).forEach(point => {
+        linePath += " H" + point.x.toFixed(1) + " V" + point.y.toFixed(1);
+      });
+      const end = points[points.length - 1];
+      document.getElementById("homeTrendLine").setAttribute("d", linePath);
+      document.getElementById("homeTrendArea").setAttribute("d", linePath + " L327 70 L0 70Z");
+      document.getElementById("homeTrendPoint").setAttribute("cx", end.x.toFixed(1));
+      document.getElementById("homeTrendPoint").setAttribute("cy", end.y.toFixed(1));
+    }
+
+    function selectFuel(button, announce = true) {
+      const fuel = button.dataset.fuel;
+      const fuelName = fuel === "0" ? "0# 柴油" : fuel + "# 汽油";
+      const details = homeFuelDetails[fuel];
+      // DOM 始终保持 92、95、98、0 的固定顺序，仅隐藏已进入大卡的项目。
+      fuelButtons.forEach(el => {
+        const isSelected = el === button;
+        el.classList.toggle("selected", isSelected);
+        el.setAttribute("aria-pressed", String(isSelected));
+      });
+      document.getElementById("heroFuelBadge").textContent = fuel;
+      document.getElementById("heroFuelName").textContent = fuelName;
+      document.getElementById("heroPrice").textContent = button.dataset.price;
+      document.getElementById("heroChange").textContent = button.dataset.change;
+      document.getElementById("forecastValue").textContent = "↓ " + details.forecast;
+      document.getElementById("forecastCaption").textContent = fuel + "# · 元/升 · 非官方";
+      document.getElementById("homeTrendFuel").textContent = fuelName + "　›";
+      document.getElementById("homeNoticeChange").textContent = fuelName + "每升下调 " + details.noticeChange + " 元";
+      renderHomeTrend(fuel);
+      if (announce) showToast("已同步切换 " + fuelName + " 的调价与走势");
+    }
+    fuelButtons.forEach(button => button.addEventListener("click", () => selectFuel(button)));
+    selectFuel(fuelButtons.find(button => button.dataset.fuel === "92"), false);
+
+    const trendSets = {
+      "3m": { values: [7.52, 7.48, 7.38, 7.44, 7.44, 7.36, 7.36], delta: "-2.13%", range: "近 3 个月", low: "7.32", high: "7.58", count: "6 次", axis: ["08月", "09月", "11月"] },
+      "6m": { values: [7.58, 7.46, 7.51, 7.39, 7.48, 7.38, 7.44, 7.36], delta: "-2.90%", range: "近 6 个月", low: "7.28", high: "7.66", count: "12 次", axis: ["05月", "08月", "11月"] },
+      "1y": { values: [7.18, 7.32, 7.27, 7.46, 7.39, 7.55, 7.48, 7.58, 7.38, 7.44, 7.36], delta: "+2.51%", range: "近 1 年", low: "7.08", high: "7.72", count: "25 次", axis: ["2025/11", "2026/05", "2026/11"] }
+    };
+
+    function renderTrend(key) {
+      const set = trendSets[key];
+      const values = set.values;
+      const min = 7.0, max = 7.8, left = 30, right = 322, top = 20, bottom = 147;
+      const points = values.map((value, index) => {
+        const x = left + (right - left) * index / (values.length - 1);
+        const y = bottom - (value - min) / (max - min) * (bottom - top);
+        return [x.toFixed(1), y.toFixed(1)];
+      });
+      const line = points.map((point, index) => (index ? "L" : "M") + point[0] + " " + point[1]).join(" ");
+      document.getElementById("trendLinePath").setAttribute("d", line);
+      document.getElementById("trendAreaPath").setAttribute("d", line + " L" + right + " " + bottom + " L" + left + " " + bottom + " Z");
+      const end = points[points.length - 1];
+      document.getElementById("trendEndDot").setAttribute("cx", end[0]);
+      document.getElementById("trendEndDot").setAttribute("cy", end[1]);
+      document.getElementById("trendPrice").textContent = values[values.length - 1].toFixed(2);
+      const delta = document.getElementById("trendDelta");
+      delta.textContent = set.delta;
+      delta.className = "num " + (set.delta.startsWith("+") ? "up" : "down");
+      document.getElementById("trendRangeLabel").textContent = set.range;
+      document.getElementById("trendLow").textContent = set.low;
+      document.getElementById("trendHigh").textContent = set.high;
+      document.getElementById("trendCount").textContent = set.count;
+      ["trendAxisStart", "trendAxisMid", "trendAxisEnd"].forEach((id, index) => document.getElementById(id).textContent = set.axis[index]);
+    }
+    document.querySelectorAll("#trendPeriods button").forEach(button => button.addEventListener("click", () => {
+      document.querySelectorAll("#trendPeriods button").forEach(el => el.classList.remove("active"));
+      button.classList.add("active");
+      renderTrend(button.dataset.period);
+    }));
+    document.querySelectorAll(".fuel-segment button").forEach(button => button.addEventListener("click", () => {
+      document.querySelectorAll(".fuel-segment button").forEach(el => el.classList.remove("active"));
+      button.classList.add("active");
+      showToast("已选择 " + button.textContent + "（图表演示）");
+    }));
+    renderTrend("3m");
+
+    document.querySelectorAll("#noticeFilters button").forEach(button => button.addEventListener("click", () => {
+      document.querySelectorAll("#noticeFilters button").forEach(el => el.classList.remove("active"));
+      button.classList.add("active");
+      const filter = button.dataset.filter;
+      document.querySelectorAll(".notice-item").forEach(item => item.style.display = filter === "all" || item.dataset.kind === filter ? "block" : "none");
+    }));
+
+    const markets = {
+      brent: { name: "布伦特原油", code: "BRENT CRUDE · USD / BBL", price: "78.42", change: "+0.64　+0.82%", direction: "up", open: "77.81", prev: "77.78", high: "78.67", low: "77.56", line: "M0 111 L25 104 L50 108 L75 90 L100 94 L125 75 L150 82 L175 60 L200 68 L225 48 L250 53 L275 31 L305 40 L330 22" },
+      wti: { name: "纽约原油", code: "WTI CRUDE · USD / BBL", price: "74.16", change: "-0.26　-0.35%", direction: "down", open: "74.48", prev: "74.42", high: "74.73", low: "73.92", line: "M0 34 L25 40 L50 31 L75 55 L100 49 L125 72 L150 65 L175 86 L200 80 L225 103 L250 96 L275 116 L305 108 L330 121" }
+    };
+    document.querySelectorAll(".market-tab").forEach(button => button.addEventListener("click", () => {
+      document.querySelectorAll(".market-tab").forEach(el => el.classList.remove("active"));
+      button.classList.add("active");
+      const market = markets[button.dataset.market];
+      document.getElementById("marketName").textContent = market.name;
+      document.getElementById("marketCode").textContent = market.code;
+      document.getElementById("marketPrice").textContent = market.price;
+      const change = document.getElementById("marketChange");
+      change.textContent = market.change;
+      change.className = "market-change num " + market.direction;
+      document.getElementById("marketLinePath").setAttribute("d", market.line);
+      document.getElementById("marketAreaPath").setAttribute("d", market.line + " L330 140 L0 140Z");
+      document.getElementById("marketChart").classList.toggle("down-market", market.direction === "down");
+      ["Open", "Prev", "High", "Low"].forEach(key => document.getElementById("market" + key).textContent = market[key.toLowerCase()]);
+    }));
+
+    document.querySelectorAll(".switch").forEach(button => button.addEventListener("click", () => {
+      const enabled = button.getAttribute("aria-checked") !== "true";
+      button.setAttribute("aria-checked", String(enabled));
+      showToast((enabled ? "已开启" : "已关闭") + button.getAttribute("aria-label") + "（演示）");
+    }));
+
+    let targetPrice = 7.20;
+    function updateTarget() {
+      document.getElementById("targetPrice").textContent = targetPrice.toFixed(2);
+      const diff = 7.36 - targetPrice;
+      document.getElementById("targetCaption").textContent = diff >= 0 ? "低于目标价 " + diff.toFixed(2) + " 元时提醒" : "目标价高于当前价，将在达到时提醒";
+    }
+    document.getElementById("targetMinus").addEventListener("click", () => { targetPrice = Math.max(5, targetPrice - .05); updateTarget(); });
+    document.getElementById("targetPlus").addEventListener("click", () => { targetPrice = Math.min(10, targetPrice + .05); updateTarget(); });
+
+    document.getElementById("confirmPermission").addEventListener("click", () => {
+      document.getElementById("subscriptionTitle").textContent = "微信提醒已开启";
+      document.getElementById("subscriptionText").textContent = "正式降价、目标价到达时发送订阅消息";
+      document.getElementById("subscriptionButton").textContent = "管理";
+      document.getElementById("subscriptionCard").style.background = "#e2f1e8";
+      closeSheets();
+      showToast("订阅状态已模拟开启");
+    });
+
+    let toastTimer;
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      toast.textContent = message;
+      toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove("show"), 1800);
+    }
+  </script>
+</body>
+</html>

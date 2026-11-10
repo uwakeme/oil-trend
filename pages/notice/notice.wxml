@@ -1,0 +1,109 @@
+<view class="tk page-root">
+  <view wx:if="{{loading}}" class="state-box">
+    <text class="state-box-title">正在同步调价通知…</text>
+  </view>
+
+  <view wx:elif="{{loadError}}" class="state-box">
+    <text class="state-box-title">{{loadError}}</text>
+    <button class="secondary-button retry-btn" bindtap="onRetry">重新加载</button>
+  </view>
+
+  <block wx:else>
+    <view class="page-head">
+      <text class="page-kicker">PRICE ADJUSTMENT</text>
+      <text class="page-title">调价通知</text>
+      <text class="page-sub">正式结果与市场预测分开呈现</text>
+    </view>
+
+    <view class="window-card">
+      <text class="window-label">下一次调价窗口</text>
+      <view class="window-date">
+        <text class="window-date-value">{{window.dateText}}</text>
+        <text class="window-date-note">{{window.time}} · 预计时间</text>
+      </view>
+      <view class="window-progress">
+        <view class="window-progress-bar" style="width:{{window.progress}}%"></view>
+      </view>
+      <view class="window-meta">
+        <text>{{window.cycleStarted ? '本轮周期已开始' : '本轮周期尚未开始'}}</text>
+        <text>{{window.countdownText}}</text>
+      </view>
+    </view>
+
+    <view class="sync-line">
+      <text class="sync-status {{sync.className}}">{{sync.statusText}}</text>
+      <text>{{sync.checkedText}}</text>
+    </view>
+
+    <view class="filter-row">
+      <view
+        wx:for="{{filters}}"
+        wx:key="key"
+        class="filter-item {{item.key === filter ? 'active' : ''}}"
+        data-filter="{{item.key}}"
+        bindtap="onSelectFilter"
+      >{{item.label}}</view>
+    </view>
+
+    <view wx:if="{{notices.length === 0}}" class="state-box">
+      <text class="state-box-title">该分类下暂无通知</text>
+      <text>切换筛选条件查看其它记录</text>
+    </view>
+
+    <view wx:for="{{notices}}" wx:key="id" class="notice-item" data-id="{{item.id}}" data-kind="{{item.kind}}" bindtap="onOpenNotice">
+      <view class="notice-meta">
+        <text class="badge {{item.kind === 'official' ? 'neutral' : 'amber'}}">{{item.kindLabel}}</text>
+        <text class="notice-meta-time">{{item.publishedText}}</text>
+      </view>
+      <text class="notice-item-title">{{item.title}}</text>
+      <view class="notice-bottom">
+        <text>{{item.executeText}}</text>
+        <text class="notice-change {{item.direction}}">{{item.changeText}}</text>
+      </view>
+    </view>
+
+    <view class="data-footnote"><text>通知正文与来源为版本演示</text><text class="foot-line">正式版本将提供来源名称与原文链接</text></view>
+  </block>
+
+  <!-- 通知详情 -->
+  <bottom-sheet visible="{{sheetVisible}}" title="{{sheetKind === 'official' ? '调价通知详情' : '市场预测说明'}}" bind:close="onSheetClose">
+    <block wx:if="{{sheetKind === 'official'}}">
+      <view class="notice-detail-label">
+        <text class="badge neutral">正式结果</text>
+        <text class="badge {{detail.direction}}">{{detail.verb}}</text>
+      </view>
+      <text class="notice-detail-title">{{detail.title}}</text>
+      <view class="sheet-body" style="margin-top:12rpx">{{detail.summary}}</view>
+      <view class="detail-price-grid">
+        <view wx:for="{{detail.prices}}" wx:key="id" class="detail-price">
+          <text class="detail-price-name">{{item.name}}</text>
+          <view class="detail-price-row">
+            <text class="detail-price-value">{{item.afterText}}</text>
+            <text class="detail-price-delta {{item.direction}}">{{item.deltaText}}</text>
+          </view>
+        </view>
+      </view>
+      <view class="source-box">
+        <text class="source-box-title">来源与原文</text>
+        <text class="source-box-text">{{detail.sourceName}} · 发布于 {{detail.publishedText}}</text>
+      </view>
+    </block>
+
+    <block wx:else>
+      <view class="notice-detail-label">
+        <text class="badge amber">非官方预测</text>
+      </view>
+      <text class="notice-detail-title">{{detail.title}}</text>
+      <view class="sheet-body" style="margin-top:12rpx">{{detail.summary}}</view>
+      <view class="info-strip" style="margin-top:24rpx">
+        <image class="info-strip-icon" src="/assets/icons/info-amber.png" mode="aspectFit" />
+        <view>
+          <text class="info-strip-title">默认不发送预测提醒</text>
+          <text class="info-strip-text">预测会随国际行情和计价周期变化，可能反转。想接收预测提醒，可在「提醒」页主动开启。</text>
+        </view>
+      </view>
+    </block>
+
+    <button class="primary-button dark" bindtap="onSheetClose">我知道了</button>
+  </bottom-sheet>
+</view>

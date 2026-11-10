@@ -1,0 +1,152 @@
+<view class="tk page-root">
+  <view wx:if="{{loading}}" class="state-box">
+    <text class="state-box-title">正在读取提醒规则…</text>
+  </view>
+
+  <view wx:elif="{{loadError}}" class="state-box">
+    <text class="state-box-title">{{loadError}}</text>
+    <button class="secondary-button retry-btn" bindtap="onRetry">重新加载</button>
+  </view>
+
+  <block wx:else>
+    <view class="page-head">
+      <text class="page-kicker">PRICE ALERT</text>
+      <text class="page-title">降价提醒</text>
+      <text class="page-sub">只在符合你的条件时通知</text>
+    </view>
+
+    <!-- 订阅状态 -->
+    <view class="subscription-card {{subscription.active ? 'on' : ''}}">
+      <view class="subscription-icon">
+        <image wx:if="{{subscription.icon}}" class="icon-inline" src="/assets/icons/{{subscription.icon}}" mode="aspectFit" />
+      </view>
+      <view class="subscription-copy">
+        <text class="subscription-title">{{subscription.title}}</text>
+        <text class="subscription-text">{{subscription.text}}</text>
+      </view>
+      <button class="subscription-button {{subscription.enabled ? '' : 'disabled'}}" bindtap="onOpenPermission">{{subscription.buttonText}}</button>
+    </view>
+
+    <!-- 官方降价即提醒 -->
+    <view class="card">
+      <view class="rule-top">
+        <view class="rule-title">
+          <view class="rule-symbol">
+            <image class="icon-inline" src="/assets/icons/bell-green.png" mode="aspectFit" />
+          </view>
+          <view>
+            <text class="rule-name">官方降价即提醒我</text>
+            <text class="rule-desc">正式公告发布后触发，不含预测</text>
+          </view>
+        </view>
+        <view class="switch {{rule.officialDrop ? 'on' : ''}}" bindtap="onToggleOfficial"></view>
+      </view>
+
+      <view class="condition-grid">
+        <view class="condition">
+          <text class="condition-label">监控地区</text>
+          <text class="condition-value">{{region.fullName}}</text>
+        </view>
+        <view class="condition">
+          <text class="condition-label">监控油品</text>
+          <text class="condition-value">{{fuelName}}</text>
+        </view>
+      </view>
+
+      <view class="rule-summary">当 <text class="condition-value">{{region.fullName}}</text> 的 <text class="condition-value">{{fuelName}}</text> 出现正式降价公告时，向我发送微信订阅消息。</view>
+    </view>
+
+    <!-- 目标价提醒 -->
+    <view class="card">
+      <view class="target-head">
+        <text class="target-title">目标价提醒</text>
+        <view style="display:flex;align-items:center;">
+          <text class="target-current">当前 {{currentPriceText}} 元/升</text>
+          <view class="switch {{rule.targetEnabled ? 'on' : ''}}" bindtap="onToggleTarget"></view>
+        </view>
+      </view>
+
+      <view class="stepper">
+        <view class="stepper-button" bindtap="onTargetMinus">−</view>
+        <view class="stepper-value">
+          <text class="stepper-value-number">{{targetText}}</text>
+          <text class="stepper-value-unit">元/升</text>
+        </view>
+        <view class="stepper-button" bindtap="onTargetPlus">＋</view>
+      </view>
+      <text class="target-caption {{targetWarn ? 'warn' : ''}}">{{targetCaption}}</text>
+
+      <view class="rule-summary">当 <text class="condition-value">{{region.fullName}}</text> 的 <text class="condition-value">{{fuelName}}</text> 价格降到 <text class="condition-value">{{targetText}} 元/升</text> 或更低时，向我发送微信订阅消息。</view>
+    </view>
+
+    <!-- 预测下调提醒 -->
+    <view class="card">
+      <view class="rule-top">
+        <view class="rule-title">
+          <view class="rule-symbol amber">
+            <image class="icon-inline" src="/assets/icons/target-amber.png" mode="aspectFit" />
+          </view>
+          <view>
+            <text class="rule-name">预测下调提醒</text>
+            <text class="rule-desc">仅供参考，默认不开启</text>
+          </view>
+        </view>
+        <view class="switch {{rule.forecastDrop ? 'on' : ''}}" bindtap="onToggleForecast"></view>
+      </view>
+    </view>
+
+    <!-- 历史记录 -->
+    <view class="card">
+      <view class="card-title-row">
+        <text class="card-title">最近提醒</text>
+        <text class="micro">演示记录</text>
+      </view>
+      <view wx:if="{{history.length === 0}}" class="state-box" style="padding:24rpx 0;">
+        <text>还没有触发过提醒</text>
+      </view>
+      <view wx:else class="alert-history">
+        <view wx:for="{{history}}" wx:key="id" class="history-item">
+          <view class="history-check">
+            <image class="icon-inline" src="/assets/icons/check-green.png" mode="aspectFit" />
+          </view>
+          <view class="history-copy">
+            <text class="history-title">{{item.title}}</text>
+            <text class="history-time">{{item.time}} · {{item.channel}}</text>
+          </view>
+          <text class="history-price">{{item.priceText}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="data-footnote"><text>微信订阅消息需要用户主动授权</text><text class="foot-line">可发送次数以微信平台规则为准</text></view>
+  </block>
+
+  <!-- 订阅授权说明 -->
+  <bottom-sheet visible="{{sheetVisible}}" title="开启降价提醒" bind:close="onSheetClose">
+    <view class="sheet-body">正式调价时，此处将调用微信订阅消息授权。你可以自由选择提醒类型，未授权不会影响油价查询。</view>
+
+    <view class="permission-item">
+      <image class="icon-inline" src="/assets/icons/check-green.png" mode="aspectFit" />
+      <view>
+        <text class="permission-name">正式降价通知</text>
+        <text class="permission-desc">地区、油品、调价后价格与执行时间</text>
+      </view>
+    </view>
+
+    <view class="permission-item">
+      <image class="icon-inline" src="/assets/icons/check-green.png" mode="aspectFit" />
+      <view>
+        <text class="permission-name">目标价到达通知</text>
+        <text class="permission-desc">当前价格、目标价格与查看入口</text>
+      </view>
+    </view>
+
+    <view wx:if="{{!hasTemplate}}" class="warn-box">
+      <text class="warn-title">当前环境尚未配置订阅消息模板</text>
+      <text class="warn-text">需要在微信公众平台申请订阅消息模板，并把模板 ID 填入 config/index.js 的 subscribeTemplateIds；同时使用正式小程序 AppID。测试号无法真实下发订阅消息。</text>
+    </view>
+
+    <button class="primary-button {{hasTemplate ? '' : 'muted'}}" bindtap="onConfirmPermission">{{hasTemplate ? '去授权订阅' : '我知道了'}}</button>
+    <button class="secondary-button sheet-secondary" bindtap="onSheetClose">暂不开启</button>
+  </bottom-sheet>
+</view>

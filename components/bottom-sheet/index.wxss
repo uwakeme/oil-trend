@@ -1,0 +1,42 @@
+@import "../../styles/tokens.wxss";
+@import "../../styles/components.wxss";
+
+.sheet-mask {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  background: rgba(10, 20, 15, .46);
+  z-index: 100;
+  animation: maskIn .22s ease both;
+}
+
+.sheet-panel {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 101;
+  max-height: 84vh;
+  overflow-y: auto;
+  background: var(--paper);
+  border-radius: 50rpx 50rpx 0 0;
+  padding: 24rpx 40rpx calc(48rpx + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  animation: sheetUp .25s ease both;
+}
+
+.sheet-content {
+  padding-bottom: 8rpx;
+}
+
+@keyframes maskIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes sheetUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}

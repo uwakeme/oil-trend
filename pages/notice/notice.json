@@ -1,0 +1,6 @@
+{
+  "navigationBarTitleText": "调价通知",
+  "usingComponents": {
+    "bottom-sheet": "/components/bottom-sheet/index"
+  }
+}

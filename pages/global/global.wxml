@@ -1,0 +1,106 @@
+<view class="tk page-root">
+  <view wx:if="{{loading}}" class="state-box">
+    <text class="state-box-title">正在获取行情…</text>
+  </view>
+
+  <view wx:elif="{{loadError}}" class="state-box">
+    <text class="state-box-title">{{loadError}}</text>
+    <button class="secondary-button retry-btn" bindtap="onRetry">重新加载</button>
+  </view>
+
+  <block wx:else>
+    <view class="page-head">
+      <text class="page-kicker">GLOBAL CRUDE</text>
+      <text class="page-title">国际油价</text>
+      <text class="page-sub">原油市场参考 · 美元 / 桶</text>
+    </view>
+
+    <text class="delay-badge">{{delayText}}</text>
+
+    <view class="market-tabs">
+      <view
+        wx:for="{{tabs}}"
+        wx:key="symbol"
+        class="market-tab {{item.symbol === symbol ? 'active' : ''}}"
+        data-symbol="{{item.symbol}}"
+        bindtap="onSelectMarket"
+      >
+        <view class="market-tab-top">
+          <text class="market-tab-name">{{item.code}}</text>
+          <text class="market-tab-label">{{item.label}}</text>
+        </view>
+        <view class="market-quote">
+          <text class="market-quote-price">{{item.priceText}}</text>
+          <text class="market-quote-change {{item.direction}}">{{item.changeText}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="market-main">
+      <view class="market-heading">
+        <view>
+          <text class="market-heading-title">{{market.name}}</text>
+          <text class="market-heading-code">{{market.code}}</text>
+        </view>
+        <view class="market-time"><text>{{market.quoteTime}}</text><text class="foot-line">{{market.delayText}}</text></view>
+      </view>
+
+      <view class="market-big">
+        <text class="market-big-value num">{{market.priceText}}</text>
+        <text class="market-big-unit">美元 / 桶</text>
+      </view>
+      <text class="market-change {{market.direction}}">{{market.changeText}}</text>
+
+      <trend-chart points="{{market.points}}" mode="line" height="{{145}}" direction="{{market.direction}}" />
+
+      <view class="market-axis">
+        <text wx:for="{{market.axis}}" wx:key="*this">{{item}}</text>
+      </view>
+
+      <view class="period-row" style="margin:26rpx 0 0">
+        <view
+          wx:for="{{periods}}"
+          wx:key="key"
+          class="period-item {{item.key === period ? 'active' : ''}}"
+          data-period="{{item.key}}"
+          bindtap="onSelectPeriod"
+        >{{item.label}}</view>
+      </view>
+    </view>
+
+    <view class="info-strip">
+      <image class="info-strip-icon" src="/assets/icons/info-amber.png" mode="aspectFit" />
+      <view>
+        <text class="info-strip-title">国际油价不等于国内加油价</text>
+        <text class="info-strip-text">国内成品油还受定价周期、汇率、税费及流通成本等因素影响，此页仅作市场趋势参考。</text>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="card-title-row">
+        <text class="card-title">今日市场快照</text>
+        <text class="micro">USD / BBL</text>
+      </view>
+      <view class="market-detail-grid">
+        <view class="market-detail">
+          <text class="market-detail-label">今开</text>
+          <text class="market-detail-value">{{market.openText}}</text>
+        </view>
+        <view class="market-detail">
+          <text class="market-detail-label">昨收</text>
+          <text class="market-detail-value">{{market.prevText}}</text>
+        </view>
+        <view class="market-detail">
+          <text class="market-detail-label">最高</text>
+          <text class="market-detail-value">{{market.highText}}</text>
+        </view>
+        <view class="market-detail">
+          <text class="market-detail-label">最低</text>
+          <text class="market-detail-value">{{market.lowText}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="data-footnote"><text>实时或延时状态由正式数据源决定</text><text class="foot-line">{{sourceNote}}</text></view>
+  </block>
+</view>

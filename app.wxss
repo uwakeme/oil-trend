@@ -1,0 +1,17 @@
+@import "styles/tokens.wxss";
+@import "styles/components.wxss";
+
+page {
+  background: #f5f2e9;
+  color: #17231e;
+  font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-size: 28rpx;
+}
+
+view, text, button, input, scroll-view {
+  box-sizing: border-box;
+}
+
+/* 去掉 button 的默认边框与背景 */
+button::after { border: none; }

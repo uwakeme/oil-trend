@@ -1,0 +1,181 @@
+<view class="tk page-root">
+
+  <view wx:if="{{loading}}" class="state-box">
+    <text class="state-box-title">正在获取油价…</text>
+    <text>数据由服务端定时采集</text>
+  </view>
+
+  <view wx:elif="{{loadError}}" class="state-box">
+    <text class="state-box-title">{{loadError}}</text>
+    <button class="secondary-button retry-btn" bindtap="onRetry">重新加载</button>
+  </view>
+
+  <block wx:else>
+    <!-- 顶部：地区与设置 -->
+    <view class="app-header">
+      <view class="header-left">
+        <text class="header-kicker">当前油价</text>
+        <view class="location-button" bindtap="onPickRegion">
+          <image class="icon-inline" src="/assets/icons/pin-ink.png" mode="aspectFit" />
+          <text class="city-name">{{region.fullName}}</text>
+          <image class="icon-inline" src="/assets/icons/chevron-muted.png" mode="aspectFit" />
+        </view>
+      </view>
+      <view class="icon-button" bindtap="onOpenAbout">
+        <image class="icon-inline" src="/assets/icons/settings-ink.png" mode="aspectFit" />
+      </view>
+    </view>
+
+    <!-- 主价格卡 -->
+    <view class="price-hero">
+      <text class="hero-ghost num">{{hero.id}}</text>
+      <view class="price-topline">
+        <view class="fuel-label">
+          <text class="fuel-badge">{{hero.id}}</text>
+          <text>{{hero.name}}</text>
+        </view>
+        <text class="updated">{{updatedLabel}}</text>
+      </view>
+      <view class="hero-price">
+        <text class="hero-price-value num">{{hero.priceText}}</text>
+        <text class="hero-price-unit">元 / 升</text>
+      </view>
+      <view class="price-change">
+        <text class="badge {{hero.direction}}">{{hero.changeText}}</text>
+        <view class="text-button" bindtap="goTrend">
+          <text>查看走势</text>
+          <image class="icon-inline" src="/assets/icons/arrow-muted.png" mode="aspectFit" />
+        </view>
+      </view>
+    </view>
+
+    <!-- 其余油品：固定 92/95/98/0 顺序，选中项进入大卡后隐藏 -->
+    <view class="other-fuels">
+      <block wx:for="{{prices}}" wx:key="id">
+        <view wx:if="{{item.id !== fuelId}}" class="other-fuel" data-fuel="{{item.id}}" bindtap="onSelectFuel">
+          <text class="other-fuel-name">{{item.name}}</text>
+          <view class="other-fuel-row">
+            <text class="other-fuel-price num">{{item.priceText}}</text>
+            <text class="other-fuel-unit">元/升</text>
+          </view>
+          <text class="other-fuel-change {{item.direction}}">{{item.changeText}}</text>
+        </view>
+      </block>
+    </view>
+
+    <!-- 下一轮调价窗口 -->
+    <view class="next-card">
+      <view class="next-top">
+        <text class="next-title">下一次调价窗口</text>
+        <text class="countdown">距窗口 <text class="num">{{window.daysLeft}}</text> 天</text>
+      </view>
+      <view class="next-main">
+        <view class="next-date">
+          <text class="next-date-value">{{window.dateText}}</text>
+          <text class="next-date-note">预计时间 · 以官方公告为准</text>
+        </view>
+        <view class="forecast">
+          <text class="forecast-value num {{forecast.direction}}">{{forecast.text}}</text>
+          <text class="forecast-caption">{{fuelId}}# · 元/升 · 非官方</text>
+        </view>
+      </view>
+    </view>
+
+    <button class="primary-button home-alert-button" bindtap="goAlert">
+      <image class="icon-inline" src="/assets/icons/bell-dark.png" mode="aspectFit" />
+      <text>降价时提醒我</text>
+    </button>
+
+    <!-- 近 30 天走势 -->
+    <view class="card">
+      <view class="card-title-row">
+        <text class="card-title">近 30 天走势</text>
+        <view class="card-link" bindtap="goTrend">{{hero.name}}　›</view>
+      </view>
+      <trend-chart points="{{trend.points}}" mode="step" height="{{70}}" direction="{{trend.direction}}" />
+      <view class="chart-labels">
+        <text wx:for="{{trend.labels}}" wx:key="*this">{{item}}</text>
+      </view>
+    </view>
+
+    <!-- 最新调价通知 -->
+    <view class="card">
+      <view class="card-title-row">
+        <text class="card-title">最新调价通知</text>
+        <view class="card-link" bindtap="goNotice">全部通知 ›</view>
+      </view>
+      <view class="notice-preview" bindtap="onOpenNotice">
+        <view class="notice-date-block">
+          <text class="notice-day num">{{notice.day}}</text>
+          <text class="notice-month">{{notice.month}}</text>
+        </view>
+        <view class="notice-preview-body">
+          <text class="notice-preview-title">{{notice.title}}</text>
+          <text class="notice-preview-desc">
+            <text class="{{notice.changeDirection}}">{{notice.fuelName}}每升{{notice.verb}} {{notice.value}} 元</text> · 查看通知详情 ›
+          </text>
+        </view>
+      </view>
+    </view>
+
+    <view class="data-footnote">{{sourceNote}}</view>
+  </block>
+
+  <!-- 地区选择 -->
+  <bottom-sheet visible="{{sheetType === 'city'}}" title="选择油价地区" bind:close="onSheetClose">
+    <view class="sheet-body">不同地区零售价可能不同，首版将记住你的选择。</view>
+    <view wx:for="{{regions}}" wx:key="code" class="city-option {{item.code === region.code ? 'active' : ''}}" data-code="{{item.code}}" bindtap="onSelectRegion">
+      <view>
+        <text class="city-option-name">{{item.fullName}}</text>
+        <text class="city-option-price">92# {{item.priceText}} 元/升</text>
+      </view>
+      <text wx:if="{{item.code === region.code}}" class="city-option-check">✓</text>
+    </view>
+  </bottom-sheet>
+
+  <!-- 通知详情 -->
+  <bottom-sheet visible="{{sheetType === 'notice'}}" title="调价通知详情" bind:close="onSheetClose">
+    <view class="notice-detail-label">
+      <text class="badge neutral">正式结果</text>
+      <text class="badge {{notice.changeDirection}}">{{notice.verb}}</text>
+    </view>
+    <text class="detail-title">{{notice.title}}</text>
+    <view class="sheet-body" style="margin-top:12rpx">{{notice.executeText}}</view>
+    <view class="detail-price-grid">
+      <view wx:for="{{notice.prices}}" wx:key="id" class="detail-price">
+        <text class="detail-price-name">{{item.name}}</text>
+        <view class="detail-price-row">
+          <text class="detail-price-value">{{item.priceText}}</text>
+          <text class="detail-price-delta {{item.direction}}">{{item.deltaText}}</text>
+        </view>
+      </view>
+    </view>
+    <view class="source-box">
+      <text class="source-box-title">来源与原文</text>
+      <text class="source-box-text">{{notice.sourceName}} · 发布于 {{notice.publishedText}}</text>
+    </view>
+    <button class="primary-button dark" bindtap="onSheetClose">知道了</button>
+  </bottom-sheet>
+
+  <!-- 数据来源说明 -->
+  <bottom-sheet visible="{{sheetType === 'about'}}" title="数据来源与说明" bind:close="onSheetClose">
+    <view class="about-row">
+      <text class="about-label">当前数据源</text>
+      <text class="about-value">{{sourceName}}</text>
+    </view>
+    <view class="about-row">
+      <text class="about-label">数据更新时间</text>
+      <text class="about-value">{{updatedLabel}}</text>
+    </view>
+    <view class="about-row">
+      <text class="about-label">服务状态</text>
+      <text class="about-value">{{cloudStatus}}</text>
+    </view>
+    <view class="source-box">
+      <text class="source-box-title">关于数据</text>
+      <text class="source-box-text">{{aboutNote}}</text>
+    </view>
+    <button class="primary-button dark" bindtap="onSheetClose">知道了</button>
+  </bottom-sheet>
+
+</view>

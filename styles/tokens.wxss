@@ -1,0 +1,26 @@
+/* ===========================================================
+ * 设计令牌 —— 全部页面与组件共用同一份变量定义
+ * 风格：能源行情杂志 + 车载仪表（暖灰纸面 / 深墨绿 / 琥珀强调）
+ * 使用方式：在页面或组件根节点上加 class="tk" 即可继承这些变量
+ * =========================================================== */
+.tk {
+  --paper: #f5f2e9;
+  --paper-deep: #eae6da;
+  --ink: #17231e;
+  --muted: #6f7771;
+  --line: #dcd8cc;
+  --green: #137a52;
+  --green-soft: #e2f1e8;
+  --red: #ce493b;
+  --red-soft: #fae8e3;
+  --amber: #e9a928;
+  --amber-soft: #f7e8bc;
+  --amber-ink: #79510a;
+  --night: #142c23;
+  --white: #fffef9;
+
+  /* 数字统一使用等宽感字体，保证价格列对齐 */
+  --font-num: "Bahnschrift", "DIN Alternate", "Helvetica Neue", "PingFang SC", sans-serif;
+  --font-title: "STSong", "Songti SC", "PingFang SC", serif;
+  --font-body: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+}

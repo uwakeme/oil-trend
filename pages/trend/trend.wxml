@@ -1,0 +1,94 @@
+<view class="tk page-root">
+  <view wx:if="{{loading}}" class="state-box">
+    <text class="state-box-title">正在加载走势…</text>
+  </view>
+
+  <view wx:elif="{{loadError}}" class="state-box">
+    <text class="state-box-title">{{loadError}}</text>
+    <button class="secondary-button retry-btn" bindtap="onRetry">重新加载</button>
+  </view>
+
+  <block wx:else>
+    <view class="page-head">
+      <text class="page-kicker">PRICE HISTORY</text>
+      <text class="page-title">价格走势</text>
+      <text class="page-sub">{{region.fullName}} · 国内成品油历史价格</text>
+    </view>
+
+    <view class="segmented">
+      <view
+        wx:for="{{fuels}}"
+        wx:key="id"
+        class="segmented-item {{item.id === fuelId ? 'active' : ''}}"
+        data-fuel="{{item.id}}"
+        bindtap="onSelectFuel"
+      >{{item.short}}</view>
+    </view>
+
+    <view class="card">
+      <view class="trend-summary">
+        <view class="trend-price-row">
+          <text class="trend-price num">{{priceText}}</text>
+          <text class="trend-unit">元/升</text>
+        </view>
+        <view class="trend-delta">
+          <text class="trend-delta-value num {{direction}}">{{deltaText}}</text>
+          <text class="micro">{{rangeLabel}}</text>
+        </view>
+      </view>
+
+      <trend-chart points="{{points}}" mode="step" height="{{176}}" show-y-axis="{{true}}" direction="{{direction}}" />
+
+      <view class="trend-axis">
+        <text wx:for="{{axis}}" wx:key="*this">{{item}}</text>
+      </view>
+
+      <view class="period-row">
+        <view
+          wx:for="{{periods}}"
+          wx:key="key"
+          class="period-item {{item.key === period ? 'active' : ''}}"
+          data-period="{{item.key}}"
+          bindtap="onSelectPeriod"
+        >{{item.label}}</view>
+      </view>
+
+      <view class="stat-grid">
+        <view class="stat">
+          <text class="stat-label">区间最低</text>
+          <text class="stat-value num">{{lowText}}</text>
+        </view>
+        <view class="stat">
+          <text class="stat-label">区间最高</text>
+          <text class="stat-value num">{{highText}}</text>
+        </view>
+        <view class="stat">
+          <text class="stat-label">调价次数</text>
+          <text class="stat-value num">{{countText}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="card">
+      <view class="card-title-row">
+        <text class="card-title">调价节点</text>
+        <text class="micro">单位：元/升</text>
+      </view>
+      <view class="event-list">
+        <view wx:for="{{events}}" wx:key="date" class="event-item {{item.direction === 'up' ? 'rise' : ''}}">
+          <text class="event-date">{{item.dateText}}</text>
+          <view class="event-track">
+            <view class="event-dot"></view>
+          </view>
+          <view class="event-body">
+            <text class="event-title">{{item.title}}</text>
+            <text class="event-sub">{{fuelName}} 调整后 {{item.priceText}}</text>
+          </view>
+          <text class="event-value {{item.direction}}">{{item.deltaText}}</text>
+        </view>
+      </view>
+    </view>
+
+    <view class="data-footnote">国内价格按调价节点展示 · {{sourceNote}}</view>
+  </block>
+</view>

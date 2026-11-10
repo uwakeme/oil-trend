@@ -1,0 +1,53 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/trend/trend",
+    "pages/notice/notice",
+    "pages/global/global",
+    "pages/alert/alert"
+  ],
+  "window": {
+    "backgroundTextStyle": "dark",
+    "navigationBarBackgroundColor": "#f5f2e9",
+    "navigationBarTitleText": "油势",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f5f2e9"
+  },
+  "tabBar": {
+    "custom": true,
+    "color": "#929790",
+    "selectedColor": "#142c23",
+    "backgroundColor": "#fffef9",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "油价"
+      },
+      {
+        "pagePath": "pages/trend/trend",
+        "text": "走势"
+      },
+      {
+        "pagePath": "pages/notice/notice",
+        "text": "调价"
+      },
+      {
+        "pagePath": "pages/global/global",
+        "text": "国际"
+      },
+      {
+        "pagePath": "pages/alert/alert",
+        "text": "提醒"
+      }
+    ]
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents",
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于快速定位你所在城市的油价（可选，也可手动选择省市）"
+    }
+  }
+}
