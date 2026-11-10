@@ -3,7 +3,7 @@
 
 .page-root {
   min-height: 100vh;
-  padding: 24rpx 32rpx calc(132rpx + env(safe-area-inset-bottom));
+  padding: 24rpx 32rpx 40rpx;
 }
 
 .page-head {

@@ -42,9 +42,6 @@ Page({
   },
 
   onShow() {
-    var tabBar = typeof this.getTabBar === 'function' ? this.getTabBar() : null;
-    if (tabBar) tabBar.setData({ selected: 4 });
-
     var prefs = store.getPrefs();
     // 首页可能换了油品或地区，这里对齐一次
     if (prefs.fuelId !== this.data.fuelId || prefs.regionCode !== this.data.region.code) {

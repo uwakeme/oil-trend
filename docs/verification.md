@@ -68,6 +68,29 @@ node scripts/verify-in-devtools.js
 `scripts/lint-wxml.js` 后来补了「标签必须是 WXML 内置标签或已声明的自定义组件」这条规则，
 `<br>` 就是在那一轮被改掉的。
 
+## 真机上 tabBar 没有吸底
+
+用户拿真机扫码预览后反馈：底部菜单栏没有固定在下方，要滚动到底才能看到。
+
+在模拟器里量过：`.tab-bar` 的 `boundingClientRect` 在页面滚动到 0 / 600 / 1200 时
+恒为 `top: 701, bottom: 753`，说明 `position: fixed` 在模拟器是生效的；
+真机跑的是用户微信自带的基础库，自定义 tabBar 组件里的 fixed 定位没有生效，
+组件被当成页面内容的一部分排在了文档流末尾。
+
+**改成原生 tabBar**：`app.json` 里去掉 `"custom": true`，给 `list` 配上
+`iconPath` / `selectedIconPath`（用 `assets/icons/` 里现成的两态 PNG）。
+原生 tabBar 由框架渲染、在自己的原生层里，永远吸底，所有设备所有基础库行为一致。
+
+连带的两处调整：
+
+- 页面根节点的底部留白从 `calc(132rpx + env(safe-area-inset-bottom))` 改成 `40rpx`。
+  原生 tabBar 会把 webview 整体上移（模拟器里截图高度从 753 变成 671），
+  页面内容不再延伸到 tabBar 下面，不用再给它留位置。
+- 页面里去掉 `this.getTabBar().setData()`，原生 tabBar 自己管选中态。
+
+代价：原生 tabBar 是框架层，`App.captureScreenshot` 截不到它，
+自动截图里看不到底部导航条（真机上是正常的）。
+
 ## 已知的环境限制
 
 - **预览二维码需要正式 AppID**。测试号（`touristappid`）能跑模拟器，但上传预览包会被平台拒绝：

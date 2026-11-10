@@ -37,9 +37,6 @@ Page({
   },
 
   onShow() {
-    var tabBar = typeof this.getTabBar === 'function' ? this.getTabBar() : null;
-    if (tabBar) tabBar.setData({ selected: 1 });
-
     var prefs = store.getPrefs();
     var fuelId = prefs.fuelId || '92';
     if (fuelId !== this.data.fuelId) {

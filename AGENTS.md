@@ -30,7 +30,7 @@ node scripts/verify-in-devtools.js
 
 - `pages/` — 五个一级页面，每页四件套 `.js/.json/.wxml/.wxss`
 - `components/` — `trend-chart`（Canvas 2D 阶梯线）、`bottom-sheet`（底部弹层）
-- `custom-tab-bar/` — 自定义 tabBar
+- 底部 tabBar 用**原生 tabBar**（`app.json` 里配 `iconPath`），别用自定义组件 —— 见下方「微信小程序特有坑」
 - `utils/` — `api`（**唯一取数入口**）/ `chart` / `store` / `format` / `cloud` / `subscribe` / `demo-clock`
 - `data/` — 演示数据集、调价时间线、地区价差
 - `styles/` — `tokens.wxss`（设计令牌）+ `components.wxss`（通用类）
@@ -71,6 +71,9 @@ node scripts/verify-in-devtools.js
 | 国际行情日期是 `MM-DD HH:mm:ss` | 时间轴正则要的是 `YYYY-MM-DD`，解析全返回 0 会把曲线叠成一根竖线 |
 | `App.captureScreenshot` 只截 DOM 层 | 不合成 canvas 图层，图表区空白是接口限制不是没画；判定见 `docs/verification.md` |
 | `miniprogram-automator` 0.13 与本机 IDE 不兼容 | IDE `Tool.getInfo` 返回 `{ version }`，automator 读 `SDKVersion` 直接崩；`scripts/verify-in-devtools.js` 自己实现了协议 |
+| 自定义 tabBar 的 `position: fixed` 真机不生效 | 组件被排进文档流末尾，要滚到底才看得到；改用**原生 tabBar**：`app.json` 去掉 `"custom": true`，`list` 里配 `iconPath` / `selectedIconPath` |
+| 主包超 2MB，上传预览包被拒 | `.gitignore` 管不了上传包，要在 `project.config.json` 的 `packOptions.ignore` 里排除 `.tooling` / `docs` / `design` / `scripts` / `cloudfunctions` |
+| GitHub 密钥扫描误报小程序 AppID | AppID 是标识符不是凭据，扫的是 `wx` + 16 位十六进制；真实 AppID 放本地 `project.private.config.json`（不入库），AppSecret 永远不进代码 |
 
 ## 验证要求
 

@@ -45,9 +45,6 @@ Page({
   },
 
   onShow() {
-    var tabBar = typeof this.getTabBar === 'function' ? this.getTabBar() : null;
-    if (tabBar) tabBar.setData({ selected: 0 });
-
     // 地区可能在别的页面改过，这里对齐一次
     var prefs = store.getPrefs();
     if (prefs.regionCode !== this.data.region.code) {

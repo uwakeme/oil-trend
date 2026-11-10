@@ -14,7 +14,6 @@
     "backgroundColor": "#f5f2e9"
   },
   "tabBar": {
-    "custom": true,
     "color": "#929790",
     "selectedColor": "#142c23",
     "backgroundColor": "#fffef9",
@@ -22,23 +21,33 @@
     "list": [
       {
         "pagePath": "pages/index/index",
-        "text": "油价"
+        "text": "油价",
+        "iconPath": "assets/icons/home-muted.png",
+        "selectedIconPath": "assets/icons/home-active.png"
       },
       {
         "pagePath": "pages/trend/trend",
-        "text": "走势"
+        "text": "走势",
+        "iconPath": "assets/icons/trend-muted.png",
+        "selectedIconPath": "assets/icons/trend-active.png"
       },
       {
         "pagePath": "pages/notice/notice",
-        "text": "调价"
+        "text": "调价",
+        "iconPath": "assets/icons/notice-muted.png",
+        "selectedIconPath": "assets/icons/notice-active.png"
       },
       {
         "pagePath": "pages/global/global",
-        "text": "国际"
+        "text": "国际",
+        "iconPath": "assets/icons/global-muted.png",
+        "selectedIconPath": "assets/icons/global-active.png"
       },
       {
         "pagePath": "pages/alert/alert",
-        "text": "提醒"
+        "text": "提醒",
+        "iconPath": "assets/icons/bell-muted.png",
+        "selectedIconPath": "assets/icons/bell-active.png"
       }
     ]
   },

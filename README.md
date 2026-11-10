@@ -55,7 +55,6 @@ oil_trend/
 ├── components/
 │   ├── trend-chart/    Canvas 2D 价格曲线
 │   └── bottom-sheet/   底部弹层
-├── custom-tab-bar/     自定义 tabBar
 ├── data/               演示数据集、调价时间线、地区价差
 ├── utils/              api / chart / store / format / cloud / subscribe
 ├── styles/             设计令牌与通用组件类
@@ -109,7 +108,7 @@ node scripts/compose-screenshots.py # 把导出的画布贴回页面截图
 node scripts/preview-qr.js         # 上传预览包并生成扫码图
 ```
 
-`lint-wxml.js` 那个检查器抓出过两个真 bug：自定义 tabBar 在 `wx:for` 里写了 `{{path}}`
+`lint-wxml.js` 那个检查器抓出过两个真 bug：tabBar 在 `wx:for` 里写了 `{{path}}`
 （应为 `{{item.path}}`），以及 `<br>` 不是 WXML 内置标签导致整页编译失败。
 验证过程和另外几个坑记在 [docs/verification.md](docs/verification.md)。
 
