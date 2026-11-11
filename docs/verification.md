@@ -13,7 +13,7 @@
 ### 2. 起自动化服务
 
 ```bash
-"<微信开发者工具目录>/cli.bat" auto --project "<项目目录>" --auto-port 9425 --lang zh
+"<微信开发者工具目录>/cli.bat" auto --project "<项目目录>" --auto-port 9421 --lang zh
 ```
 
 端口会监听一个 WebSocket。`scripts/verify-in-devtools.js` 连上去之后：
@@ -22,18 +22,20 @@
 ### 3. 跑验证
 
 ```bash
-npm i --prefix .tooling miniprogram-automator ws
+npm i --prefix .tooling ws
 node scripts/verify-in-devtools.js
 ```
 
 ## 为什么要自己写协议客户端
 
-本机 IDE 是 2.01.2510290，它的 `Tool.getInfo` 返回 `{ version }`，
+当初是 IDE 2.01.2510290，它的 `Tool.getInfo` 只返回 `{ version }`，
 而 miniprogram-automator 0.13 读的是 `SDKVersion`，握手阶段直接抛
 「Cannot read properties of undefined (reading 'split')」。
 
-协议本身很简单（`{id, method, params}` → `{id, result}`），
-`scripts/verify-in-devtools.js` 里几十行就实现了，比等 automator 适配快。
+现在 IDE 升到 2.02.2609250，`Tool.getInfo` 已经同时返回
+`{ version: '2.02.2609250', SDKVersion: '3.8.10' }`，automator 当年的握手障碍不存在了。
+但脚本仍然保留自己的协议实现 —— 几十行就够，且不受 automator 版本变动影响；
+实际依赖只有 `ws` 一个包，`miniprogram-automator` 并不需要安装。
 
 ## 截图里的 Canvas 内容（2026-11-11 更新）
 
@@ -51,7 +53,8 @@ node scripts/verify-in-devtools.js
 `ctx.getImageData()` 统计非透明像素交叉验证。
 
 跑验证脚本之前先把 IDE 自动化服务起起来：
-`cli.bat auto --project <path> --auto-port <port>`（端口用 `AUTO_WS` 环境变量覆盖）。
+`cli.bat auto --project <path> --auto-port <port>`（端口用 `AUTO_WS` 环境变量覆盖，
+脚本默认连 `ws://127.0.0.1:9421`）。
 
 两个坑：
 

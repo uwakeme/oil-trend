@@ -16,7 +16,8 @@
 云函数三个（`oilApi` / `oilCollector` / `oilAlert`）也写完了，但还没部署过，
 云开发环境要在开发者工具里开通，并把 `docs/deploy.md` 里的集合建好。
 
-订阅消息这条路暂时走不通到底。模板 ID 要正式 AppID 才能申请，测试号拿不到。
+订阅消息这条路还没走通到底。模板 ID 要在公众平台申请（`subscribeTemplateIds` 与云函数
+环境变量 `OIL_SUBSCRIBE_TEMPLATE_ID` 填同一个值）。
 所以「提醒」页在没配模板时会明说「订阅消息未配置」，不会假装授权成功。
 
 ## 快速开始
@@ -107,9 +108,10 @@ oil_trend/
 node scripts/verify-data.js       # 打印数据层算出的价格、走势、通知、行情
 node scripts/lint-wxml.js         # 检查 WXML 绑定、事件、样式类、标签闭合
 node scripts/check-modules.js     # 运行时模块逐个 require 一遍，挡加载期 ReferenceError
-node scripts/build-icons.js       # 由 design/ 里的 SVG 精灵重新生成 PNG 图标
-node scripts/sync-cloud-shared.js # 把共享规则同步到三个云函数
+node scripts/build-icons.js       # 重生成 PNG 图标（SVG 精灵内联在脚本里）
+node scripts/sync-cloud-shared.js # 由 data/ 生成云函数共享代码并做一致性断言
 node scripts/preview-qr.js         # 上传预览包并生成扫码图
+node scripts/verify-in-devtools.js # 逐页截图 + 运行时异常捕获（需 IDE 自动化服务）
 ```
 
 `lint-wxml.js` 那个检查器抓出过两个真 bug：tabBar 在 `wx:for` 里写了 `{{path}}`
@@ -119,7 +121,7 @@ node scripts/preview-qr.js         # 上传预览包并生成扫码图
 `scripts/verify-in-devtools.js` 是连开发者工具模拟器逐页截图用的，需要先装依赖：
 
 ```bash
-npm i --prefix .tooling miniprogram-automator ws
+npm i --prefix .tooling ws
 node scripts/verify-in-devtools.js
 ```
 
@@ -127,3 +129,7 @@ node scripts/verify-in-devtools.js
 
 真实数据源接入，订阅消息的真机联调。
 云开发环境还要先建好集合才能跑通，步骤在 [docs/deploy.md](docs/deploy.md)。
+
+另外两处已登记待处理：三个云函数的 `wx-server-sdk` 仍是 `~2.6.3`（npm 上已是 4.x，
+升级要连 `cloud.init` / `openapi` / 数据库 API 一起回归，**接真实数据源之前必须处理**）；
+页面 WXSS 里还有 42 处硬编码色值没走 `styles/tokens.wxss` 的设计令牌（纯样式一致性，不影响功能）。

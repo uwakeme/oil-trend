@@ -5,8 +5,8 @@
 
 ## 工具链
 
-- 微信开发者工具（IDE 2.01.2510290），直接打开仓库根目录编译；基础库 3.8.10
-- Node.js ≥ 18（脚本用），Python 3（截图合成用）
+- 微信开发者工具（IDE 2.02.2609250），直接打开仓库根目录编译；基础库 3.8.10
+- Node.js ≥ 18（脚本用），Python 3（只用于把终端字符二维码转成 PNG）
 - 根目录**没有** package.json。云函数各自带 `package.json`，依赖在开发者工具里「云端安装依赖」
 
 ## 常用命令
@@ -16,14 +16,14 @@ node scripts/lint-wxml.js          # 静态检查（有错误时 exit 1），改
 node scripts/check-modules.js      # 运行时模块 + 云函数入口加载冒烟测试，挡住「删了函数体留着引用」这类 ReferenceError
 node scripts/verify-data.js        # 数据层自检，打印算出的价格/走势/通知/行情
 node scripts/sync-cloud-shared.js  # 把 _shared/shared.js 同步到三个云函数，部署前必跑
-node scripts/build-icons.js        # 由 design/ 的 SVG 精灵重生成 assets/icons/*.png（需本机 Chrome）
+node scripts/build-icons.js        # 重生成 assets/icons/*.png（SVG 精灵内联在脚本里，需本机 Chrome）
 node scripts/preview-qr.js <appid> # 上传预览包并出扫码图（必须正式 AppID）
 ```
 
-端到端验证（需先起 IDE 自动化服务，端口 9425）：
+端到端验证（需先起 IDE 自动化服务，默认端口 9421，用 `AUTO_WS` 覆盖）：
 
 ```bash
-npm i --prefix .tooling miniprogram-automator ws
+npm i --prefix .tooling ws
 node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.02 的截图已含 canvas 图层）
 ```
 
@@ -59,7 +59,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - **调价预测与正式结果分开呈现**，预测必须标注「非官方」
 - **采集侧解析不出结构化字段时进人工核对队列**，绝不把猜测值发布成正式结果
 - **演示数据日期整体平移**（`utils/demo-clock.js`，锚点 `config.demoAnchorDate`），保证长期打开数据仍然新鲜
-- 云函数之间不能跨目录 `require`，共享代码靠 `scripts/sync-cloud-shared.js` 复制 —— **改 `_shared/` 后必须同步**
+- 云函数之间不能跨目录 `require`，共享代码靠 `scripts/sync-cloud-shared.js` 复制 —— **真源在 `data/`，`_shared/shared.js` 是生成产物**。改完 `data/` 必须重跑同步脚本；**手改 `_shared/shared.js` 会被下次生成覆盖**
 
 ## 微信小程序特有坑（都踩过，改代码前先看）
 
@@ -71,8 +71,8 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | `wx:for` 里写 `{{path}}` | 应为 `{{item.path}}`，否则 `switchTab` 拿到 undefined |
 | 动态 `src` 漏 `.png` 后缀 | 图标显示成白方块 |
 | 国际行情日期是 `MM-DD HH:mm:ss` | 时间轴正则要的是 `YYYY-MM-DD`，解析全返回 0 会把曲线叠成一根竖线 |
-| `App.captureScreenshot` 只截 DOM 层 | 不合成 canvas 图层，图表区空白是接口限制不是没画；判定见 `docs/verification.md` |
-| `miniprogram-automator` 0.13 与本机 IDE 不兼容 | IDE `Tool.getInfo` 返回 `{ version }`，automator 读 `SDKVersion` 直接崩；`scripts/verify-in-devtools.js` 自己实现了协议 |
+| `App.captureScreenshot` 只截 DOM 层 | **仅 2.01.x 如此**；2.02 已会合成 canvas 图层，截图里没曲线才是真没画出来。判定见 `docs/verification.md` |
+| `miniprogram-automator` 0.13 与本机 IDE 不兼容 | 2.01.x 的 `Tool.getInfo` 只返回 `{ version }`，automator 读 `SDKVersion` 直接崩；`scripts/verify-in-devtools.js` 自己实现了协议，只依赖 `ws` |
 | 自定义 tabBar 的 `position: fixed` 真机不生效 | 组件被排进文档流末尾，要滚到底才看得到；改用**原生 tabBar**：`app.json` 去掉 `"custom": true`，`list` 里配 `iconPath` / `selectedIconPath` |
 | 主包超 2MB，上传预览包被拒 | `.gitignore` 管不了上传包，要在 `project.config.json` 的 `packOptions.ignore` 里排除 `.tooling` / `docs` / `design` / `scripts` / `cloudfunctions` |
 | GitHub 密钥扫描误报小程序 AppID | AppID 是标识符不是凭据，扫的是 `wx` + 16 位十六进制；真实 AppID 放本地 `project.private.config.json`（不入库），AppSecret 永远不进代码 |
@@ -92,7 +92,8 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - 个人单维护项目，**直接在 `main` 上提交**，不开特性分支再合并；确需分支先问
 - 提交信息用中文，描述改了什么（`fix: 修复 X` / `feat: 新增 X` / `docs: 补充 X`）
 - 远端 `origin` = `https://github.com/uwakeme/oil-trend.git`；若 443 不通可临时改用 SSH：`git@github.com:uwakeme/oil-trend.git`
-- 远端仓库目前是空的，首次提交还没推上去
+- 远端 `origin` 已有提交，用 `git push git@github.com:uwakeme/oil-trend.git main:main` 推送（443 不通时走 SSH）
+- 用 `git push <url>` 形式推送**不会更新** `origin/main` 远程跟踪引用，`git log origin/main..main` 会误报「没推上去」，以 `git ls-remote` 的实际结果为准
 - 改动前先看 `git status`，工作区经常有未提交的 WIP，**不要替用户丢弃或覆盖**
 
 ## 安全
@@ -106,6 +107,6 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 
 五个页面与三个云函数已写完并逐页验证过，当前跑的是**内置演示数据集**，真实数据源尚未接入。
 订阅消息链路还没走通到底（需正式 AppID + 模板 ID），未配置时「提醒」页要明说未配置，不假装授权成功。
-小程序图标已定为 **8-bit 像素风**：`assets/app-icon/app-icon.png`（512×512，公众平台后台上传用），5 套备选方案与提示词留在 `design/app-icon-candidates/`。tabBar 导航图标仍是细描边 SVG 风格，与像素风**尚未统一**。
+小程序图标已定为 **8-bit 像素风**：`assets/app-icon/app-icon.png`（512×512，公众平台后台上传用）。tabBar 导航图标仍是细描边 SVG 风格，与像素风**尚未统一**。
 
 项目仍在开发阶段：**历史/存量数据引发的问题不修**，只登记一行；影响当前行为的代码缺陷照修。

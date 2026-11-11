@@ -2,13 +2,13 @@
  * 小程序验证脚本（自实现 IDE 自动化协议客户端）
  *
  * 为什么不用 miniprogram-automator：
- *   本机 IDE 版本 2.01.2510290 的 Tool.getInfo 返回 { version }，
+ *   早先 IDE 2.01.x 的 Tool.getInfo 只返回 { version }，
  *   而 automator 0.13 读的是 SDKVersion，握手阶段直接崩。
- *   协议本身很简单（{id, method, params} → {id, result}），
- *   这里直接按协议实现，稳定且不依赖版本。
+ *   现在 IDE 2.02 已同时返回 version 与 SDKVersion，但协议本身很简单
+ *   （{id, method, params} → {id, result}），自己实现更省事，也少一个依赖。
  *
  * 用法：
- *   npm i --prefix .tooling miniprogram-automator ws
+ *   npm i --prefix .tooling ws
  *   node scripts/verify-in-devtools.js
  *
  * 前置：开发者工具已登录，服务端口开启，且已用
