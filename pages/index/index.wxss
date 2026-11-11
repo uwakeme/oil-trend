@@ -187,16 +187,6 @@
   flex: 0 0 22rpx;
 }
 
-.primary-button .icon-inline {
-  width: 34rpx;
-  height: 34rpx;
-  flex: 0 0 34rpx;
-}
-
-.home-alert-button {
-  margin: 0 0 24rpx;
-}
-
 .retry-btn {
   margin-top: 28rpx;
   display: inline-block;

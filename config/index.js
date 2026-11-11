@@ -14,7 +14,7 @@
  *   只写 '../config' 会报 "module 'config.js' is not defined"。
  */
 module.exports = {
-  cloudEnvId: '',
+  cloudEnvId: 'cloud1-d8ghtbekgdfa26c8f',
   subscribeTemplateIds: [],
 
   // 'auto' 会在云端可用时自动优先云端；'demo' 强制只用本地演示源

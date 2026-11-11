@@ -81,11 +81,6 @@
       </view>
     </view>
 
-    <button class="primary-button home-alert-button" bindtap="goAlert">
-      <image class="icon-inline" src="/assets/icons/bell-dark.png" mode="aspectFit" />
-      <text>降价时提醒我</text>
-    </button>
-
     <!-- 近 30 天走势 -->
     <view class="card">
       <view class="card-title-row">

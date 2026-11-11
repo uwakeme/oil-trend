@@ -45,7 +45,6 @@ const VARIANTS = [
   { file: 'bell-active', icon: 'bell', color: '#142c23' },
   { file: 'bell-amber', icon: 'bell', color: '#e9a928' },
   { file: 'bell-white', icon: 'bell', color: '#fffdf6' },
-  { file: 'bell-dark', icon: 'bell', color: '#272315' },
   { file: 'bell-green', icon: 'bell', color: '#137a52' },
   { file: 'fuel-amber', icon: 'fuel', color: '#e9a928' },
   { file: 'pin-ink', icon: 'pin', color: '#17231e' },

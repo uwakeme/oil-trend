@@ -231,9 +231,5 @@ Page({
 
   goNotice() {
     wx.switchTab({ url: '/pages/notice/notice' });
-  },
-
-  goAlert() {
-    wx.switchTab({ url: '/pages/alert/alert' });
   }
 });
