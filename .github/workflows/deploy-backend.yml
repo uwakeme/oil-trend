@@ -1,0 +1,114 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ===== 后端 =====
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: server/package-lock.json
+
+      # 装全量依赖：自检需要 pg-mem（devDependencies）
+      - name: Install dependencies
+        working-directory: ./server
+        run: npm ci
+
+      # 部署前先跑自检：结构与 HTTP 契约不对就别部署了
+      - name: Run backend self-test
+        working-directory: ./server
+        run: npm test
+
+      - name: Write SSH key to file
+        run: |
+          echo "${{ secrets.SERVER_SSH_KEY }}" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+      - name: Copy backend to server
+        run: |
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key -p ${{ secrets.SERVER_PORT || 22 }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "mkdir -p ${{ secrets.DEPLOY_DIR || '/var/www/oil-trend' }}/server ${{ secrets.DEPLOY_DIR || '/var/www/oil-trend' }}/logs"
+          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key -P ${{ secrets.SERVER_PORT || 22 }} -r ./server/src ./server/scripts ./server/package.json ./server/package-lock.json ./server/schema.sql ./server/oil-trend-pm2.json ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.DEPLOY_DIR || '/var/www/oil-trend' }}/server/
+
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          envs: PATH,DATABASE_URL
+          script: |
+            set -e
+            DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/var/www/oil-trend' }}"
+
+            echo "确保日志目录存在..."
+            mkdir -p ${DEPLOY_DIR}/logs
+
+            echo "确保 .env 存在..."
+            # 只在缺失时创建，绝不覆盖服务器上手动维护的 .env
+            # 里面有 WX_APP_SECRET / OIL_TOKEN_SECRET / 模板 ID 等，绝不能被 CI 覆盖
+            if [ ! -f "${DEPLOY_DIR}/server/.env" ]; then
+              echo "DATABASE_URL=${DATABASE_URL}" > ${DEPLOY_DIR}/server/.env
+              echo ">> 已创建初始 .env（仅含 DATABASE_URL）"
+              echo ">> 请手动补充 WX_APP_ID / WX_APP_SECRET / OIL_SUBSCRIBE_TEMPLATE_ID / OIL_TOKEN_SECRET，否则登录与订阅消息不可用"
+            fi
+
+            echo "停止旧服务..."
+            pm2 delete oil-trend-server 2>/dev/null || true
+
+            echo "安装生产依赖..."
+            cd ${DEPLOY_DIR}/server
+            npm install --omit=dev
+
+            echo "应用数据库结构..."
+            # 用项目自带的 pg 跑，不依赖服务器装 psql。
+            # schema.sql 全是 CREATE TABLE IF NOT EXISTS，重复执行安全。
+            node scripts/apply-schema.js
+
+            echo "用 PM2 启动..."
+            if [ ! -f "${DEPLOY_DIR}/server/oil-trend-pm2.json" ]; then
+              echo "错误: 未找到 oil-trend-pm2.json"
+              exit 1
+            fi
+            pm2 start ${DEPLOY_DIR}/server/oil-trend-pm2.json
+            pm2 save
+
+            echo "部署完成"
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Health check
+        run: |
+          echo "等待服务启动..."
+          sleep 8
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            --connect-timeout 5 --max-time 15 \
+            "${{ secrets.OIL_API_BASE_URL }}/health" || echo "000")
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "✓ 健康检查通过"
+          else
+            echo "✗ 健康检查失败 (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## 部署结果"
+          echo "- 后端自检: ${{ job.status }}"
+          echo "- 服务器部署: ${{ job.status }}"
