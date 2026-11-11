@@ -109,7 +109,6 @@ node scripts/lint-wxml.js         # 检查 WXML 绑定、事件、样式类、�
 node scripts/check-modules.js     # 运行时模块逐个 require 一遍，挡加载期 ReferenceError
 node scripts/build-icons.js       # 由 design/ 里的 SVG 精灵重新生成 PNG 图标
 node scripts/sync-cloud-shared.js # 把共享规则同步到三个云函数
-node scripts/compose-screenshots.py # 把导出的画布贴回页面截图
 node scripts/preview-qr.js         # 上传预览包并生成扫码图
 ```
 
@@ -122,7 +121,6 @@ node scripts/preview-qr.js         # 上传预览包并生成扫码图
 ```bash
 npm i --prefix .tooling miniprogram-automator ws
 node scripts/verify-in-devtools.js
-node scripts/export-canvas.js     # 导出画布 PNG（截图流程的一环，会临时注入钩子并在结束时还原）
 ```
 
 ## 还没做的

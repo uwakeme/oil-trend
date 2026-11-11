@@ -24,8 +24,7 @@ node scripts/preview-qr.js <appid> # 上传预览包并出扫码图（必须正�
 
 ```bash
 npm i --prefix .tooling miniprogram-automator ws
-node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获
-node scripts/export-canvas.js       # 导出画布 PNG（截图流程用，脚本结束自动还原组件源码）
+node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.02 的截图已含 canvas 图层）
 ```
 
 ## 目录结构

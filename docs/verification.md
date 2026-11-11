@@ -35,24 +35,22 @@ node scripts/verify-in-devtools.js
 协议本身很简单（`{id, method, params}` → `{id, result}`），
 `scripts/verify-in-devtools.js` 里几十行就实现了，比等 automator 适配快。
 
-## 截图看不到 Canvas 内容
+## 截图里的 Canvas 内容（2026-11-11 更新）
 
-`App.captureScreenshot` 只截 DOM 层，**不合成 canvas 图层**。
-所以自动截图里图表区域是空白的 —— 这是截图接口的限制，不是图表没画。
+**旧版 IDE（2.01.x）**：`App.captureScreenshot` 只截 DOM 层，不合成 canvas 图层，
+自动截图里图表区域是空白的。那时的做法是临时给 `components/trend-chart/index.js`
+注入导出钩子（`wx.canvasToTempFilePath({ canvas })` → base64 → 写进 storage），
+再把画布 PNG 贴回页面截图。
 
-判断依据：把 canvas 元素的 CSS 背景染红，截图里能看到红色块（说明元素在、也在被截），
-但 `ctx.fillRect` 画的内容拍不到。再从小程序内部读
-`ctx.getImageData()` 统计非透明像素，能确认画布里确实有内容。
+**当前 IDE（2.02.2609250）已经会合成 canvas 图层**，直接跑
+`node scripts/verify-in-devtools.js` 拿到的就是带图表的成品图。
+旧的导出 + 合成两步因此被删除（`scripts/export-canvas.js`、`scripts/compose-screenshots.py`）——
+留着反而会出错：截图里已经有画布了，再贴一次会出现两张错位的曲线。
 
-要拿到带图表的成品图，做法是：
+判断有没有画出来，看截图里曲线在不在就行；也可以从小程序内部读
+`ctx.getImageData()` 统计非透明像素交叉验证。
 
-1. `node scripts/export-canvas.js` —— 它会临时给 `components/trend-chart/index.js`
-   注入一段导出（`wx.canvasToTempFilePath({ canvas })` → base64 → 写进 storage），
-   再从外部用 `App.callWxMethod` 调 `getStorageSync` 把 base64 取回来存成 PNG。
-   **脚本结束时会把组件源码还原**，临时代码不会留在仓库里。
-2. `python scripts/compose-screenshots.py` —— 把画布 PNG 贴回页面截图的对应位置
-
-跑 export-canvas.js 之前先把 IDE 自动化服务起起来：
+跑验证脚本之前先把 IDE 自动化服务起起来：
 `cli.bat auto --project <path> --auto-port <port>`（端口用 `AUTO_WS` 环境变量覆盖）。
 
 两个坑：
