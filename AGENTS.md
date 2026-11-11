@@ -77,6 +77,8 @@ node scripts/export-canvas.js       # 导出画布 PNG（截图流程用，脚�
 | 自定义 tabBar 的 `position: fixed` 真机不生效 | 组件被排进文档流末尾，要滚到底才看得到；改用**原生 tabBar**：`app.json` 去掉 `"custom": true`，`list` 里配 `iconPath` / `selectedIconPath` |
 | 主包超 2MB，上传预览包被拒 | `.gitignore` 管不了上传包，要在 `project.config.json` 的 `packOptions.ignore` 里排除 `.tooling` / `docs` / `design` / `scripts` / `cloudfunctions` |
 | GitHub 密钥扫描误报小程序 AppID | AppID 是标识符不是凭据，扫的是 `wx` + 16 位十六进制；真实 AppID 放本地 `project.private.config.json`（不入库），AppSecret 永远不进代码 |
+| 开发者工具 CLI 上传失败时**退出码仍是 0** | `preview-qr.js` 报「成功」但二维码是旧 AppID 的 | 上传前先删掉旧的二维码文本，跑完没有新文件就当失败；端口不对时 CLI 会回「IDE 已启动并在监听 http://127.0.0.1:XXXXX」，按它说的端口重试 |
+| 换 AppID 后预览二维码要重新出 | 预览包按 AppID 上传，旧码指向已注销的账号 | 换完 AppID 跑 `node scripts/preview-qr.js`；AppID 只写 `project.private.config.json` |
 
 ## 验证要求
 
