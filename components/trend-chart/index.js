@@ -25,7 +25,9 @@ Component({
     areaTo: { type: String, value: '' },
     dotColor: { type: String, value: '' },
     gridLines: { type: Number, value: 4 },
-    endDot: { type: Boolean, value: true }
+    endDot: { type: Boolean, value: true },
+    // 弹层打开时置 false：画布是原生层，必须从 DOM 里摘掉才盖不住弹层
+    visible: { type: Boolean, value: true }
   },
 
   lifetimes: {
@@ -45,7 +47,7 @@ Component({
   },
 
   observers: {
-    'points, mode, height, showYAxis, direction, lineColor, areaFrom, areaTo, dotColor, gridLines, endDot': function () {
+    'points, mode, height, showYAxis, direction, lineColor, areaFrom, areaTo, dotColor, gridLines, endDot, visible': function () {
       this.render();
     }
   },

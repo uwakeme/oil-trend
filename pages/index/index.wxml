@@ -87,7 +87,7 @@
         <text class="card-title">近 30 天走势</text>
         <view class="card-link" bindtap="goTrend">{{hero.name}}　›</view>
       </view>
-      <trend-chart points="{{trend.points}}" mode="step" height="{{70}}" direction="{{trend.direction}}" />
+      <trend-chart points="{{trend.points}}" mode="step" height="{{70}}" direction="{{trend.direction}}" visible="{{!sheetType}}" />
       <view class="chart-labels">
         <text wx:for="{{trend.labels}}" wx:key="*this">{{item}}</text>
       </view>
