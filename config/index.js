@@ -17,6 +17,10 @@ module.exports = {
   cloudEnvId: 'cloud1-d8ghtbekgdfa26c8f',
   subscribeTemplateIds: [],
 
+  // 后端地址：自建服务器。留空则回落到微信云开发。
+  // ⚠️ 必须是已在公众平台配置的 request 合法域名（HTTPS + 已备案）。
+  apiBaseUrl: '',
+
   // 'auto' 会在云端可用时自动优先云端；'demo' 强制只用本地演示源
   dataSource: 'auto',
 

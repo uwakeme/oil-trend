@@ -24,6 +24,19 @@ function preferCloud() {
  * 「wx.cloud.init 成功」不等于「这次数据来自云端」——
  * 云函数失败回落到演示数据时，必须如实标成演示源。
  */
+/**
+ * 给返回值打上来源标记。
+ *
+ * 「wx.cloud.init 成功」不等于「这次数据来自云端」——
+ * 云端失败回落到演示数据时，必须如实标成演示源。
+ *
+ * mode 说明：
+ *   'demo'  本地演示数据
+ *   'live'  真实后端返回（自建服务器或云开发，transport 里区分）
+ *
+ * 页面只判断 mode === 'demo' 来决定要不要标「（演示数据）」，
+ * 所以从 'cloud' 改成 'live' 不影响任何页面逻辑。
+ */
 function stampSource(data, mode, transport) {
   if (data && typeof data === 'object') {
     data.source = Object.assign({}, data.source || {}, { mode: mode, transport: transport });
@@ -54,15 +67,15 @@ function fetchWithFallback(name, payload, localFn, expectKeys) {
   if (preferCloud()) {
     return cloud.callFunction(name, payload).then(function (data) {
       if (data && typeof data === 'object' && hasExpected(data, expectKeys)) {
-        return stampSource(data, 'cloud', '云端服务');
+        return stampSource(data, 'live', cloud.backendName());
       }
-      return stampSource(localFn(), 'demo', '本地演示源（云端返回数据不完整）');
+      return stampSource(localFn(), 'demo', '本地演示源（后端返回数据不完整）');
     }).catch(function (err) {
       return stampSource(localFn(), 'demo',
-        '本地演示源（云端调用失败：' + (err && err.message ? err.message : '未知原因') + '）');
+        '本地演示源（后端调用失败：' + (err && err.message ? err.message : '未知原因') + '）');
     });
   }
-  return Promise.resolve(stampSource(localFn(), 'demo', '本地演示源（未配置云环境）'));
+  return Promise.resolve(stampSource(localFn(), 'demo', '本地演示源（未配置后端）'));
 }
 
 /** 地区列表 */

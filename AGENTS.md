@@ -36,6 +36,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - `data/` — 演示数据集、调价时间线、地区价差
 - `styles/` — `tokens.wxss`（设计令牌）+ `components.wxss`（通用类）
 - `cloudfunctions/` — `oilApi` / `oilCollector` / `oilAlert`，共享规则在 `_shared/`
+- `server/` — **自建后端**（Node + Express + PostgreSQL），与云函数并存，填 `config.apiBaseUrl` 才启用
 - `scripts/` — 检查与构建脚本
 - `design/` — 产品设计稿与高保真原型
 - `docs/` — 部署指南、数据源说明、验证记录、截图
@@ -49,6 +50,8 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - **脚本代码**（`scripts/`）可用现代语法（`const/let`、箭头函数）
 - 注释用中文，文件头用 `/** */` 说明该文件的职责与关键约定
 - 视觉一律走 `styles/tokens.wxss` 的 CSS 变量，页面根节点加 `class="tk"` 继承
+- **后端只有 `utils/cloud.js` 一个出口**：小程序只认 `utils/api.js` → `utils/cloud.js` → 后端。
+  换后端（云开发 / 自建服务器）只改 `utils/cloud.js`，页面与 `utils/api.js` 不动。
 
 ## 架构约定
 
@@ -80,6 +83,9 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | canvas 是**独立原生渲染层**，z-index 压不住 | 走势图浮在底部弹层上面，把弹层内容盖住 | 把弹层 z-index 提到 99999 也没用。唯一可靠的办法是弹层打开时把画布从 DOM 里摘掉（`trend-chart` 的 `visible` 属性用 `wx:if` 控制） |
 | 换 AppID 后预览二维码要重新出 | 预览包按 AppID 上传，旧码指向已注销的账号 | 换完 AppID 跑 `node scripts/preview-qr.js`；AppID 只写 `project.private.config.json` |
 | `wx-server-sdk` 4.x 没有 `cloud.httpclient` | 2.x 底层是 `tcb-admin-node`，4.x 换成 `@cloudbase/node-sdk`，这个内置 HTTP 客户端没了 | 采集器用 `cloudfunctions/oilCollector/http-client.js`；`scripts/check-modules.js` 会挡住这类已移除 API 的引用 |
+| pg 的参数会把数字序列化成文本 | `LIMIT $1` 传过来是 `'20'`，Postgres 直接报错 | LIMIT/OFFSET 内联整数（先 `Number()` 过一遍）；`server/src/dao/index.js` 里都有注释 |
+| JSONB / NUMERIC 读出来是字符串 | pg 不自动解析，`deltas` 是对象、`price` 是字符串 | `server/src/dao/index.js` 的 `toCamel` 里用列名白名单转数字 —— **不能见数字就转**，`fuelId` 是 `'92'`，转成数字前端判断全失效 |
+| 自建后端没有 `cloud.getWXContext()` | 拿不到 openid | 走 `wx.login()` → code → `code2session` 换 openid，服务端自签 token；`utils/cloud.js` 的 `loginReady()` 保证用户类接口等 token 到位 |
 
 ## 验证要求
 
@@ -108,6 +114,10 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 
 五个页面与三个云函数已写完并逐页验证过，当前跑的是**内置演示数据集**，真实数据源尚未接入。
 订阅消息链路还没走通到底（需正式 AppID + 模板 ID），未配置时「提醒」页要明说未配置，不假装授权成功。
+
+**后端有两套并存**：微信云开发（`cloudfunctions/`，未部署）与自建后端（`server/`，代码已完成、
+自检全过、尚未上真实服务器）。切换只改 `config/index.js` 的 `apiBaseUrl`：填了走自建，
+留空走云开发。云函数先别删，留着当回滚手段。
 小程序图标已定为 **8-bit 像素风**：`assets/app-icon/app-icon.png`（512×512，公众平台后台上传用）。tabBar 导航图标仍是细描边 SVG 风格，与像素风**尚未统一**。
 
 项目仍在开发阶段：**历史/存量数据引发的问题不修**，只登记一行；影响当前行为的代码缺陷照修。

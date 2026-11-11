@@ -133,10 +133,37 @@ function createCloudSdkStub() {
   };
 }
 
+/* ---------- 自建后端依赖桩 ---------- */
+
+// server/ 的第三方依赖（express / pg）本机不一定装了，
+// 门禁只要求「能加载」，不要求真连数据库。
+function createExpressStub() {
+  function app() { return app; }
+  app.use = function () { return app; };
+  app.get = function () { return app; };
+  app.post = function () { return app; };
+  app.listen = function () { return { close: function () {} }; };
+  app.disable = function () { return app; };
+  app.set = function () { return app; };
+  // Router 是个独立导出：express.Router()
+  app.Router = function () { return app; };
+  return app;
+}
+
+function createPgStub() {
+  function Pool() { this.connect = function () { return { query: function () { return Promise.resolve({ rows: [] }); }, release: function () {} }; }; }
+  Pool.prototype.on = function () {};
+  Pool.prototype.query = function () { return Promise.resolve({ rows: [] }); };
+  Pool.prototype.connect = function () { return Promise.resolve({ query: function () { return Promise.resolve({ rows: [] }); }, release: function () {} }); };
+  return { Pool: Pool };
+}
+
 // 拦截 require('wx-server-sdk')，返回桩
 const originalLoad = Module._load;
 Module._load = function (request) {
   if (request === 'wx-server-sdk') return createCloudSdkStub();
+  if (request === 'express') return createExpressStub();
+  if (request === 'pg') return createPgStub();
   return originalLoad.apply(this, arguments);
 };
 
@@ -178,6 +205,17 @@ ENTRY_FILES.forEach((f) => {
 RUNTIME_DIRS.forEach((dir) => walk(path.join(ROOT, dir), files));
 
 const cloudFiles = [];
+/* ---------- 自建后端（server/） ---------- */
+
+// server/src 下的模块也要过加载期门禁：
+// 「删了函数体、留着 require」这类错误在服务端同样致命，
+// 而且服务端没有模拟器兜底，部署后才发现就晚了。
+const serverFiles = [];
+const serverSrc = path.join(ROOT, 'server', 'src');
+if (fs.existsSync(serverSrc)) {
+  walk(serverSrc, serverFiles);
+}
+
 const cloudRoot = path.join(ROOT, CLOUD_DIR);
 if (fs.existsSync(cloudRoot)) {
   fs.readdirSync(cloudRoot, { withFileTypes: true }).forEach((entry) => {
@@ -216,6 +254,7 @@ function loadAll(list) {
 
 const failures = loadAll(files);
 const cloudFailures = loadAll(cloudFiles);
+const serverFailures = loadAll(serverFiles);
 
 /* ---------- 云函数不得引用已从 SDK 移除的 API ---------- */
 
@@ -245,6 +284,9 @@ console.log('已加载 ' + (files.length - failures.length) + '/' + files.length
 if (cloudFiles.length) {
   console.log('已加载 ' + (cloudFiles.length - cloudFailures.length) + '/' + cloudFiles.length + ' 个云函数模块');
 }
+if (serverFiles.length) {
+  console.log('已加载 ' + (serverFiles.length - serverFailures.length) + '/' + serverFiles.length + ' 个服务端模块');
+}
 
 if (apiProblems.length) {
   console.log('\n--- 云函数引用了已移除的 SDK API ---');
@@ -254,7 +296,7 @@ if (apiProblems.length) {
   });
 }
 
-if (failures.length || cloudFailures.length || apiProblems.length) {
+if (failures.length || cloudFailures.length || serverFailures.length || apiProblems.length) {
   if (failures.length) {
     console.log('\n--- 运行时模块加载失败 ---');
     failures.forEach((f) => {
@@ -269,9 +311,16 @@ if (failures.length || cloudFailures.length || apiProblems.length) {
       console.log('    ' + f.message);
     });
   }
+  if (serverFailures.length) {
+    console.log('\n--- 服务端模块加载失败 ---');
+    serverFailures.forEach((f) => {
+      console.log('  ' + f.rel);
+      console.log('    ' + f.message);
+    });
+  }
   console.log('\n模块加载失败：通常是「函数体已删但引用还在」这类运行期错误，静态语法检查查不出来。');
   process.exit(1);
 }
 
-console.log('全部运行时模块与云函数入口加载通过。');
+console.log('全部运行时模块、云函数模块与服务端模块加载通过。');
 process.exit(0);

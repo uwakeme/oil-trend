@@ -1,0 +1,21 @@
+{
+  "name": "oil-trend-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "油势 · 自建后端服务（替代微信云开发）",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node scripts/selftest.js && node scripts/http-test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "pg-mem": "^3.0.14"
+  }
+}

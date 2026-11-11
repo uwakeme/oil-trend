@@ -16,6 +16,11 @@
 云函数三个（`oilApi` / `oilCollector` / `oilAlert`）也写完了，但还没部署过，
 云开发环境要在开发者工具里开通，并把 `docs/deploy.md` 里的集合建好。
 
+另外写了一套**自建后端**（`server/`，Node + Express + PostgreSQL），
+接口契约与云函数一致。填上 `config/index.js` 的 `apiBaseUrl` 就切过去，
+清空就切回云开发 —— 两套并存，云函数留着当回滚手段。
+部署步骤见 [docs/server-deploy.md](docs/server-deploy.md)。
+
 订阅消息这条路还没走通到底。模板 ID 要在公众平台申请（`subscribeTemplateIds` 与云函数
 环境变量 `OIL_SUBSCRIBE_TEMPLATE_ID` 填同一个值）。
 所以「提醒」页在没配模板时会明说「订阅消息未配置」，不会假装授权成功。
@@ -112,6 +117,7 @@ node scripts/build-icons.js       # 重生成 PNG 图标（SVG 精灵内联在�
 node scripts/sync-cloud-shared.js # 由 data/ 生成云函数共享代码并做一致性断言
 node scripts/preview-qr.js         # 上传预览包并生成扫码图
 node scripts/verify-in-devtools.js # 逐页截图 + 运行时异常捕获（需 IDE 自动化服务）
+cd server && npm test              # 自建后端自检（40 项结构 + 26 项 HTTP）
 ```
 
 `lint-wxml.js` 那个检查器抓出过两个真 bug：tabBar 在 `wx:for` 里写了 `{{path}}`
@@ -129,6 +135,8 @@ node scripts/verify-in-devtools.js
 
 真实数据源接入，订阅消息的真机联调。
 云开发环境还要先建好集合才能跑通，步骤在 [docs/deploy.md](docs/deploy.md)。
+自建后端已经写完并通过自检，但还没在真实服务器上跑过 ——
+需要一台装了 PostgreSQL 的机器、一个已备案域名和 HTTPS 证书。
 
 页面 WXSS 里还有 42 处硬编码色值没走 `styles/tokens.wxss` 的设计令牌（纯样式一致性，不影响功能）。
 

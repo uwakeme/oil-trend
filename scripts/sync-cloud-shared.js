@@ -1,12 +1,17 @@
 /**
- * 从小程序端的数据源生成云函数共享模块，并做一致性断言。
+ * 从小程序端的数据源生成共享模块，并做一致性断言。
  *
  * 背景：之前 cloudfunctions/_shared/shared.js 是手写的另一份调价时间线
  * （4 条、倒序），和小程序端 data/adjustments.js（24 条、正序）对不上。
  * 部署 seed 之后从演示源切到云端，价格会从 7.36 变成 7.47，涨跌方向也反了。
  *
- * 现在改成单一真源：云函数侧的调价时间线、地区价差、油品定义
+ * 现在改成单一真源：云端侧的调价时间线、地区价差、油品定义
  * 全部由 data/ 下的文件生成，禁止再手工维护第二份。
+ *
+ * 生成两份副本：
+ *   cloudfunctions/_shared/shared.js  微信云开发用
+ *   server/src/shared/shared.js        自建后端用
+ * 两份内容完全一致，所以三端（小程序端 / 云函数 / 自建后端）数值必然相同。
  *
  * 用法：node scripts/sync-cloud-shared.js
  * 不一致时直接 exit 1。
@@ -28,6 +33,9 @@ const marketsSource = fs.readFileSync(path.join(ROOT, 'data', 'markets.js'), 'ut
   .replace(/\nmodule\.exports[\s\S]*$/, '\n');
 const SHARED_DIR = path.join(ROOT, 'cloudfunctions', '_shared');
 const TARGET = path.join(SHARED_DIR, 'shared.js');
+// 自建后端的副本目录（内容与云函数那份完全相同）
+const SERVER_SHARED_DIR = path.join(ROOT, 'server', 'src', 'shared');
+const SERVER_TARGET = path.join(SERVER_SHARED_DIR, 'shared.js');
 
 function j(value) {
   return JSON.stringify(value, null, 2);
@@ -35,7 +43,7 @@ function j(value) {
 
 const template = [
   '/**',
-  ' * 云函数共享模块 —— 由 scripts/sync-cloud-shared.js 自动生成，请勿手改。',
+  ' * 服务端共享模块 —— 由 scripts/sync-cloud-shared.js 自动生成，请勿手改。',
   ' *',
   ' * 数据真源在小程序端 data/ 下：',
   ' *   data/adjustments.js  调价时间线（全国统一幅度）',
@@ -43,6 +51,7 @@ const template = [
   ' *   data/fuels.js        油品定义',
   ' *',
   ' * 改了上面任意一个文件，都要重新跑 scripts/sync-cloud-shared.js。',
+  ' * 本文件同时供微信云函数与自建后端使用，两份内容完全一致。',
   ' */',
   '',
   '/* ---------- 行情（来自 data/markets.js，两端共用同一份实现） ---------- */',
@@ -301,4 +310,25 @@ targets.forEach(function (name) {
   console.log('已同步 → ' + path.relative(ROOT, dest));
 });
 
-console.log('\n一致性断言全部通过，共同步 ' + targets.length + ' 个云函数。');
+/* ---------- 同步到自建后端 ---------- */
+
+// 内容与云函数那份完全相同：同一份模板生成，不存在分叉的可能。
+fs.mkdirSync(SERVER_SHARED_DIR, { recursive: true });
+fs.writeFileSync(SERVER_TARGET, template, 'utf8');
+console.log('已生成 ' + path.relative(ROOT, SERVER_TARGET));
+
+// 断言：两份副本逐字节一致，且都能正常加载
+var serverBytes = fs.readFileSync(SERVER_TARGET);
+var cloudBytes = fs.readFileSync(TARGET);
+if (!serverBytes.equals(cloudBytes)) {
+  fail('自建后端与云函数的共享模块内容不一致');
+}
+delete require.cache[require.resolve(SERVER_TARGET)];
+var serverShared = require(SERVER_TARGET);
+['FUELS', 'REGIONS', 'ADJUSTMENTS', 'NATIONAL_BASE'].forEach(function (key) {
+  if (JSON.stringify(serverShared[key]) !== JSON.stringify(shared[key])) {
+    fail('自建后端共享模块的 ' + key + ' 与云函数不一致');
+  }
+});
+
+console.log('\n一致性断言全部通过，共同步 ' + targets.length + ' 个云函数 + 1 个自建后端。');

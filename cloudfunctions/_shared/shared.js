@@ -1,5 +1,5 @@
 /**
- * 云函数共享模块 —— 由 scripts/sync-cloud-shared.js 自动生成，请勿手改。
+ * 服务端共享模块 —— 由 scripts/sync-cloud-shared.js 自动生成，请勿手改。
  *
  * 数据真源在小程序端 data/ 下：
  *   data/adjustments.js  调价时间线（全国统一幅度）
@@ -7,6 +7,7 @@
  *   data/fuels.js        油品定义
  *
  * 改了上面任意一个文件，都要重新跑 scripts/sync-cloud-shared.js。
+ * 本文件同时供微信云函数与自建后端使用，两份内容完全一致。
  */
 
 /* ---------- 行情（来自 data/markets.js，两端共用同一份实现） ---------- */

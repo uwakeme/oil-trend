@@ -10,3 +10,7 @@ docs/preview-qr.txt
 
 # 本地个人配置：真实 AppID 放这里，不入库
 project.private.config.json
+
+# 自建后端：真实环境变量（含 AppSecret）绝不入库
+server/.env
+server/node_modules/

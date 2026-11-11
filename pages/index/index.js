@@ -168,8 +168,8 @@ Page({
       updatedLabel: fmt.dateTime(payload.updatedAt) + ' 更新',
       sourceName: source.name || '未知来源',
       sourceNote: source.note || '',
-      cloudStatus: source.mode === 'cloud'
-        ? ('本次数据来自' + (source.name || '云端服务'))
+      cloudStatus: source.mode === 'live'
+        ? ('本次数据来自' + (source.name || source.transport || '后端服务'))
         : ('本次数据来自' + (source.transport || '本地演示源')),
       aboutNote: '国内成品油价格按调价节点展示，不代表实时成交价。国际原油仅作市场参考，与国内零售价之间存在税费与定价周期差异。'
     });

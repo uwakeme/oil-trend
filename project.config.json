@@ -28,6 +28,10 @@
       },
       {
         "type": "folder",
+        "value": "server"
+      },
+      {
+        "type": "folder",
         "value": "assets/app-icon"
       }
     ],
