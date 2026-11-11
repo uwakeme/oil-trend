@@ -30,7 +30,17 @@ Component({
 
   lifetimes: {
     ready() {
+      this._frameId = null;
+      this._canvas = null;
       this.render();
+    },
+    detached() {
+      // 组件销毁时把没执行的帧取消掉，别再往已销毁的画布上画
+      if (this._frameId !== null && this._canvas && typeof this._canvas.cancelAnimationFrame === 'function') {
+        this._canvas.cancelAnimationFrame(this._frameId);
+      }
+      this._frameId = null;
+      this._canvas = null;
     }
   },
 
@@ -55,16 +65,6 @@ Component({
         const height = res[0].height;
         if (!width || !height) return;
 
-        // 每次重绘都要重设尺寸，否则画布不会清干净
-        canvas.width = width * dpr;
-        canvas.height = height * dpr;
-
-        // 用 setTransform 而不是 scale：
-        // setTransform 是绝对设置，scale 是累乘。
-        // 组件被重复渲染时（observers 多次触发），
-        // 累乘会让缩放变成 dpr 的 n 次方，图形直接画到画布外面去。
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
         const palette = chart.directionColors(this.data.direction);
         const options = {
           points: this.data.points || [],
@@ -79,11 +79,31 @@ Component({
           yAxisFormat: (v) => v.toFixed(2)
         };
 
+        // 同一时刻只保留一个待绘制帧：observers 连续触发会排好几帧，
+        // 多画几次既浪费也可能和 canvas 尺寸重设打架。
+        if (this._frameId !== null && this._canvas && typeof this._canvas.cancelAnimationFrame === 'function') {
+          this._canvas.cancelAnimationFrame(this._frameId);
+        }
+        this._canvas = canvas;
+
         const draw = function () {
+          // 每次重绘都要重设尺寸（否则画布不会清干净），
+          // 然后用 setTransform 设定缩放 —— 它是绝对设置，
+          // scale 是累乘，重复渲染会把缩放变成 dpr 的 n 次方。
+          canvas.width = width * dpr;
+          canvas.height = height * dpr;
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
           chart.drawSeries(ctx, { width: width, height: height }, options);
         };
-        if (typeof canvas.requestAnimationFrame === 'function') canvas.requestAnimationFrame(draw);
-        else draw();
+
+        if (typeof canvas.requestAnimationFrame === 'function') {
+          this._frameId = canvas.requestAnimationFrame(function () {
+            this._frameId = null;
+            draw();
+          }.bind(this));
+        } else {
+          draw();
+        }
       });
     }
   }

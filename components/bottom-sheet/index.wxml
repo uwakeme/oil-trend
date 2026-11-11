@@ -1,5 +1,5 @@
-<view wx:if="{{visible}}" class="sheet-mask" bindtap="onMaskTap"></view>
-<view wx:if="{{visible}}" class="sheet-panel">
+<view wx:if="{{visible}}" class="sheet-mask" catchtap="onMaskTap"></view>
+<view wx:if="{{visible}}" class="sheet-panel" catchtouchmove="noop">
   <view class="sheet-handle"></view>
   <view class="sheet-head">
     <text class="sheet-head-title">{{title}}</text>

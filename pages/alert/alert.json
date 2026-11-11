@@ -1,4 +1,5 @@
 {
+  "enablePullDownRefresh": true,
   "navigationBarTitleText": "降价提醒",
   "usingComponents": {
     "bottom-sheet": "/components/bottom-sheet/index"

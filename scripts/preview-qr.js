@@ -50,14 +50,17 @@ function effectiveAppid() {
 }
 
 function setAppid(appid) {
-  ['project.config.json', 'project.private.config.json'].forEach(function (name) {
-    const file = path.join(ROOT, name);
-    if (!fs.existsSync(file)) return;
-    const json = JSON.parse(fs.readFileSync(file, 'utf8'));
-    json.appid = appid;
-    fs.writeFileSync(file, JSON.stringify(json, null, 2) + '\n', 'utf8');
-    console.log('已写入 ' + name + ' → ' + appid);
-  });
+  // 只写本地私有配置：project.config.json 是入库文件，
+  // 真实 AppID 放进去会被 GitHub 密钥扫描误报成密钥。
+  const file = path.join(ROOT, 'project.private.config.json');
+  if (!fs.existsSync(file)) {
+    console.log('没有 project.private.config.json，无法写入 AppID');
+    return;
+  }
+  const json = JSON.parse(fs.readFileSync(file, 'utf8'));
+  json.appid = appid;
+  fs.writeFileSync(file, JSON.stringify(json, null, 2) + '\n', 'utf8');
+  console.log('已写入 project.private.config.json → ' + appid);
 }
 
 function main() {

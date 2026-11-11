@@ -38,15 +38,26 @@ Page({
   },
 
   onLoad() {
+    var prefs = store.getPrefs();
+    // 快照在 onLoad 记下：首屏 onShow 比对相同，不会重复发一轮请求
+    this._prefsKey = store.prefsKey(prefs);
     this.load();
   },
 
   onShow() {
-    var prefs = store.getPrefs();
     // 首页可能换了油品或地区，这里对齐一次
-    if (prefs.fuelId !== this.data.fuelId || prefs.regionCode !== this.data.region.code) {
+    var prefs = store.getPrefs();
+    var key = store.prefsKey(prefs);
+    if (this._prefsKey && key !== this._prefsKey) {
+      this._prefsKey = key;
       this.load();
     }
+  },
+
+  onPullDownRefresh() {
+    this.load().then(function () {
+      wx.stopPullDownRefresh();
+    });
   },
 
   load() {
@@ -54,7 +65,7 @@ Page({
     var prefs = store.getPrefs();
     this.setData({ loading: true, loadError: '' });
 
-    Promise.all([
+    return Promise.all([
       api.getHome(prefs.regionCode, prefs.fuelId),
       api.getAlertRules(),
       api.getAlertHistory()
@@ -124,9 +135,10 @@ Page({
     this.setData({
       targetText: target.toFixed(2),
       targetWarn: diff < 0,
+      // diff = 当前价 - 目标价：差多少就还要再降多少
       targetCaption: diff >= 0
-        ? '低于目标价 ' + diff.toFixed(2) + ' 元时提醒'
-        : '目标价高于当前价，将在达到时提醒',
+        ? '再降 ' + diff.toFixed(2) + ' 元时提醒'
+        : '已低于目标价 ' + Math.abs(diff).toFixed(2) + ' 元',
       subscription: this.subscriptionView(rule)
     });
   },
@@ -137,7 +149,7 @@ Page({
       return {
         active: false,
         enabled: false,
-        icon: 'bell-amber.png',
+        icon: 'bell-amber',
         title: '订阅消息未配置',
         text: '需先申请订阅消息模板并填入 config/index.js',
         buttonText: '查看说明'
@@ -147,7 +159,7 @@ Page({
       return {
         active: true,
         enabled: true,
-        icon: 'bell-green.png',
+        icon: 'bell-green',
         title: '微信提醒已开启',
         text: '正式降价、目标价到达时发送订阅消息',
         buttonText: '管理'
@@ -156,7 +168,7 @@ Page({
     return {
       active: false,
       enabled: true,
-      icon: 'bell-muted.png',
+      icon: 'bell-muted',
       title: '微信提醒未开启',
       text: '订阅消息后，规则才能在后台触发',
       buttonText: '去开启'

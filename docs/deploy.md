@@ -7,13 +7,14 @@
 | --- | --- | --- |
 | `oilApi` | 给小程序提供油价 / 走势 / 通知 / 行情，以及保存提醒规则与记录 | 小程序端主动调用 |
 | `oilCollector` | 定时抓取官方公告与国际行情，解析后去重入库 | 定时触发器（默认每 30 分钟） |
-| `oilAlert` | 匹配提醒规则并下发微信订阅消息 | 定时触发器（默认每 10 分钟） |
+| `oilAlert` | 匹配提醒规则并下发微信订阅消息 | 定时触发器（默认每 30 分钟） |
 
 ## 一、准备
 
 1. 换成正式小程序 AppID（`project.config.json` 的 `appid`），测试号不能开云开发，也不能发订阅消息。
 2. 在开发者工具里开通云开发，拿到环境 ID。
-3. 把环境 ID 填进 `config/index.js`：
+3. 上传小程序头像：公众平台 →「设置」→「基本设置」→「头像」，用 `assets/app-icon/app-icon.png`（512×512 正方形，78KB）。
+4. 把环境 ID 填进 `config/index.js`：
 
 ```js
 module.exports = {
@@ -36,7 +37,11 @@ node scripts/sync-cloud-shared.js
 
 ## 三、建集合
 
-云数据库里建好这些集合（权限建议统一设成「仅创建者可读写」，或「所有用户可读、仅云函数可写」）：
+云数据库里建好这些集合。
+
+**权限统一设成「仅管理端可读写」**：小程序端不直连数据库，所有读取都走 `oilApi` 云函数；
+`alert_rules` / `alert_logs` 里存着 openid 和用户自己的提醒规则，
+设成「所有用户可读」会泄露他人的数据。
 
 - `oil_prices` 当前价，每个 `(regionCode, fuelId)` 一条
 - `oil_price_history` 历史价，每个 `(regionCode, fuelId, date)` 一条
@@ -52,7 +57,10 @@ node scripts/sync-cloud-shared.js
 ## 四、先把演示数据灌进云端
 
 真实数据源启用前，云数据库是空的，前端会拿到空数据。在云函数面板手动运行
-`oilCollector`，传参 `{"action":"seed"}`，会写入一套演示数据，用来验证云端链路是通的。
+`oilCollector`，传参 `{"action":"seed","confirm":"seed"}`，会写入一套演示数据，用来验证云端链路是通的。
+
+seed 只会清掉带 `source: 'seed'` 标记的演示数据，不会碰采集器写进来的真实数据；
+但仍然要显式传 `confirm`，避免误触发。
 
 ## 五、接入真实数据源
 
@@ -85,8 +93,11 @@ node scripts/sync-cloud-shared.js
 1. 在微信公众平台申请订阅消息模板，拿到模板 ID。
 2. 模板字段要和 `cloudfunctions/oilAlert/index.js` 里 `TEMPLATE_FIELDS` 的映射对上，
    字段名不一致会下发失败。
-3. 把模板 ID 填进 `config/index.js` 的 `subscribeTemplateIds`，
-   同时填进 `TEMPLATE_FIELDS` 里对应模板的 `templateId`。
+3. 把模板 ID 填进 `config/index.js` 的 `subscribeTemplateIds`（小程序端发起授权要用），
+   并在云函数 `oilAlert` 的环境变量里配 `OIL_SUBSCRIBE_TEMPLATE_ID`（服务端下发要用）。
+   两处是同一个模板 ID，云函数不再在代码里手填模板 ID，漏配只会报明确错误而不是静默失败。
+4. 联调开发版/体验版时，把云函数环境变量 `OIL_MINIPROGRAM_STATE` 设成 `developer` 或 `trial`；
+   正式发布留空即可（默认 `formal`）。
 
 下发链路：用户在「提醒」页点「去开启」→ 小程序调 `wx.requestSubscribeMessage`
 → 授权结果写回 `alert_rules.subscribeGranted` → `oilAlert` 定时扫规则 → 命中后调用

@@ -18,7 +18,7 @@
     <!-- 订阅状态 -->
     <view class="subscription-card {{subscription.active ? 'on' : ''}}">
       <view class="subscription-icon">
-        <image wx:if="{{subscription.icon}}" class="icon-inline" src="/assets/icons/{{subscription.icon}}" mode="aspectFit" />
+        <image wx:if="{{subscription.icon}}" class="icon-inline" src="/assets/icons/{{subscription.icon}}.png" mode="aspectFit" />
       </view>
       <view class="subscription-copy">
         <text class="subscription-title">{{subscription.title}}</text>

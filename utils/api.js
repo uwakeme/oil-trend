@@ -15,34 +15,54 @@ const cloud = require('./cloud');
 const demo = require('../data/demo');
 const store = require('./store');
 
-var lastSource = 'demo';
-
 function preferCloud() {
   return config.dataSource !== 'demo';
 }
 
 /**
- * 云端优先、本地兜底
- * @param {string}   name      云函数名
- * @param {object}   payload   云函数入参
- * @param {Function} localFn   本地兜底实现
+ * 给返回值打上来源标记。
+ * 「wx.cloud.init 成功」不等于「这次数据来自云端」——
+ * 云函数失败回落到演示数据时，必须如实标成演示源。
  */
-function fetchWithFallback(name, payload, localFn) {
+function stampSource(data, mode, transport) {
+  if (data && typeof data === 'object') {
+    data.source = Object.assign({}, data.source || {}, { mode: mode, transport: transport });
+  }
+  return data;
+}
+
+/**
+ * 云端返回必须带上业务字段才算成功。
+ * 只判断「是不是 object」的话，云端返回 {} 会让页面拿到空数据却显示正常。
+ */
+function hasExpected(data, keys) {
+  if (!keys || !keys.length) return true;
+  for (var i = 0; i < keys.length; i++) {
+    if (data[keys[i]] === undefined || data[keys[i]] === null) return false;
+  }
+  return true;
+}
+
+/**
+ * 云端优先、本地兜底
+ * @param {string}   name        云函数名
+ * @param {object}   payload     云函数入参
+ * @param {Function} localFn     本地兜底实现
+ * @param {Array}    expectKeys  云端返回必须包含的业务字段
+ */
+function fetchWithFallback(name, payload, localFn, expectKeys) {
   if (preferCloud()) {
     return cloud.callFunction(name, payload).then(function (data) {
-      if (data && typeof data === 'object') {
-        lastSource = 'cloud';
-        return data;
+      if (data && typeof data === 'object' && hasExpected(data, expectKeys)) {
+        return stampSource(data, 'cloud', '云端服务');
       }
-      lastSource = 'demo';
-      return localFn();
-    }).catch(function () {
-      lastSource = 'demo';
-      return localFn();
+      return stampSource(localFn(), 'demo', '本地演示源（云端返回数据不完整）');
+    }).catch(function (err) {
+      return stampSource(localFn(), 'demo',
+        '本地演示源（云端调用失败：' + (err && err.message ? err.message : '未知原因') + '）');
     });
   }
-  lastSource = 'demo';
-  return Promise.resolve(localFn());
+  return Promise.resolve(stampSource(localFn(), 'demo', '本地演示源（未配置云环境）'));
 }
 
 /** 地区列表 */
@@ -58,7 +78,7 @@ function getRegions() {
 function getHome(regionCode, fuelId) {
   return fetchWithFallback('oilApi', { action: 'home', regionCode: regionCode, fuelId: fuelId }, function () {
     return demo.getHome(regionCode, fuelId);
-  });
+  }, ['prices', 'window']);
 }
 
 /** 走势数据 */
@@ -70,7 +90,7 @@ function getTrend(regionCode, fuelId, period) {
     period: period
   }, function () {
     return demo.getTrend(regionCode, fuelId, period);
-  });
+  }, ['points']);
 }
 
 /** 调价通知数据 */
@@ -82,14 +102,14 @@ function getNotices(regionCode, filter, fuelId) {
     fuelId: fuelId
   }, function () {
     return demo.getNotices(regionCode, filter, fuelId);
-  });
+  }, ['notices']);
 }
 
 /** 国际行情 */
 function getMarket(symbol, period) {
   return fetchWithFallback('oilApi', { action: 'market', symbol: symbol, period: period }, function () {
     return demo.getMarket(symbol, period);
-  });
+  }, ['price', 'points']);
 }
 
 /* ---------- 提醒规则与记录 ---------- */
@@ -97,18 +117,12 @@ function getMarket(symbol, period) {
 function getAlertRules() {
   if (preferCloud()) {
     return cloud.callFunction('oilApi', { action: 'rules.list' }).then(function (data) {
-      if (data && Array.isArray(data.rules)) {
-        lastSource = 'cloud';
-        return data.rules;
-      }
-      lastSource = 'demo';
+      if (data && Array.isArray(data.rules)) return data.rules;
       return store.getRules();
     }).catch(function () {
-      lastSource = 'demo';
       return store.getRules();
     });
   }
-  lastSource = 'demo';
   return Promise.resolve(store.getRules());
 }
 
@@ -116,25 +130,19 @@ function saveAlertRules(rules) {
   store.saveRules(rules);
   if (!preferCloud()) return Promise.resolve(rules);
   return cloud.callFunction('oilApi', { action: 'rules.save', rules: rules })
-    .then(function () { lastSource = 'cloud'; return rules; })
-    .catch(function () { lastSource = 'demo'; return rules; });
+    .then(function () { return rules; })
+    .catch(function () { return rules; });
 }
 
 function getAlertHistory() {
   if (preferCloud()) {
     return cloud.callFunction('oilApi', { action: 'history.list' }).then(function (data) {
-      if (data && Array.isArray(data.history)) {
-        lastSource = 'cloud';
-        return data.history;
-      }
-      lastSource = 'demo';
+      if (data && Array.isArray(data.history)) return data.history;
       return localHistory();
     }).catch(function () {
-      lastSource = 'demo';
       return localHistory();
     });
   }
-  lastSource = 'demo';
   return Promise.resolve(localHistory());
 }
 
@@ -142,14 +150,6 @@ function getAlertHistory() {
 function localHistory() {
   var stored = store.getHistory();
   return stored && stored.length ? stored : demo.getAlertHistory();
-}
-
-function saveAlertHistory(history) {
-  store.saveHistory(history);
-  if (!preferCloud()) return Promise.resolve(history);
-  return cloud.callFunction('oilApi', { action: 'history.save', history: history })
-    .then(function () { lastSource = 'cloud'; return history; })
-    .catch(function () { lastSource = 'demo'; return history; });
 }
 
 module.exports = {
@@ -161,8 +161,6 @@ module.exports = {
   getAlertRules: getAlertRules,
   saveAlertRules: saveAlertRules,
   getAlertHistory: getAlertHistory,
-  saveAlertHistory: saveAlertHistory,
   cloudReady: cloud.isReady,
-  cloudError: cloud.lastError,
-  get lastSource() { return lastSource; }
+  cloudError: cloud.lastError
 };

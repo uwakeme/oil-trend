@@ -42,16 +42,30 @@ function lastError() {
  * @param {object} data 入参
  * @returns {Promise<any>} resolve 云函数返回的 data 字段
  */
+// 云函数调用的超时上限。wx.cloud.callFunction 自己没有超时，
+// 网络挂住时 loading 会永远转下去。
+var CALL_TIMEOUT = 12000;
+
 function callFunction(name, data) {
   return new Promise(function (resolve, reject) {
     if (!cloudReady) {
       reject(new Error(initError || 'CLOUD_NOT_READY'));
       return;
     }
+    var settled = false;
+    var timer = setTimeout(function () {
+      if (settled) return;
+      settled = true;
+      reject(new Error('云函数调用超时（' + (CALL_TIMEOUT / 1000) + 's）'));
+    }, CALL_TIMEOUT);
+
     wx.cloud.callFunction({
       name: name,
       data: data || {}
     }).then(function (res) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       var result = res && res.result;
       if (result && result.ok === false) {
         var err = new Error(result.message || 'CLOUD_FUNCTION_ERROR');
@@ -61,6 +75,9 @@ function callFunction(name, data) {
       }
       resolve(result && result.data !== undefined ? result.data : result);
     }).catch(function (err) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       reject(err);
     });
   });

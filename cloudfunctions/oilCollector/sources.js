@@ -51,8 +51,14 @@ const PARSERS = {
    */
   ndrcNotice(raw) {
     var text = String(raw || '').replace(/\s+/g, '');
-    var m = text.match(/每升(?:汽柴油)?(?:价格)?(?:分别)?(?:上调|下调|调整)([\d.]+)元/);
+
+    // 必须连方向一起抓：之前只抓数字，Number() 恒为正，
+    // 「下调 0.08 元」会被解析成 +0.08，涨跌方向整个反掉。
+    var m = text.match(/每升(?:汽柴油)?(?:价格)?(?:分别)?(上调|下调|调整)([\d.]+)元/);
     if (!m) return null;
+    var magnitude = Number(m[2]);
+    if (!isFinite(magnitude)) return null;
+    var totalDelta = m[1] === '下调' ? -magnitude : magnitude;
 
     var executeAt = null;
     var m2 = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日24:00/);
@@ -60,15 +66,35 @@ const PARSERS = {
       executeAt = m2[1] + '-' + pad(m2[2]) + '-' + pad(m2[3]);
     }
 
+    // 各油品幅度本来就不同，正文里通常逐个油品写。
+    // 能分别解析就分别解析，解析不出来就整体进人工核对。
+    var deltas = {};
+    var fuelRe = /(92#|95#|98#|0#|柴油|汽油)[^。；;]{0,16}?每升(?:价格)?(上调|下调|调整)([\d.]+)元/g;
+    var hit;
+    while ((hit = fuelRe.exec(text)) !== null) {
+      var fuelKey = fuelKeyOf(hit[1]);
+      if (!fuelKey) continue;
+      var value = Number(hit[3]);
+      if (!isFinite(value)) continue;
+      deltas[fuelKey] = hit[2] === '下调' ? -value : value;
+    }
+    var perFuel = Object.keys(deltas).length > 0;
+    if (!perFuel) {
+      // 只有一个总数：先按同一幅度填，但标记为待复核
+      deltas = { '92': totalDelta, '95': totalDelta, '98': totalDelta, '0': totalDelta };
+    }
+
     var titleMatch = text.match(/(国内成品油价格按机制(?:上调|下调))/);
-    var amount = Number(m[1]);
-    if (!isFinite(amount)) return null;
 
     return {
       kind: 'official',
       title: titleMatch ? titleMatch[1] : '国内成品油价格调整',
       executeAt: executeAt,
-      delta: amount,
+      delta: totalDelta,
+      deltas: deltas,
+      perFuel: perFuel,
+      // 采集解析出来的结果一律待复核，复核通过才对外可见
+      reviewStatus: 'pending',
       raw: raw && raw.length > 4000 ? raw.slice(0, 4000) : raw
     };
   },
@@ -99,6 +125,12 @@ const PARSERS = {
 function pad(n) {
   n = String(n);
   return n.length < 2 ? '0' + n : n;
+}
+
+/** 正文里的油品叫法 → 内部油品 id */
+function fuelKeyOf(text) {
+  var map = { '92#': '92', '95#': '95', '98#': '98', '0#': '0', '柴油': '0', '汽油': '92' };
+  return map[text] || null;
 }
 
 module.exports = { SOURCES: SOURCES, PARSERS: PARSERS };

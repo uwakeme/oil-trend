@@ -40,24 +40,34 @@ Page({
 
   onLoad() {
     var prefs = store.getPrefs();
+    // 快照在 onLoad 就记下：首屏 onShow 比对相同，不会重复发一轮请求
+    this._prefsKey = store.prefsKey(prefs);
     this.setData({ fuelId: prefs.fuelId || '92' });
     this.load(prefs.regionCode);
   },
 
   onShow() {
-    // 地区可能在别的页面改过，这里对齐一次
+    // 地区或油品可能在别的页面改过，对比快照决定要不要重取
     var prefs = store.getPrefs();
-    if (prefs.regionCode !== this.data.region.code) {
+    var key = store.prefsKey(prefs);
+    if (this._prefsKey && key !== this._prefsKey) {
+      this._prefsKey = key;
+      this.setData({ fuelId: prefs.fuelId || '92' });
       this.load(prefs.regionCode);
-    } else if (!this.data.loading && !this.data.loadError) {
-      this.applyHome(this._raw);
     }
+  },
+
+  onPullDownRefresh() {
+    var prefs = store.getPrefs();
+    this.load(prefs.regionCode).then(function () {
+      wx.stopPullDownRefresh();
+    });
   },
 
   load(regionCode) {
     var self = this;
     this.setData({ loading: true, loadError: '' });
-    api.getHome(regionCode).then(function (payload) {
+    return api.getHome(regionCode, this.data.fuelId).then(function (payload) {
       self._raw = payload;
       self.applyHome(payload);
     }).catch(function () {
@@ -149,13 +159,15 @@ Page({
         changeDirection: noticeMeta.direction,
         executeText: fmt.fullDate(executeDate.slice(0, 10)) + ' ' + (executeDate.slice(11, 16) || '') + ' 时执行。以下为本地各油品调整后的零售价格。',
         prices: noticePrices,
-        sourceName: '国家发展改革委价格监测中心（演示）',
+        sourceName: (source.name || '未标注来源') + (source.mode === 'demo' ? '（演示数据）' : ''),
         publishedText: fmt.dateTime(latest.publishedAt)
       },
       updatedLabel: fmt.dateTime(payload.updatedAt) + ' 更新',
       sourceName: source.name || '未知来源',
       sourceNote: source.note || '',
-      cloudStatus: api.cloudReady() ? '云端服务已连接' : '当前为本地演示数据（云端未开通）',
+      cloudStatus: source.mode === 'cloud'
+        ? ('本次数据来自' + (source.name || '云端服务'))
+        : ('本次数据来自' + (source.transport || '本地演示源')),
       aboutNote: '国内成品油价格按调价节点展示，不代表实时成交价。国际原油仅作市场参考，与国内零售价之间存在税费与定价周期差异。'
     });
   },

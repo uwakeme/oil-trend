@@ -32,24 +32,33 @@ Page({
 
   onLoad() {
     var prefs = store.getPrefs();
+    this._prefsKey = store.prefsKey(prefs);
     this.setData({ fuelId: prefs.fuelId || '92' });
     this.load();
   },
 
   onShow() {
+    // 换地区也会影响走势，之前只比油品，地区变了不刷新
     var prefs = store.getPrefs();
-    var fuelId = prefs.fuelId || '92';
-    if (fuelId !== this.data.fuelId) {
-      this.setData({ fuelId: fuelId });
+    var key = store.prefsKey(prefs);
+    if (this._prefsKey && key !== this._prefsKey) {
+      this._prefsKey = key;
+      this.setData({ fuelId: prefs.fuelId || '92' });
       this.load();
     }
+  },
+
+  onPullDownRefresh() {
+    this.load().then(function () {
+      wx.stopPullDownRefresh();
+    });
   },
 
   load() {
     var self = this;
     var prefs = store.getPrefs();
     this.setData({ loading: true, loadError: '' });
-    api.getTrend(prefs.regionCode, this.data.fuelId, this.data.period)
+    return api.getTrend(prefs.regionCode, this.data.fuelId, this.data.period)
       .then(function (payload) { self.applyTrend(payload); })
       .catch(function () {
         self.setData({ loading: false, loadError: '走势数据加载失败，请稍后重试' });
@@ -82,7 +91,7 @@ Page({
           dateText: fmt.shortDate(e.date),
           title: e.title,
           priceText: fmt.price(e.priceAfter),
-          deltaText: (e.amount > 0 ? '+' : '') + e.amount.toFixed(2),
+          deltaText: (Number(e.amount) > 0 ? '+' : '') + Number(e.amount || 0).toFixed(2),
           direction: e.direction
         };
       })

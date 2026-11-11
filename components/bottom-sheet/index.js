@@ -14,6 +14,8 @@ Component({
   },
 
   methods: {
+    // 阻止弹层内容滚动时背景跟着滚
+    noop() {},
     onClose() {
       this.triggerEvent('close');
     },

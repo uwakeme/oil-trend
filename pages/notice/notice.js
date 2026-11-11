@@ -35,18 +35,33 @@ Page({
 
   onLoad() {
     var prefs = store.getPrefs();
+    this._prefsKey = store.prefsKey(prefs);
     this.setData({ fuelId: prefs.fuelId || '92' });
     this.load();
   },
 
   onShow() {
+    // 换地区后通知里的调价幅度会变，回到页面要重新取
+    var prefs = store.getPrefs();
+    var key = store.prefsKey(prefs);
+    if (this._prefsKey && key !== this._prefsKey) {
+      this._prefsKey = key;
+      this.setData({ fuelId: prefs.fuelId || '92' });
+      this.load();
+    }
+  },
+
+  onPullDownRefresh() {
+    this.load().then(function () {
+      wx.stopPullDownRefresh();
+    });
   },
 
   load() {
     var self = this;
     var prefs = store.getPrefs();
     this.setData({ loading: true, loadError: '' });
-    api.getNotices(prefs.regionCode, this.data.filter, prefs.fuelId)
+    return api.getNotices(prefs.regionCode, this.data.filter, prefs.fuelId)
       .then(function (payload) { self.applyNotices(payload); })
       .catch(function () {
         self.setData({ loading: false, loadError: '调价通知加载失败，请稍后重试' });
@@ -71,7 +86,8 @@ Page({
         kindLabel: n.kind === 'official' ? '正式结果' : '市场预测',
         title: n.title,
         publishedText: fmt.dateOnly(n.publishedAt),
-        executeText: fmt.cnDate(n.executeAt.slice(0, 10)) + ' ' + (n.executeAt.slice(11, 16) || '') + ' 执行',
+        executeText: fmt.cnDate(String(n.executeAt || '').slice(0, 10)) +
+          ' ' + (String(n.executeAt || '').slice(11, 16) || '') + ' 执行',
         changeText: meta.text,
         direction: meta.direction,
         raw: n

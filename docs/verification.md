@@ -46,12 +46,20 @@ node scripts/verify-in-devtools.js
 
 要拿到带图表的成品图，做法是：
 
-1. 在 `components/trend-chart/index.js` 里临时加一段导出：
-   `wx.canvasToTempFilePath({ canvas })` → base64 → 写进 storage
-2. 从外部用 `App.callWxMethod` 调 `getStorageSync` 把 base64 取回来，存成 PNG
-3. 用 `scripts/compose-screenshots.py` 把画布 PNG 贴回页面截图的对应位置
+1. `node scripts/export-canvas.js` —— 它会临时给 `components/trend-chart/index.js`
+   注入一段导出（`wx.canvasToTempFilePath({ canvas })` → base64 → 写进 storage），
+   再从外部用 `App.callWxMethod` 调 `getStorageSync` 把 base64 取回来存成 PNG。
+   **脚本结束时会把组件源码还原**，临时代码不会留在仓库里。
+2. `python scripts/compose-screenshots.py` —— 把画布 PNG 贴回页面截图的对应位置
 
-导出那几行是临时的，已从仓库里移除；需要重新抓画布时再临时加回来。
+跑 export-canvas.js 之前先把 IDE 自动化服务起起来：
+`cli.bat auto --project <path> --auto-port <port>`（端口用 `AUTO_WS` 环境变量覆盖）。
+
+两个坑：
+
+- 自动化桥的返回值统一包了一层 `{ result: ... }`，直接读 `res.token` 永远匹配不上
+- 开发者工具监听项目根目录下**任意**文件变化就触发重编译，往 `docs/screenshots/` 写截图
+  会把正在跑的页面冲掉 —— `verify-in-devtools.js` 因此改成先把截图攒在内存、跑完统一落盘
 
 ## 这次抓出来的真 bug
 
@@ -63,6 +71,7 @@ node scripts/verify-in-devtools.js
 | 国际行情图是一根竖线 | 所有点叠在同一个 x | 行情的 date 是 `MM-DD HH:mm:ss`，时间轴正则要的是 `YYYY-MM-DD`，解析全返回 0 |
 | 订阅卡图标不显示 | 白方块 | 动态 src 的值漏了 `.png` 后缀 |
 | 自定义 tabBar 点不动 | switchTab 拿不到 url | `wx:for` 里写 `{{path}}`，应写 `{{item.path}}` |
+| 五个页面同时白屏 | `Page.getData` 报 page destroyed | `utils/api.js` 里删了 `saveAlertHistory` 的函数体却忘了删 `module.exports` 的同名导出项，模块一被 require 就抛 ReferenceError。`node --check` 只查语法查不出来，靠 `scripts/check-modules.js` 兜住 |
 
 前两个是模拟器才会暴露的问题，静态检查查不出来。
 `scripts/lint-wxml.js` 后来补了「标签必须是 WXML 内置标签或已声明的自定义组件」这条规则，

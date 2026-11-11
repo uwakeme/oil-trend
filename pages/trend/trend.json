@@ -1,4 +1,5 @@
 {
+  "enablePullDownRefresh": true,
   "navigationBarTitleText": "价格走势",
   "usingComponents": {
     "trend-chart": "/components/trend-chart/index"

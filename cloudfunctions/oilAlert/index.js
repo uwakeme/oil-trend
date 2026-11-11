@@ -34,7 +34,9 @@ const C = {
  */
 const TEMPLATE_FIELDS = {
   officialDrop: {
-    templateId: '',            // ← 填正式模板 ID
+    // 模板 ID 从环境变量读，不再在代码里手填一处、
+    // config/index.js 再手填一处，漏一处就静默失败。
+    templateId: process.env.OIL_SUBSCRIBE_TEMPLATE_ID || '',
     page: 'pages/index/index',
     fields: {
       thing1: '油品',
@@ -44,7 +46,7 @@ const TEMPLATE_FIELDS = {
     }
   },
   targetPrice: {
-    templateId: '',            // ← 填正式模板 ID
+    templateId: process.env.OIL_SUBSCRIBE_TEMPLATE_ID || '',
     page: 'pages/index/index',
     fields: {
       thing1: '油品',
@@ -81,13 +83,22 @@ async function sendSubscribe(openid, templateId, page, fields, templateData) {
   if (!templateId) {
     return { sent: false, reason: 'TEMPLATE_NOT_CONFIGURED' };
   }
+  // 模板字段映射必须覆盖要发的数据，漏字段直接报配置错误，
+  // 而不是把消息发出去后被平台拒掉。
+  var keys = Object.keys(templateData || {});
+  for (var i = 0; i < keys.length; i++) {
+    if (!fields || !fields[keys[i]]) {
+      return { sent: false, reason: 'TEMPLATE_FIELD_MISMATCH:' + keys[i] };
+    }
+  }
   try {
     await cloud.openapi.subscribeMessage.send({
       touser: openid,
       templateId: templateId,
       page: page,
       data: templateData,
-      miniprogramState: 'formal'
+      // 开发版/体验版联调要能切成对应状态
+      miniprogramState: process.env.OIL_MINIPROGRAM_STATE || 'formal'
     });
     return { sent: true };
   } catch (err) {
@@ -99,7 +110,7 @@ async function sendSubscribe(openid, templateId, page, fields, templateData) {
 /**
  * 匹配单条规则
  */
-async function matchRule(rule, prices, latestNotice) {
+async function matchRule(rule, prices, latestNotice, forecastNotice) {
   var hits = [];
 
   var priceDoc = null;
@@ -148,11 +159,7 @@ async function matchRule(rule, prices, latestNotice) {
   }
 
   /* --- 3. 预测下调（默认关闭） --- */
-  if (rule.forecastDrop) {
-    var forecastNotice = null;
-    // 预测类通知不写进油品正式价，因此这里只在预测通知存在时匹配
-    var res = await db.collection(C.notices).where({ kind: 'forecast' }).orderBy('executeAt', 'desc').limit(1).get();
-    forecastNotice = (res.data && res.data[0]) || null;
+  if (rule.forecastDrop && forecastNotice) {
     if (forecastNotice) {
       var fDelta = (forecastNotice.changes || {})[rule.fuelId];
       if (typeof fDelta === 'number' && fDelta < 0) {
@@ -176,12 +183,27 @@ async function matchRule(rule, prices, latestNotice) {
   return hits;
 }
 
+async function getAllRules() {
+  var all = [];
+  var skip = 0;
+  var PAGE = 100;
+  while (true) {
+    var res = await db.collection(C.rules).skip(skip).limit(PAGE).get();
+    var batch = res.data || [];
+    all = all.concat(batch);
+    if (batch.length < PAGE) break;
+    skip += PAGE;
+    if (skip > 10000) break;
+  }
+  return all;
+}
+
 exports.main = async () => {
   var summary = { checked: 0, matched: 0, sent: 0, skipped: 0, failed: 0, details: [] };
 
   try {
-    var rulesRes = await db.collection(C.rules).get();
-    var rules = rulesRes.data || [];
+    // 规则集合要分页取全，否则超过单次上限后，后面的用户收不到提醒
+    var rules = await getAllRules();
     var pricesRes = await db.collection(C.prices).get();
     var prices = pricesRes.data || [];
 
@@ -191,6 +213,10 @@ exports.main = async () => {
       .limit(1)
       .get();
     var latestNotice = (noticeRes.data && noticeRes.data[0]) || null;
+
+    // 预测通知所有规则共用，查一次就够
+    var forecastRes = await db.collection(C.notices).where({ kind: 'forecast' }).orderBy('executeAt', 'desc').limit(1).get();
+    var forecastNotice = (forecastRes.data && forecastRes.data[0]) || null;
 
     for (var i = 0; i < rules.length; i++) {
       var rule = rules[i];
@@ -202,7 +228,7 @@ exports.main = async () => {
         continue;
       }
 
-      var hits = await matchRule(rule, prices, latestNotice);
+      var hits = await matchRule(rule, prices, latestNotice, forecastNotice);
       for (var j = 0; j < hits.length; j++) {
         var hit = hits[j];
         if (await alreadySent(hit.dedupKey)) {

@@ -30,7 +30,10 @@ function levels(fuelId) {
   ADJUSTMENTS.forEach(function (item) {
     price = round2(price + item.deltas[fuelId]);
     list.push({
-      date: item.date,
+      // 调价节点要和区间起点、窗口日期用同一个时间基准，
+      // 否则平移一两周后「已平移的区间」和「未平移的节点」就对不上了，
+      // 调价次数会一路掉到 0。
+      date: clock.shiftDate(item.date),
       price: price,
       delta: item.deltas[fuelId],
       title: item.title
@@ -93,15 +96,17 @@ function windowPayload(fuelId) {
   var cycleStart = clock.shiftDate(ADJUST_WINDOW.cycleStartDate);
   var forecast = ADJUST_WINDOW.forecast[fuelId];
 
-  // 进度 = 已过天数 / 整个计价周期
-  var totalDays = Math.max(1, clock.daysUntil(ADJUST_WINDOW.cycleStartDate) - clock.daysUntil(ADJUST_WINDOW.date));
-  var passedDays = Math.max(0, totalDays - clock.daysUntil(ADJUST_WINDOW.date));
+  // 天数计算全部基于平移后的日期，和界面显示的日期保持一致。
+  // 之前用未平移的原始日期算，会和显示差一天；进度还会恒为 0 后突然跳 100%。
+  var daysLeft = clock.daysUntil(windowDate);
+  var totalDays = Math.max(1, daysLeft - clock.daysUntil(cycleStart));
+  var passedDays = Math.max(0, totalDays - daysLeft);
   var progress = Math.min(100, Math.max(0, Math.round(passedDays / totalDays * 100)));
 
   return {
     date: windowDate,
     time: ADJUST_WINDOW.time,
-    daysLeft: clock.daysUntil(ADJUST_WINDOW.date),
+    daysLeft: daysLeft,
     cycleStart: cycleStart,
     cycleStarted: progress > 0,
     progress: progress,
@@ -151,7 +156,7 @@ function periodLevels(regionCode, fuelId, fromDate) {
   return { points: points, events: events };
 }
 
-function getHome(regionCode) {
+function getHome(regionCode, fuelId) {
   var region = regionByCode(regionCode || DEFAULT_REGION_CODE);
   var today = clock.today();
 
@@ -170,10 +175,11 @@ function getHome(regionCode) {
   });
 
   // 四个油品的迷你走势一次算好，切换油品时不必重新取数
+  // daysAgo / today 返回的已经是平移后的日期，别再平移一次
   var labels = [
-    clock.shiftDate(clock.daysAgo(29)).slice(5).replace('-', '月') + '日',
-    clock.shiftDate(clock.daysAgo(15)).slice(5).replace('-', '月') + '日',
-    clock.shiftDate(today).slice(5).replace('-', '月') + '日'
+    clock.daysAgo(29).slice(5).replace('-', '月') + '日',
+    clock.daysAgo(15).slice(5).replace('-', '月') + '日',
+    today.slice(5).replace('-', '月') + '日'
   ];
   var trend30 = {};
   FUELS.forEach(function (f) {
@@ -193,14 +199,7 @@ function getHome(regionCode) {
     },
     prices: prices,
     updatedAt: clock.todayUpdatedAt(),
-    window: {
-      date: clock.shiftDate(ADJUST_WINDOW.date),
-      time: ADJUST_WINDOW.time,
-      daysLeft: clock.daysUntil(ADJUST_WINDOW.date),
-      isOfficial: ADJUST_WINDOW.isOfficial,
-      basis: ADJUST_WINDOW.basis,
-      forecast: ADJUST_WINDOW.forecast
-    },
+    window: windowPayload(fuelId || '92'),
     trend30: trend30,
     latestNotice: {
       id: latestNotice.id,
@@ -301,12 +300,15 @@ function getNotices(regionCode, filter, fuelId) {
 
 function buildPricesFor(region, notice) {
   var out = {};
+  // 用「这次调价执行当天之后的价格」，不能用当前价 ——
+  // 否则每条历史通知显示的都是今天的价格，看着像同一条通知
+  var executeDate = String(notice.executeAt || '').slice(0, 10);
   FUELS.forEach(function (f) {
     var delta = notice.changes[f.id];
-    var before = round2(currentPrice(region.code, f.id) - delta);
+    var after = priceOn(region.code, f.id, executeDate);
     out[f.id] = {
-      before: before,
-      after: currentPrice(region.code, f.id),
+      before: round2(after - delta),
+      after: after,
       delta: delta
     };
   });
@@ -314,11 +316,18 @@ function buildPricesFor(region, notice) {
 }
 
 var MARKET_PERIODS = {
-  '1d': { label: '1日', points: 28, fromOpen: true },
-  '1w': { label: '1周', points: 7, ratio: 0.982 },
-  '1m': { label: '1月', points: 30, ratio: 0.958 },
-  '3m': { label: '3月', points: 90, ratio: 0.914 }
+  // stepMinutes：相邻两个点的真实间隔，1 日按 15 分钟、其余按 1 天
+  '1d': { label: '1日', points: 28, stepMinutes: 15,   fromOpen: true, axis: 'time' },
+  '1w': { label: '1周', points: 7,  stepMinutes: 1440, ratio: 0.982, axis: 'date' },
+  '1m': { label: '1月', points: 30, stepMinutes: 1440, ratio: 0.958, axis: 'date' },
+  '3m': { label: '3月', points: 90, stepMinutes: 1440, ratio: 0.914, axis: 'date' }
 };
+
+/** 轴标签：日内给 HH:MM，跨日给 MM-DD */
+function marketAxisLabel(dateStr, mode) {
+  if (mode === 'time') return String(dateStr).slice(11, 16);
+  return String(dateStr).slice(5, 10);
+}
 
 function getMarket(symbol, period) {
   var key = MARKETS[symbol] ? symbol : 'brent';
@@ -342,8 +351,9 @@ function getMarket(symbol, period) {
       pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
   }
 
+  var step = (conf.stepMinutes || 15) * 60000;
   var points = raw.map(function (v, i) {
-    var d = new Date(quoteTime.getTime() - (conf.points - 1 - i) * 60000);
+    var d = new Date(quoteTime.getTime() - (conf.points - 1 - i) * step);
     return { date: fullStamp(d), value: Number(v.toFixed(2)) };
   });
 
@@ -367,9 +377,9 @@ function getMarket(symbol, period) {
     period: conf.label,
     points: points,
     axis: [
-      points[0] ? points[0].date.slice(11, 16) : '',
-      points[Math.floor(points.length / 2)] ? points[Math.floor(points.length / 2)].date.slice(11, 16) : '',
-      points[points.length - 1] ? points[points.length - 1].date.slice(11, 16) : ''
+      points[0] ? marketAxisLabel(points[0].date, conf.axis) : '',
+      points[Math.floor(points.length / 2)] ? marketAxisLabel(points[Math.floor(points.length / 2)].date, conf.axis) : '',
+      points[points.length - 1] ? marketAxisLabel(points[points.length - 1].date, conf.axis) : ''
     ],
     source: { mode: 'demo', name: '内置演示数据集', note: '演示数据，非真实行情' }
   };

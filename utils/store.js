@@ -37,10 +37,15 @@ function getPrefs() {
 }
 
 function setPrefs(patch) {
+  // 补丁要和已有偏好合并，不能整体替换：
+  // 只改油品不该把地区打回默认，只改地区也不该把油品打回 92#。
   var prefs = getPrefs();
   var next = {};
-  for (var key in patch) {
-    if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
+  for (var key in prefs) {
+    if (Object.prototype.hasOwnProperty.call(prefs, key)) next[key] = prefs[key];
+  }
+  for (var patchKey in patch) {
+    if (Object.prototype.hasOwnProperty.call(patch, patchKey)) next[patchKey] = patch[patchKey];
   }
   write(PREF_KEY, next);
   return getPrefs();
@@ -71,8 +76,19 @@ function saveHistory(history) {
   return history;
 }
 
+/**
+ * 偏好快照键：地区 + 油品。
+ * 页面在 onShow 时比对，变了才重新取数 —— 用来避免首屏重复请求，
+ * 也用来在别的页面改了地区/油品后自动对齐。
+ */
+function prefsKey(prefs) {
+  var p = prefs || getPrefs();
+  return (p.regionCode || '') + '/' + (p.fuelId || '');
+}
+
 module.exports = {
   getPrefs: getPrefs,
+  prefsKey: prefsKey,
   setPrefs: setPrefs,
   seedRegionIfNeeded: seedRegionIfNeeded,
   getRules: getRules,

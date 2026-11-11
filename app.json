@@ -53,10 +53,5 @@
   },
   "sitemapLocation": "sitemap.json",
   "style": "v2",
-  "lazyCodeLoading": "requiredComponents",
-  "permission": {
-    "scope.userLocation": {
-      "desc": "用于快速定位你所在城市的油价（可选，也可手动选择省市）"
-    }
-  }
+  "lazyCodeLoading": "requiredComponents"
 }

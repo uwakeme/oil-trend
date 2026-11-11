@@ -224,6 +224,15 @@ wxmlFiles.forEach(function (wxmlAbs) {
       problems.push(rel + ': 事件 ' + handler + ' 在对应 JS 中没有对应的方法');
     }
 
+    /* 动态资源路径要带扩展名：动态 src 不会自动补 .png */
+    const dynamicSrc = attrValue(attrs, 'src');
+    if (dynamicSrc && dynamicSrc.indexOf('{{') >= 0) {
+      const tail = dynamicSrc.slice(dynamicSrc.lastIndexOf('}}') + 2);
+      if (!/\.[a-z0-9]+$/i.test(tail)) {
+        problems.push(rel + ': 动态资源路径 ' + dynamicSrc + ' 缺少扩展名（动态 src 不会自动补 .png）');
+      }
+    }
+
     /* class 定义（先去掉 {{}} 表达式再拆词） */
     const cls = attrValue(attrs, 'class');
     if (cls) {
@@ -237,9 +246,51 @@ wxmlFiles.forEach(function (wxmlAbs) {
   });
 });
 
+/* ---------- app.json 校验 ---------- */
+(function checkAppJson() {
+  const appJsonPath = path.join(ROOT, 'app.json');
+  if (!fs.existsSync(appJsonPath)) return;
+  let appJson;
+  try {
+    appJson = JSON.parse(fs.readFileSync(appJsonPath, 'utf8'));
+  } catch (e) {
+    problems.push('app.json: JSON 解析失败');
+    return;
+  }
+
+  // 页面四件套里的 .js / .wxml 必须在
+  (appJson.pages || []).forEach(function (page) {
+    if (!fs.existsSync(path.join(ROOT, page + '.js'))) {
+      problems.push('app.json: 页面 ' + page + ' 缺少 .js');
+    }
+    if (!fs.existsSync(path.join(ROOT, page + '.wxml'))) {
+      problems.push('app.json: 页面 ' + page + ' 缺少 .wxml');
+    }
+  });
+
+  const tabBar = appJson.tabBar || {};
+  if (tabBar.custom) {
+    // 自定义 tabBar 的 fixed 定位在真机不生效，已经踩过
+    problems.push('app.json: 自定义 tabBar 真机上不吸底，请改用原生 tabBar');
+  }
+  (tabBar.list || []).forEach(function (item) {
+    if ((appJson.pages || []).indexOf(item.pagePath) < 0) {
+      problems.push('app.json: tabBar 页面 ' + item.pagePath + ' 不在 pages 列表里');
+    }
+    ['iconPath', 'selectedIconPath'].forEach(function (key) {
+      if (!item[key]) return;
+      if (!fs.existsSync(path.join(ROOT, item[key]))) {
+        problems.push('app.json: tabBar ' + key + ' 文件不存在 ' + item[key]);
+      }
+    });
+  });
+})();
+
 console.log('检查 WXML 文件数: ' + wxmlFiles.length);
 console.log('\n--- 错误 (' + problems.length + ') ---');
 console.log(problems.length ? problems.join('\n') : '(无)');
 console.log('\n--- 警告 (' + warnings.length + ') ---');
 console.log(warnings.length ? warnings.join('\n') : '(无)');
-process.exit(problems.length ? 1 : 0);
+// 0 错误 0 警告才算过；确实不想被警告拦住时设 LINT_ALLOW_WARNINGS=1
+var allowWarnings = process.env.LINT_ALLOW_WARNINGS === '1';
+process.exit(problems.length || (!allowWarnings && warnings.length) ? 1 : 0);

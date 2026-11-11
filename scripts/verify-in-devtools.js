@@ -107,6 +107,9 @@ class Client {
   try { await client.send('App.enableLog'); } catch (e) { console.log('enableLog 失败(忽略): ' + e.message); }
 
   const problems = [];
+  // 截图先攒在内存里，run 完统一落盘：
+  // 往项目目录写文件会触发 IDE 的 onFileChange 重编译，页面当场被销毁，截出来是空白图
+  const shots = [];
 
   for (const item of PAGES) {
     const label = item.path;
@@ -147,9 +150,9 @@ class Client {
     let file = null;
     try {
       const shot = await client.screenshot();
+      shots.push({ name: item.name + '.png', data: Buffer.from(shot.data, 'base64') });
       file = path.join(OUT, item.name + '.png');
-      fs.writeFileSync(file, Buffer.from(shot.data, 'base64'));
-      const size = fs.statSync(file).size;
+      const size = shots[shots.length - 1].data.length;
       if (!size) problems.push(label + ' 截图为空');
       console.log('OK  ' + label + '  截图 ' + size + ' bytes');
     } catch (err) {
@@ -172,6 +175,11 @@ class Client {
       }));
     }
   }
+
+  // 统一落盘
+  shots.forEach(function (s) {
+    fs.writeFileSync(path.join(OUT, s.name), s.data);
+  });
 
   console.log('\n--- 运行时事件 (' + client.events.length + ' 条) ---');
   client.events.slice(0, 40).forEach(function (e) {

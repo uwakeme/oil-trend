@@ -89,10 +89,10 @@ async function getLatestNotice() {
 }
 
 async function getNotices(filter) {
-  var where = {};
-  if (filter === 'official' || filter === 'forecast') where = { kind: filter };
-  var res = await db.collection(C.notices).orderBy('executeAt', 'desc').limit(50).get();
+  var res = await db.collection(C.notices).orderBy('executeAt', 'desc').limit(100).get();
   var list = res.data || [];
+  // 只有人工复核通过的通知才对外可见
+  list = list.filter(function (n) { return n.reviewStatus === 'approved'; });
   return filter && filter !== 'all' ? list.filter(function (n) { return n.kind === filter; }) : list;
 }
 
@@ -104,8 +104,20 @@ async function getAdjustEvents() {
 async function getHistory(regionCode, fuelId, fromDate) {
   var where = { regionCode: regionCode, fuelId: fuelId };
   if (fromDate) where.date = db.command.gte(fromDate);
-  var res = await db.collection(C.history).where(where).orderBy('date', 'asc').limit(400).get();
-  return res.data || [];
+  // 单次 get() 有平台上限，分页取全，
+  // 否则 orderBy('date','asc') 只会拿到最早的一批，走势终点不是当前价。
+  var all = [];
+  var skip = 0;
+  var PAGE = 100;
+  while (true) {
+    var res = await db.collection(C.history).where(where).orderBy('date', 'asc').skip(skip).limit(PAGE).get();
+    var batch = res.data || [];
+    all = all.concat(batch);
+    if (batch.length < PAGE) break;
+    skip += PAGE;
+    if (skip > 5000) break;
+  }
+  return all;
 }
 
 /* ---------------- 各 action ---------------- */
@@ -129,7 +141,7 @@ async function actionRegions() {
   return ok({ regions: regions });
 }
 
-function buildWindow(windowDoc, fuelId) {
+function buildWindow(windowDoc) {
   if (!windowDoc) {
     return {
       date: todayStr(),
@@ -154,6 +166,32 @@ function buildWindow(windowDoc, fuelId) {
     basis: windowDoc.basis || '',
     forecast: windowDoc.forecast || {}
   };
+}
+
+/**
+ * 一次取回某个地区全部油品的历史价，按油品分组。
+ * 之前每个油品查一次，4 个油品就是 4 次串行查询。
+ */
+async function getHistoryByRegion(regionCode, fromDate) {
+  var where = { regionCode: regionCode };
+  if (fromDate) where.date = db.command.gte(fromDate);
+  var all = [];
+  var skip = 0;
+  var PAGE = 100;
+  while (true) {
+    var res = await db.collection(C.history).where(where).orderBy('date', 'asc').skip(skip).limit(PAGE).get();
+    var batch = res.data || [];
+    all = all.concat(batch);
+    if (batch.length < PAGE) break;
+    skip += PAGE;
+    if (skip > 5000) break;
+  }
+  var byFuel = {};
+  all.forEach(function (h) {
+    if (!byFuel[h.fuelId]) byFuel[h.fuelId] = [];
+    byFuel[h.fuelId].push(h);
+  });
+  return byFuel;
 }
 
 async function actionHome(payload) {
@@ -195,10 +233,12 @@ async function actionHome(payload) {
   var win = await getWindow();
   var notice = await getLatestNotice();
 
+  // 一次查完这个地区全部油品的历史价，再按油品分组
+  var historyByFuel = await getHistoryByRegion(regionCode);
   var trend30 = {};
   for (var i = 0; i < shared.FUELS.length; i++) {
     var f = shared.FUELS[i];
-    var fh = await getHistory(regionCode, f.id);
+    var fh = historyByFuel[f.id] || [];
     trend30[f.id] = {
       points: fh.filter(function (h) { return h.date >= from30; }).map(function (h) {
         return { date: h.date, value: h.price };
@@ -216,7 +256,7 @@ async function actionHome(payload) {
     region: { code: region.code, name: region.name, city: region.city, fullName: region.name + ' · ' + region.city },
     prices: priceList,
     updatedAt: prices.length ? prices[0].updatedAt : new Date().toISOString(),
-    window: buildWindow(win, fuelId),
+    window: buildWindow(win),
     trend30: trend30,
     latestNotice: notice ? {
       id: notice._id,
@@ -301,9 +341,10 @@ async function actionNotices(payload) {
 
   return ok({
     region: { code: region.code, fullName: region.name + ' · ' + region.city },
-    window: buildWindow(win, fuelId),
+    window: buildWindow(win),
     sync: {
-      status: lastRun ? (lastRun.needsReview && lastRun.needsReview.length ? 'pending' : (lastRun.status || 'ok')) : 'ok',
+      // 没有采集记录 / 真实来源全关时是 idle，不能报「同步正常」
+      status: lastRun ? (lastRun.needsReview && lastRun.needsReview.length ? 'pending' : (lastRun.status || 'idle')) : 'idle',
       lastCheckedAt: lastRun ? lastRun.finishedAt : '',
       sourceName: lastRun ? lastRun.sourceName : '服务端定时采集',
       sourceUrl: ''

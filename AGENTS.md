@@ -13,6 +13,7 @@
 
 ```bash
 node scripts/lint-wxml.js          # 静态检查（有错误时 exit 1），改完必跑
+node scripts/check-modules.js      # 运行时模块加载冒烟测试，挡住「删了函数体留着引用」这类 ReferenceError
 node scripts/verify-data.js        # 数据层自检，打印算出的价格/走势/通知/行情
 node scripts/sync-cloud-shared.js  # 把 _shared/shared.js 同步到三个云函数，部署前必跑
 node scripts/build-icons.js        # 由 design/ 的 SVG 精灵重生成 assets/icons/*.png（需本机 Chrome）
@@ -23,7 +24,8 @@ node scripts/preview-qr.js <appid> # 上传预览包并出扫码图（必须正�
 
 ```bash
 npm i --prefix .tooling miniprogram-automator ws
-node scripts/verify-in-devtools.js
+node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获
+node scripts/export-canvas.js       # 导出画布 PNG（截图流程用，脚本结束自动还原组件源码）
 ```
 
 ## 目录结构
@@ -42,8 +44,9 @@ node scripts/verify-in-devtools.js
 ## 代码风格
 
 - 2 空格缩进，单引号，分号结尾
-- **运行时代码**（`pages/` `utils/` `data/` `components/` `cloudfunctions/`）用 ES5 写法：
-  `var` + `function () {}`，不用箭头函数、`const/let`、模板字符串
+- **运行时代码**（`pages/` `utils/` `data/` `components/` `cloudfunctions/`）用 ES6 写法：
+  `const/let`、箭头函数、模板字符串都可以。
+  但**不要用可选链 `?.`、空值合并 `??`** —— 小程序运行时对高版本语法支持不稳
 - **脚本代码**（`scripts/`）可用现代语法（`const/let`、箭头函数）
 - 注释用中文，文件头用 `/** */` 说明该文件的职责与关键约定
 - 视觉一律走 `styles/tokens.wxss` 的 CSS 变量，页面根节点加 `class="tk"` 继承
@@ -77,7 +80,7 @@ node scripts/verify-in-devtools.js
 
 ## 验证要求
 
-- 改完页面/WXML/组件，**必须**跑 `node scripts/lint-wxml.js`（0 错误 0 警告才算过）
+- 改完页面/WXML/组件，**必须**跑 `node scripts/lint-wxml.js`（0 错误 0 警告才算过）和 `node scripts/check-modules.js`（模块加载期异常静态检查查不出来）
 - 改数据层或算法，跑 `node scripts/verify-data.js` 对照输出值
 - 改渲染结果，在开发者工具模拟器里逐页核对，别只信静态检查 —— 上面那批 bug 静态检查查不出来
 - 截图类产物落在 `docs/screenshots/`，临时导出的 canvas 代码不要留在仓库里
@@ -101,5 +104,6 @@ node scripts/verify-in-devtools.js
 
 五个页面与三个云函数已写完并逐页验证过，当前跑的是**内置演示数据集**，真实数据源尚未接入。
 订阅消息链路还没走通到底（需正式 AppID + 模板 ID），未配置时「提醒」页要明说未配置，不假装授权成功。
+小程序图标已定为 **8-bit 像素风**：`assets/app-icon/app-icon.png`（512×512，公众平台后台上传用），5 套备选方案与提示词留在 `design/app-icon-candidates/`。tabBar 导航图标仍是细描边 SVG 风格，与像素风**尚未统一**。
 
 项目仍在开发阶段：**历史/存量数据引发的问题不修**，只登记一行；影响当前行为的代码缺陷照修。

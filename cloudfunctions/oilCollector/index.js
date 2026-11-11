@@ -118,8 +118,13 @@ async function saveNotice(source, parsed) {
       title: parsed.title,
       publishedAt: nowIso(),
       executeAt: parsed.executeAt || '',
-      changes: { '92': parsed.delta, '95': parsed.delta, '98': parsed.delta, '0': parsed.delta },
-      summary: '来源正文解析结果，正式发布前需人工复核。',
+      // 各油品幅度本来就不同，不能把同一个值复制给四个油品
+      changes: parsed.deltas || { '92': parsed.delta, '95': parsed.delta, '98': parsed.delta, '0': parsed.delta },
+      // 采集结果默认待复核，复核通过才对外可见
+      reviewStatus: parsed.reviewStatus || 'pending',
+      summary: parsed.perFuel
+        ? '来源正文解析结果，待人工复核后对外发布。'
+        : '来源正文只解析出总幅度，各油品幅度待人工核对。',
       prices: {},
       source: { name: source.name, url: source.url, publishedAt: nowIso() },
       rawSnapshot: parsed.raw || '',
@@ -158,7 +163,12 @@ async function saveMarket(source, parsed) {
 
 /* ---------------- 演示数据写入（打通云端链路用） ---------------- */
 
-async function seed() {
+async function seed(event) {
+  // 误触发 seed 会清库。必须显式确认，而且只清演示数据，
+  // 不碰采集器写进来的真实数据。
+  if (!event || event.confirm !== 'seed') {
+    return { ok: false, message: 'seed 需要显式确认：传 {"action":"seed","confirm":"seed"}' };
+  }
   var today = todayStr();
 
   // 当前价
@@ -189,21 +199,22 @@ async function seed() {
           regionCode: region.code,
           fuelId: fuel.id,
           date: level.date,
-          price: shared.round2(level.price + region.offset)
+          price: shared.round2(level.price + region.offset),
+          source: 'seed'
         });
       });
     });
   });
-  await db.collection(C.history).remove({});
+  await db.collection(C.history).where({ source: 'seed' }).remove({});
   for (var i = 0; i < historyDocs.length; i += 20) {
     await db.collection(C.history).add({ data: historyDocs.slice(i, i + 20) });
   }
 
   // 调价节点
   var eventDocs = shared.ADJUSTMENTS.map(function (e) {
-    return { date: e.date, title: e.title, deltas: e.deltas, official: true };
+    return { date: e.date, title: e.title, deltas: e.deltas, official: true, source: 'seed' };
   });
-  await db.collection(C.events).remove({});
+  await db.collection(C.events).where({ source: 'seed' }).remove({});
   await db.collection(C.events).add({ data: eventDocs });
 
   // 通知
@@ -218,6 +229,7 @@ async function seed() {
       publishedAt: e.date + 'T18:00:00+08:00',
       executeAt: e.date + 'T24:00:00+08:00',
       changes: e.deltas,
+      reviewStatus: 'approved',
       summary: '演示数据：正式版本展示发布机构、发布时间与原文链接。',
       prices: {},
       source: { name: '国家发展改革委价格监测中心（演示）', url: '', publishedAt: e.date + 'T18:00:00+08:00' },
@@ -229,7 +241,7 @@ async function seed() {
   await db.collection(C.notices).add({ data: noticeDocs });
 
   // 调价窗口
-  await db.collection(C.windows).remove({});
+  await db.collection(C.windows).where({ source: 'seed' }).remove({});
   await db.collection(C.windows).add({
     data: {
       date: today,
@@ -238,19 +250,20 @@ async function seed() {
       forecast: { '92': -0.12, '95': -0.13, '98': -0.14, '0': -0.11 },
       isOfficial: false,
       basis: '演示窗口数据',
+      source: 'seed',
       updatedAt: nowIso()
     }
   });
 
   // 国际行情
-  await db.collection(C.markets).remove({});
+  await db.collection(C.markets).where({ source: 'seed' }).remove({});
   await db.collection(C.markets).add({
     data: {
       symbol: 'brent', name: '布伦特原油', code: 'BRENT CRUDE · USD / BBL', label: 'BRENT',
       price: 78.42, changeAmount: 0.64, changePercent: 0.82,
       open: 77.81, prevClose: 77.78, high: 78.67, low: 77.56,
       quoteTime: today + ' 15:42:08', delayed: true, delayMinutes: 12,
-      series: [], updatedAt: nowIso()
+      series: [], source: 'seed', updatedAt: nowIso()
     }
   });
   await db.collection(C.markets).add({
@@ -259,7 +272,7 @@ async function seed() {
       price: 74.16, changeAmount: -0.26, changePercent: -0.35,
       open: 74.48, prevClose: 74.42, high: 74.73, low: 73.92,
       quoteTime: today + ' 15:42:08', delayed: true, delayMinutes: 12,
-      series: [], updatedAt: nowIso()
+      series: [], source: 'seed', updatedAt: nowIso()
     }
   });
 
@@ -286,10 +299,13 @@ async function collect() {
     }
   }
 
+  // 真实来源一个都没启用时，状态是 idle —— 不能报「同步正常」，
+  // 否则前端会让人以为后台在真实采集。
+  var allSkipped = results.length > 0 && results.every(function (r) { return r.status === 'skipped'; });
   var run = {
     startedAt: startedAt,
     finishedAt: nowIso(),
-    status: needsReview.length ? 'partial' : 'ok',
+    status: allSkipped ? 'idle' : (needsReview.length ? 'partial' : 'ok'),
     sourceName: '服务端定时采集',
     results: results,
     needsReview: needsReview
@@ -303,7 +319,7 @@ exports.main = async (event) => {
   var action = (event && event.action) || 'collect';
   try {
     if (action === 'seed') {
-      var seedResult = await seed();
+      var seedResult = await seed(event);
       return { ok: true, data: seedResult.data };
     }
     var result = await collect();

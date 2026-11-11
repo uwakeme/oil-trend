@@ -15,17 +15,20 @@ function parseUtc(dateStr) {
   return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
 
-function todayStart() {
-  var d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
+/**
+ * 把某个时刻换算成「本地日历日」的 UTC 零点。
+ * 用 UTC+8 算和用 UTC+13 算，结果都应该是同一个日历日差，
+ * 不能拿本地零点去减 UTC 零点（那会随时区偏一天）。
+ */
+function localDayNumber(date) {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 /** 相对锚点的天数偏移（今天为 0） */
 function offsetDays() {
   var anchor = parseUtc(ANCHOR);
   if (anchor === null) return 0;
-  return Math.round((todayStart() - anchor) / 86400000);
+  return Math.round((localDayNumber(new Date()) - anchor) / 86400000);
 }
 
 /** 平移一个 YYYY-MM-DD 日期 */

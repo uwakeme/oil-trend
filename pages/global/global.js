@@ -26,17 +26,38 @@ Page({
   },
 
   onShow() {
+    // 行情带时间戳，回来太久了就重新取一次，避免看到停住的价格
+    if (!this._loadedAt || Date.now() - this._loadedAt > 60000) {
+      this.load();
+    }
+  },
+
+  onPullDownRefresh() {
+    this.load().then(function () {
+      wx.stopPullDownRefresh();
+    });
   },
 
   load() {
     var self = this;
+    var symbol = this.data.symbol;
+    var period = this.data.period;
     this.setData({ loading: true, loadError: '' });
-    Promise.all([
-      api.getMarket(this.data.symbol, this.data.period),
-      api.getMarket('brent', this.data.period),
-      api.getMarket('wti', this.data.period)
-    ]).then(function (res) {
-      self.applyMarket(res[0], res[1], res[2]);
+
+    // 选中的品种可能正好是 brent 或 wti，去重后再并发，省掉一次重复请求
+    var wanted = {};
+    wanted[symbol] = true;
+    wanted.brent = true;
+    wanted.wti = true;
+    var symbols = Object.keys(wanted);
+
+    return Promise.all(symbols.map(function (s) {
+      return api.getMarket(s, period);
+    })).then(function (res) {
+      var map = {};
+      symbols.forEach(function (s, i) { map[s] = res[i]; });
+      self._loadedAt = Date.now();
+      self.applyMarket(map[symbol], map.brent, map.wti);
     }).catch(function () {
       self.setData({ loading: false, loadError: '行情数据加载失败，请稍后重试' });
     });
