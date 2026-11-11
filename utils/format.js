@@ -66,6 +66,25 @@ function fullDate(dateStr) {
   return parts[0] + ' 年 ' + Number(parts[1]) + ' 月 ' + Number(parts[2]) + ' 日';
 }
 
+/**
+ * 采集同步状态 → 展示文案与样式。
+ *
+ * 单一真源：云端和演示端都可能新增状态，
+ * 这里漏了映射，前端就会掉进「其他」分支显示成「同步异常」。
+ */
+var SYNC_STATUS_META = {
+  ok:      { text: '自动同步正常',       style: '' },
+  idle:    { text: '真实数据源尚未接入', style: 'muted' },
+  pending: { text: '等待人工核对',       style: 'warn' },
+  partial: { text: '部分来源采集失败',   style: 'warn' },
+  error:   { text: '采集出错',           style: 'error' }
+};
+
+/** 同步状态的展示信息；未知状态给中性文案，不要报异常 */
+function syncStatus(status) {
+  return SYNC_STATUS_META[status] || { text: '同步状态未知', style: 'muted' };
+}
+
 /** 倒计时文案 */
 function countdown(daysLeft) {
   var n = Number(daysLeft);
@@ -85,5 +104,7 @@ module.exports = {
   dateOnly: dateOnly,
   dateTime: dateTime,
   fullDate: fullDate,
-  countdown: countdown
+  countdown: countdown,
+  syncStatus: syncStatus,
+  SYNC_STATUS_META: SYNC_STATUS_META
 };

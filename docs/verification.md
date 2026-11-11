@@ -72,6 +72,7 @@ node scripts/verify-in-devtools.js
 | 订阅卡图标不显示 | 白方块 | 动态 src 的值漏了 `.png` 后缀 |
 | 自定义 tabBar 点不动 | switchTab 拿不到 url | `wx:for` 里写 `{{path}}`，应写 `{{item.path}}` |
 | 五个页面同时白屏 | `Page.getData` 报 page destroyed | `utils/api.js` 里删了 `saveAlertHistory` 的函数体却忘了删 `module.exports` 的同名导出项，模块一被 require 就抛 ReferenceError。`node --check` 只查语法查不出来，靠 `scripts/check-modules.js` 兜住 |
+| 云端也是同一个坑 | 部署后才炸 | 云函数原先没有加载期门禁，`scripts/check-modules.js` 现在会 stub 掉 `wx-server-sdk` 再加载三个云函数入口 |
 
 前两个是模拟器才会暴露的问题，静态检查查不出来。
 `scripts/lint-wxml.js` 后来补了「标签必须是 WXML 内置标签或已声明的自定义组件」这条规则，

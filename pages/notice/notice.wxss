@@ -113,6 +113,10 @@
   border-radius: 50%;
 }
 
+.sync-status.muted::before {
+  background: var(--muted);
+}
+
 .sync-status.warn::before {
   background: var(--amber);
 }

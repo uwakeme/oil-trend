@@ -82,4 +82,117 @@ function buildSeries(seed, open, price, count) {
   return values;
 }
 
-module.exports = { MARKETS, buildSeries };
+/**
+ * 行情周期配置
+ *
+ * stepMinutes：相邻两个点的真实间隔，1 日按 15 分钟、其余按 1 天。
+ * 以前不管切哪个周期都按分钟间隔造点，切周期只是点数变了，曲线没区别。
+ */
+const MARKET_PERIODS = {
+  '1d': { label: '1日', points: 28, stepMinutes: 15,   fromOpen: true, axis: 'time' },
+  '1w': { label: '1周', points: 7,  stepMinutes: 1440, ratio: 0.982, axis: 'date' },
+  '1m': { label: '1月', points: 30, stepMinutes: 1440, ratio: 0.958, axis: 'date' },
+  '3m': { label: '3月', points: 90, stepMinutes: 1440, ratio: 0.914, axis: 'date' }
+};
+
+/** 轴标签：日内给 HH:MM，跨日给 MM-DD */
+function marketAxisLabel(dateStr, mode) {
+  if (mode === 'time') return String(dateStr).slice(11, 16);
+  return String(dateStr).slice(5, 10);
+}
+
+function round2(v) {
+  return Math.round(v * 100) / 100;
+}
+
+function pad2(n) {
+  return n < 10 ? '0' + n : '' + n;
+}
+
+/**
+ * 某个时刻在 UTC+8 下的日历字段。
+ *
+ * 小程序端在东八区、云函数可能在 UTC，两端各按本地时间打时间戳会错位，
+ * 这里统一按 UTC+8 取字段。
+ */
+function utc8Parts(date) {
+  var t = new Date(date.getTime() + 8 * 3600000);
+  return {
+    year: t.getUTCFullYear(),
+    month: t.getUTCMonth() + 1,
+    day: t.getUTCDate(),
+    hour: t.getUTCHours(),
+    minute: t.getUTCMinutes(),
+    second: t.getUTCSeconds()
+  };
+}
+
+/**
+ * 组装一个品种的完整行情载荷。
+ *
+ * 小程序端和云函数端共用这一份实现（云端副本由 scripts/sync-cloud-shared.js
+ * 从本文件内联生成），避免两端再次分叉。
+ */
+function buildMarketPayload(symbol, period) {
+  var key = MARKETS[symbol] ? symbol : 'brent';
+  var m = MARKETS[key];
+  var conf = MARKET_PERIODS[period] || MARKET_PERIODS['1d'];
+
+  var start = conf.fromOpen ? m.open : round2(m.price * conf.ratio);
+  var raw = buildSeries(m.seed + key.length + period.length, start, m.price, conf.points);
+  var now = new Date();
+  var quoteTime = new Date(now.getTime() - (m.quoteMinutesAgo || 0) * 60000);
+
+  // 图表用的完整日期时间：带年份，横轴才能按真实时间比例排
+  function fullStamp(d) {
+    var p = utc8Parts(d);
+    return p.year + '-' + pad2(p.month) + '-' + pad2(p.day) + ' ' +
+      pad2(p.hour) + ':' + pad2(p.minute) + ':' + pad2(p.second);
+  }
+  // 界面展示用的短格式
+  function shortStamp(d) {
+    var p = utc8Parts(d);
+    return pad2(p.month) + '-' + pad2(p.day) + ' ' +
+      pad2(p.hour) + ':' + pad2(p.minute) + ':' + pad2(p.second);
+  }
+
+  var step = (conf.stepMinutes || 15) * 60000;
+  var points = raw.map(function (v, i) {
+    var d = new Date(quoteTime.getTime() - (conf.points - 1 - i) * step);
+    return { date: fullStamp(d), value: Number(v.toFixed(2)) };
+  });
+
+  return {
+    symbol: key,
+    name: m.name,
+    code: m.code,
+    label: m.label,
+    price: m.price,
+    changeAmount: m.changeAmount,
+    changePercent: m.changePercent,
+    direction: m.changeAmount < 0 ? 'down' : 'up',
+    open: m.open,
+    prevClose: m.prevClose,
+    high: m.high,
+    low: m.low,
+    unit: '美元/桶',
+    quoteTime: shortStamp(quoteTime),
+    delayed: !!m.delayed,
+    delayMinutes: m.quoteMinutesAgo || 0,
+    period: conf.label,
+    points: points,
+    axis: [
+      points[0] ? marketAxisLabel(points[0].date, conf.axis) : '',
+      points[Math.floor(points.length / 2)] ? marketAxisLabel(points[Math.floor(points.length / 2)].date, conf.axis) : '',
+      points[points.length - 1] ? marketAxisLabel(points[points.length - 1].date, conf.axis) : ''
+    ]
+  };
+}
+
+module.exports = {
+  MARKETS,
+  buildSeries,
+  MARKET_PERIODS,
+  marketAxisLabel,
+  buildMarketPayload
+};

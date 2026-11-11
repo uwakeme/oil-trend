@@ -80,8 +80,10 @@ async function getWindow() {
 }
 
 async function getLatestNotice() {
+  // 只有人工复核通过的通知才对外可见。
+  // 采集器写进来的是 pending，没复核就发到首页等于把猜测值发布成正式结果。
   var res = await db.collection(C.notices)
-    .where({ kind: 'official' })
+    .where({ kind: 'official', reviewStatus: 'approved' })
     .orderBy('executeAt', 'desc')
     .limit(1)
     .get();
@@ -89,11 +91,22 @@ async function getLatestNotice() {
 }
 
 async function getNotices(filter) {
-  var res = await db.collection(C.notices).orderBy('executeAt', 'desc').limit(100).get();
-  var list = res.data || [];
-  // 只有人工复核通过的通知才对外可见
-  list = list.filter(function (n) { return n.reviewStatus === 'approved'; });
-  return filter && filter !== 'all' ? list.filter(function (n) { return n.kind === filter; }) : list;
+  // 过滤条件要下推到 where，不能先 limit 再在内存里筛 ——
+  // pending 公告多了会把 approved 挤出前 100 条，列表就不完整了。
+  var where = { reviewStatus: 'approved' };
+  if (filter && filter !== 'all') where.kind = filter;
+  var all = [];
+  var skip = 0;
+  var PAGE = 100;
+  while (true) {
+    var res = await db.collection(C.notices).where(where).orderBy('executeAt', 'desc').skip(skip).limit(PAGE).get();
+    var batch = res.data || [];
+    all = all.concat(batch);
+    if (batch.length < PAGE) break;
+    skip += PAGE;
+    if (skip > 2000) break;
+  }
+  return all;
 }
 
 async function getAdjustEvents() {
@@ -196,7 +209,8 @@ async function getHistoryByRegion(regionCode, fromDate) {
 
 async function actionHome(payload) {
   var regionCode = payload.regionCode || shared.DEFAULT_REGION_CODE;
-  var fuelId = payload.fuelId || '92';
+  // fuelId 不在这里选：页面自己从 prices / trend30 / forecast 里挑，
+  // 云端没必要再收一遍
   var region = shared.regionByCode(regionCode);
 
   var prices = await getPrices(regionCode);
@@ -217,12 +231,8 @@ async function actionHome(payload) {
       shared.FUELS.findIndex(function (f) { return f.id === b.id; });
   });
 
-  var history = await getHistory(regionCode, fuelId);
   var today = todayStr();
   var from30 = new Date(new Date(today + 'T00:00:00Z').getTime() - 29 * 86400000).toISOString().slice(0, 10);
-  var points30 = history.filter(function (h) { return h.date >= from30; }).map(function (h) {
-    return { date: h.date, value: h.price };
-  });
 
   var labels = [
     from30.slice(5).replace('-', '月') + '日',
@@ -233,8 +243,10 @@ async function actionHome(payload) {
   var win = await getWindow();
   var notice = await getLatestNotice();
 
-  // 一次查完这个地区全部油品的历史价，再按油品分组
-  var historyByFuel = await getHistoryByRegion(regionCode);
+  // 一次查完这个地区全部油品的历史价，再按油品分组。
+  // 只需要近 30 天，传 fromDate 把范围收窄 —— 之前不分页取全量，
+  // 首页取数比修复前更重。
+  var historyByFuel = await getHistoryByRegion(regionCode, from30);
   var trend30 = {};
   for (var i = 0; i < shared.FUELS.length; i++) {
     var f = shared.FUELS[i];
@@ -261,9 +273,12 @@ async function actionHome(payload) {
     latestNotice: notice ? {
       id: notice._id,
       title: notice.title,
+      // publishedAt / source 缺了，首页「发布于」和「来源与原文」就是空的
+      publishedAt: notice.publishedAt || '',
       executeAt: notice.executeAt,
-      changes: changes
-    } : { id: '', title: '暂无通知', executeAt: '', changes: changes },
+      changes: changes,
+      source: notice.source || { name: '', url: '' }
+    } : { id: '', title: '暂无通知', publishedAt: '', executeAt: '', changes: changes, source: { name: '', url: '' } },
     source: { mode: 'cloud', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
   });
 }
@@ -297,6 +312,10 @@ async function actionTrend(payload) {
   var priceMap = {};
   prices.forEach(function (p) { priceMap[p.fuelId] = p.price; });
 
+  // 调价当天的价格：历史节点不能都显示当前价，否则一屏节点看着像同一条
+  var priceByDate = {};
+  history.forEach(function (h) { priceByDate[h.date] = h.price; });
+
   return ok({
     region: { code: region.code, fullName: region.name + ' · ' + region.city },
     fuel: { id: fuelId, name: (shared.FUELS.filter(function (f) { return f.id === fuelId; })[0] || {}).name || fuelId },
@@ -319,7 +338,7 @@ async function actionTrend(payload) {
         title: e.title,
         amount: (e.deltas || {})[fuelId] || 0,
         direction: ((e.deltas || {})[fuelId] || 0) < 0 ? 'down' : 'up',
-        priceAfter: priceMap[fuelId]
+        priceAfter: priceByDate[e.date] !== undefined ? priceByDate[e.date] : priceMap[fuelId]
       };
     }),
     source: { mode: 'cloud', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
@@ -366,11 +385,51 @@ async function actionNotices(payload) {
   });
 }
 
+/** 行情周期对应的天数跨度 */
+var MARKET_PERIOD_DAYS = { '1d': 1, '1w': 7, '1m': 30, '3m': 90 };
+
+/** 'YYYY-MM-DD HH:mm:ss' → 时间戳；解析不出来返回 null */
+function seriesTime(dateStr) {
+  var m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+}
+
+/**
+ * 按周期裁剪曲线。
+ * 之前 payload.period 只是原样回显，切 1日/1周/1月/3月 拿到的永远是同一条线。
+ */
+function sliceSeries(series, period) {
+  var list = series || [];
+  if (!list.length) return [];
+  var days = MARKET_PERIOD_DAYS[period] || 1;
+  var times = list.map(seriesTime);
+  var last = null;
+  for (var i = times.length - 1; i >= 0; i--) {
+    if (times[i] !== null) { last = times[i]; break; }
+  }
+  if (last === null) return list.slice(-1);
+  var from = last - days * 86400000;
+  var out = [];
+  for (var j = 0; j < list.length; j++) {
+    if (times[j] === null || times[j] >= from) out.push(list[j]);
+  }
+  return out.length ? out : list.slice(-1);
+}
+
 async function actionMarket(payload) {
   var symbol = payload.symbol === 'wti' ? 'wti' : 'brent';
+  var period = payload.period || '1d';
   var res = await db.collection(C.markets).where({ symbol: symbol }).get();
   var doc = (res.data && res.data[0]) || null;
   if (!doc) return fail('暂无行情数据', 'NO_MARKET');
+
+  var points = sliceSeries(doc.series, period);
+  // 轴标签要短格式：日内 HH:MM、跨日 MM-DD，
+  // 直接返回完整日期时间串会把 global.wxml 的布局撑爆。
+  var axisMode = period === '1d' ? 'time' : 'date';
+  var periodConf = shared.MARKET_PERIODS[period] || shared.MARKET_PERIODS['1d'];
+
   return ok({
     symbol: doc.symbol,
     name: doc.name,
@@ -388,12 +447,12 @@ async function actionMarket(payload) {
     quoteTime: doc.quoteTime,
     delayed: !!doc.delayed,
     delayMinutes: doc.delayMinutes || 0,
-    period: (payload.period || '1d'),
-    points: doc.series || [],
-    axis: (doc.series || []).length ? [
-      doc.series[0].date,
-      doc.series[Math.floor(doc.series.length / 2)].date,
-      doc.series[doc.series.length - 1].date
+    period: periodConf.label,
+    points: points,
+    axis: points.length ? [
+      shared.marketAxisLabel(points[0].date, axisMode),
+      shared.marketAxisLabel(points[Math.floor(points.length / 2)].date, axisMode),
+      shared.marketAxisLabel(points[points.length - 1].date, axisMode)
     ] : [],
     source: { mode: 'cloud', name: '服务端定时采集', note: '数据来自服务端采集的行情接口' }
   });

@@ -255,26 +255,34 @@ async function seed(event) {
     }
   });
 
-  // 国际行情
+  // 国际行情：用与演示源同一份实现生成，
+  // 之前 seed 写的是空 series，云端模式下国际行情图整个是空的。
   await db.collection(C.markets).where({ source: 'seed' }).remove({});
-  await db.collection(C.markets).add({
-    data: {
-      symbol: 'brent', name: '布伦特原油', code: 'BRENT CRUDE · USD / BBL', label: 'BRENT',
-      price: 78.42, changeAmount: 0.64, changePercent: 0.82,
-      open: 77.81, prevClose: 77.78, high: 78.67, low: 77.56,
-      quoteTime: today + ' 15:42:08', delayed: true, delayMinutes: 12,
-      series: [], source: 'seed', updatedAt: nowIso()
-    }
+  var marketDocs = ['brent', 'wti'].map(function (symbol) {
+    var m = shared.buildMarketPayload(symbol, '1d');
+    return {
+      symbol: m.symbol,
+      name: m.name,
+      code: m.code,
+      label: m.label,
+      price: m.price,
+      changeAmount: m.changeAmount,
+      changePercent: m.changePercent,
+      open: m.open,
+      prevClose: m.prevClose,
+      high: m.high,
+      low: m.low,
+      quoteTime: m.quoteTime,
+      delayed: m.delayed,
+      delayMinutes: m.delayMinutes,
+      series: m.points,
+      source: 'seed',
+      updatedAt: nowIso()
+    };
   });
-  await db.collection(C.markets).add({
-    data: {
-      symbol: 'wti', name: '纽约原油', code: 'WTI CRUDE · USD / BBL', label: 'WTI',
-      price: 74.16, changeAmount: -0.26, changePercent: -0.35,
-      open: 74.48, prevClose: 74.42, high: 74.73, low: 73.92,
-      quoteTime: today + ' 15:42:08', delayed: true, delayMinutes: 12,
-      series: [], source: 'seed', updatedAt: nowIso()
-    }
-  });
+  for (var mi = 0; mi < marketDocs.length; mi++) {
+    await db.collection(C.markets).add({ data: marketDocs[mi] });
+  }
 
   return { ok: true, data: { seeded: true, prices: priceDocs.length, history: historyDocs.length } };
 }

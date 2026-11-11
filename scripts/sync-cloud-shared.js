@@ -21,6 +21,11 @@ const fuels = require(path.join(ROOT, 'data', 'fuels.js'));
 const config = require(path.join(ROOT, 'config', 'index.js'));
 
 const ANCHOR = config.demoAnchorDate || '2026-11-10';
+
+// 把 data/markets.js 的源码整份内联进云端副本：
+// 行情载荷的组装逻辑两端共用同一份，避免再次分叉。
+const marketsSource = fs.readFileSync(path.join(ROOT, 'data', 'markets.js'), 'utf8')
+  .replace(/\nmodule\.exports[\s\S]*$/, '\n');
 const SHARED_DIR = path.join(ROOT, 'cloudfunctions', '_shared');
 const TARGET = path.join(SHARED_DIR, 'shared.js');
 
@@ -40,6 +45,9 @@ const template = [
   ' * 改了上面任意一个文件，都要重新跑 scripts/sync-cloud-shared.js。',
   ' */',
   '',
+  '/* ---------- 行情（来自 data/markets.js，两端共用同一份实现） ---------- */',
+  '',
+  marketsSource,
   'var DEMO_ANCHOR = ' + JSON.stringify(ANCHOR) + ';',
   '',
   'var FUELS = ' + j(fuels.FUELS) + ';',
@@ -61,7 +69,10 @@ const template = [
   '}',
   '',
   'function localDayNumber(date) {',
-  '  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());',
+  '  // 与小程序端 utils/demo-clock.js 一致：统一按 UTC+8 日历日算，',
+  '  // 否则客户端在东八区、云函数在 UTC 时，凌晨会差一天。',
+  '  var t = new Date(date.getTime() + 8 * 3600000);',
+  '  return Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate());',
   '}',
   '',
   'function offsetDays() {',
@@ -180,6 +191,11 @@ const template = [
   '  currentPrice: currentPrice,',
   '  allPrices: allPrices,',
   '  dedupKey: dedupKey,',
+  '  MARKETS: MARKETS,',
+  '  buildSeries: buildSeries,',
+  '  MARKET_PERIODS: MARKET_PERIODS,',
+  '  marketAxisLabel: marketAxisLabel,',
+  '  buildMarketPayload: buildMarketPayload,',
   '  clock: { today: today, shiftDate: shiftDate, daysUntil: daysUntil, offsetDays: offsetDays }',
   '};'
 ].join('\n');
@@ -229,6 +245,33 @@ regions.REGIONS.forEach(function (region) {
   });
 });
 if (mismatches) fail(mismatches + ' 组价格不一致');
+
+// 行情载荷：两端必须同构同值（时间戳按秒走，比对时只比格式不比具体时刻）
+var marketMismatch = 0;
+['brent', 'wti'].forEach(function (symbol) {
+  ['1d', '1w', '1m', '3m'].forEach(function (period) {
+    var mini = demo.getMarket(symbol, period);
+    var cloud = shared.buildMarketPayload(symbol, period);
+    var miniKeys = Object.keys(mini).filter(function (k) { return k !== 'source'; }).sort().join(',');
+    var cloudKeys = Object.keys(cloud).sort().join(',');
+    if (miniKeys !== cloudKeys) {
+      marketMismatch++;
+      console.error('✗ 行情载荷字段不一致 ' + symbol + ' ' + period + '：' + miniKeys + ' vs ' + cloudKeys);
+    }
+    if (JSON.stringify(mini.points.map(function (p) { return p.value; })) !==
+        JSON.stringify(cloud.points.map(function (p) { return p.value; }))) {
+      marketMismatch++;
+      console.error('✗ 行情曲线不一致 ' + symbol + ' ' + period);
+    }
+    // 轴标签只比格式（把数字换成 #），避免因为秒级时间差误报
+    var shape = function (list) { return list.map(function (a) { return String(a).replace(/\d/g, '#'); }).join('|'); };
+    if (shape(mini.axis) !== shape(cloud.axis)) {
+      marketMismatch++;
+      console.error('✗ 行情轴标签格式不一致 ' + symbol + ' ' + period + '：' + mini.axis + ' vs ' + cloud.axis);
+    }
+  });
+});
+if (marketMismatch) fail(marketMismatch + ' 处行情载荷与演示源不一致');
 
 // 调价节点数也要一致
 fuels.FUELS.forEach(function (fuel) {

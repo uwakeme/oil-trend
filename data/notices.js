@@ -91,11 +91,17 @@ const NOTICES = [
   }
 ];
 
-/** 采集同步状态 */
+/**
+ * 采集同步状态
+ *
+ * 演示数据集背后没有任何采集器在跑（两个真实来源默认全关），
+ * 状态必须是 idle —— 报「自动同步正常」是在骗人。
+ * 没有采集发生，就没有「检查于几点」，lastCheckedAt 留空。
+ */
 const SYNC_STATUS = {
-  status: 'ok',
-  lastCheckedAt: '2026-11-10T18:20:00+08:00',
-  sourceName: '服务端定时采集（演示）',
+  status: 'idle',
+  lastCheckedAt: '',
+  sourceName: '未启用真实采集（演示数据集）',
   sourceUrl: ''
 };
 

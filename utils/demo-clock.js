@@ -16,12 +16,15 @@ function parseUtc(dateStr) {
 }
 
 /**
- * 把某个时刻换算成「本地日历日」的 UTC 零点。
- * 用 UTC+8 算和用 UTC+13 算，结果都应该是同一个日历日差，
- * 不能拿本地零点去减 UTC 零点（那会随时区偏一天）。
+ * 把某个时刻换算成「UTC+8 日历日」的 UTC 零点。
+ *
+ * 不能用各自的本地日历日：小程序端在东八区、云函数可能在 UTC，
+ * 两边各按本地日历日算，凌晨 0~8 点之间会差一天，
+ * 调价日期和窗口倒计时就分叉了。数据里的时间戳都是 +08:00，统一按 UTC+8 算。
  */
 function localDayNumber(date) {
-  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+  var t = new Date(date.getTime() + 8 * 3600000);
+  return Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate());
 }
 
 /** 相对锚点的天数偏移（今天为 0） */

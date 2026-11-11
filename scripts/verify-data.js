@@ -36,8 +36,6 @@ out.push('--- 国际行情 ---');
 out.push('--- 其他地区 92# ---');
 demo.getRegions().forEach(r => out.push('  ' + r.fullName + ' ' + r.price92));
 
-console.log(out.join('\n'));
-
 /* ============================================================
  * 未来日期退化检查
  *
@@ -133,10 +131,40 @@ futureChecks.forEach(function (c) {
     '  ' + (c.ok ? 'OK' : '✗ 退化'));
 });
 
+/* ============================================================
+ * 同步状态文案映射
+ *
+ * 云端和演示端都会新增状态（如 idle / partial），
+ * 只要前端漏了映射就会掉进「其他」分支显示成「同步异常」。
+ * 这里断言每种状态都有对应文案。
+ * ============================================================ */
+
+var fmt = require('../utils/format');
+var syncStatusChecks = [];
+Object.keys(fmt.SYNC_STATUS_META).forEach(function (status) {
+  var meta = fmt.syncStatus(status);
+  syncStatusChecks.push(status + ' → ' + meta.text + (meta.text ? ' OK' : ' ✗ 缺文案'));
+});
+// 演示源当前的同步状态也必须有文案
+var demoSync = demo.getNotices('440000', 'all', '92').sync.status;
+syncStatusChecks.push('演示源当前状态 ' + demoSync + ' → ' + fmt.syncStatus(demoSync).text);
+
+out.push('');
+out.push('--- 同步状态文案映射 ---');
+syncStatusChecks.forEach(function (line) { out.push('  ' + line); });
+
+var missingStatus = syncStatusChecks.filter(function (line) { return line.indexOf('✗') >= 0; });
+
 var degraded = futureChecks.filter(function (c) { return !c.ok; });
 if (degraded.length) {
   out.push('');
   out.push('✗ 有 ' + degraded.length + ' 个未来时点出现退化');
+  console.error(out.join('\n'));
+  process.exit(1);
+}
+if (missingStatus.length) {
+  out.push('');
+  out.push('✗ 有 ' + missingStatus.length + ' 个同步状态缺文案映射');
   console.error(out.join('\n'));
   process.exit(1);
 }

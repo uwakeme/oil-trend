@@ -152,7 +152,7 @@
     </view>
     <view class="source-box">
       <text class="source-box-title">来源与原文</text>
-      <text class="source-box-text">{{notice.sourceName}} · 发布于 {{notice.publishedText}}</text>
+      <text class="source-box-text">{{notice.sourceLine}}</text>
     </view>
     <button class="primary-button dark" bindtap="onSheetClose">知道了</button>
   </bottom-sheet>

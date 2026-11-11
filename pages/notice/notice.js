@@ -75,6 +75,7 @@ Page({
     }
     var win = payload.window || {};
     var sync = payload.sync || {};
+    var syncMeta = fmt.syncStatus(sync.status);
     var self = this;
 
     var notices = (payload.notices || []).map(function (n) {
@@ -109,9 +110,11 @@ Page({
         countdownText: fmt.countdown(win.daysLeft)
       },
       sync: {
-        statusText: sync.status === 'ok' ? '自动同步正常' : (sync.status === 'pending' ? '等待人工核对' : '同步异常'),
-        className: sync.status === 'ok' ? '' : (sync.status === 'pending' ? 'warn' : 'error'),
-        checkedText: fmt.dateTime(sync.lastCheckedAt) + ' 检查更新'
+        // 状态文案由 format.syncStatus 统一映射，新增状态不会再漏
+        statusText: syncMeta.text,
+        className: syncMeta.style,
+        // 没有采集发生就没有检查时刻，别显示「 检查更新」这种空壳
+        checkedText: sync.lastCheckedAt ? (fmt.dateTime(sync.lastCheckedAt) + ' 检查更新') : ''
       },
       notices: notices
     });

@@ -12,7 +12,7 @@ const { ADJUSTMENTS, NATIONAL_BASE } = require('./adjustments');
 const { REGIONS, DEFAULT_REGION_CODE } = require('./regions');
 const { FUELS, getFuel } = require('./fuels');
 const { ADJUST_WINDOW, NOTICES, SYNC_STATUS } = require('./notices');
-const { MARKETS, buildSeries } = require('./markets');
+const { buildMarketPayload } = require('./markets');
 const clock = require('../utils/demo-clock');
 
 function round2(v) {
@@ -315,74 +315,16 @@ function buildPricesFor(region, notice) {
   return out;
 }
 
-var MARKET_PERIODS = {
-  // stepMinutes：相邻两个点的真实间隔，1 日按 15 分钟、其余按 1 天
-  '1d': { label: '1日', points: 28, stepMinutes: 15,   fromOpen: true, axis: 'time' },
-  '1w': { label: '1周', points: 7,  stepMinutes: 1440, ratio: 0.982, axis: 'date' },
-  '1m': { label: '1月', points: 30, stepMinutes: 1440, ratio: 0.958, axis: 'date' },
-  '3m': { label: '3月', points: 90, stepMinutes: 1440, ratio: 0.914, axis: 'date' }
-};
-
-/** 轴标签：日内给 HH:MM，跨日给 MM-DD */
-function marketAxisLabel(dateStr, mode) {
-  if (mode === 'time') return String(dateStr).slice(11, 16);
-  return String(dateStr).slice(5, 10);
-}
-
+/**
+ * 国际行情。
+ *
+ * 载荷由 data/markets.js 的 buildMarketPayload 生成 —— 云函数端用的是同一份
+ * 实现（由 scripts/sync-cloud-shared.js 从 data/ 内联过去），两端不会再分叉。
+ */
 function getMarket(symbol, period) {
-  var key = MARKETS[symbol] ? symbol : 'brent';
-  var m = MARKETS[key];
-  var conf = MARKET_PERIODS[period] || MARKET_PERIODS['1d'];
-
-  var start = conf.fromOpen ? m.open : round2(m.price * conf.ratio);
-  var raw = buildSeries(m.seed + key.length + period.length, start, m.price, conf.points);
-  var now = new Date();
-  var quoteTime = new Date(now.getTime() - (m.quoteMinutesAgo || 0) * 60000);
-
-  function pad(n) { return n < 10 ? '0' + n : '' + n; }
-  // 图表用的完整日期时间：带年份，横轴才能按真实时间比例排
-  function fullStamp(d) {
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
-      pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-  }
-  // 界面展示用的短格式
-  function shortStamp(d) {
-    return pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' +
-      pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
-  }
-
-  var step = (conf.stepMinutes || 15) * 60000;
-  var points = raw.map(function (v, i) {
-    var d = new Date(quoteTime.getTime() - (conf.points - 1 - i) * step);
-    return { date: fullStamp(d), value: Number(v.toFixed(2)) };
-  });
-
-  return {
-    symbol: key,
-    name: m.name,
-    code: m.code,
-    label: m.label,
-    price: m.price,
-    changeAmount: m.changeAmount,
-    changePercent: m.changePercent,
-    direction: m.changeAmount < 0 ? 'down' : 'up',
-    open: m.open,
-    prevClose: m.prevClose,
-    high: m.high,
-    low: m.low,
-    unit: '美元/桶',
-    quoteTime: shortStamp(quoteTime),
-    delayed: !!m.delayed,
-    delayMinutes: m.quoteMinutesAgo || 0,
-    period: conf.label,
-    points: points,
-    axis: [
-      points[0] ? marketAxisLabel(points[0].date, conf.axis) : '',
-      points[Math.floor(points.length / 2)] ? marketAxisLabel(points[Math.floor(points.length / 2)].date, conf.axis) : '',
-      points[points.length - 1] ? marketAxisLabel(points[points.length - 1].date, conf.axis) : ''
-    ],
-    source: { mode: 'demo', name: '内置演示数据集', note: '演示数据，非真实行情' }
-  };
+  var payload = buildMarketPayload(symbol, period);
+  payload.source = { mode: 'demo', name: '内置演示数据集', note: '演示数据，非真实行情' };
+  return payload;
 }
 
 function getAlertHistory() {

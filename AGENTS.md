@@ -13,7 +13,7 @@
 
 ```bash
 node scripts/lint-wxml.js          # 静态检查（有错误时 exit 1），改完必跑
-node scripts/check-modules.js      # 运行时模块加载冒烟测试，挡住「删了函数体留着引用」这类 ReferenceError
+node scripts/check-modules.js      # 运行时模块 + 云函数入口加载冒烟测试，挡住「删了函数体留着引用」这类 ReferenceError
 node scripts/verify-data.js        # 数据层自检，打印算出的价格/走势/通知/行情
 node scripts/sync-cloud-shared.js  # 把 _shared/shared.js 同步到三个云函数，部署前必跑
 node scripts/build-icons.js        # 由 design/ 的 SVG 精灵重生成 assets/icons/*.png（需本机 Chrome）
