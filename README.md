@@ -130,6 +130,9 @@ node scripts/verify-in-devtools.js
 真实数据源接入，订阅消息的真机联调。
 云开发环境还要先建好集合才能跑通，步骤在 [docs/deploy.md](docs/deploy.md)。
 
-另外两处已登记待处理：三个云函数的 `wx-server-sdk` 仍是 `~2.6.3`（npm 上已是 4.x，
-升级要连 `cloud.init` / `openapi` / 数据库 API 一起回归，**接真实数据源之前必须处理**）；
 页面 WXSS 里还有 42 处硬编码色值没走 `styles/tokens.wxss` 的设计令牌（纯样式一致性，不影响功能）。
+
+三个云函数的 `wx-server-sdk` 已升到 4.0.2，依赖 `cloud.init` / `openapi` / 数据库 API 都验过：
+唯一破口是 4.x 底层换成了 `@cloudbase/node-sdk`，`cloud.httpclient` 没了，
+采集器改用 `cloudfunctions/oilCollector/http-client.js`。
+细节见 [docs/deploy.md](docs/deploy.md)。

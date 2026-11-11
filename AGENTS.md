@@ -79,6 +79,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 开发者工具 CLI 上传失败时**退出码仍是 0** | `preview-qr.js` 报「成功」但二维码是旧 AppID 的 | 上传前先删掉旧的二维码文本，跑完没有新文件就当失败；端口不对时 CLI 会回「IDE 已启动并在监听 http://127.0.0.1:XXXXX」，按它说的端口重试 |
 | canvas 是**独立原生渲染层**，z-index 压不住 | 走势图浮在底部弹层上面，把弹层内容盖住 | 把弹层 z-index 提到 99999 也没用。唯一可靠的办法是弹层打开时把画布从 DOM 里摘掉（`trend-chart` 的 `visible` 属性用 `wx:if` 控制） |
 | 换 AppID 后预览二维码要重新出 | 预览包按 AppID 上传，旧码指向已注销的账号 | 换完 AppID 跑 `node scripts/preview-qr.js`；AppID 只写 `project.private.config.json` |
+| `wx-server-sdk` 4.x 没有 `cloud.httpclient` | 2.x 底层是 `tcb-admin-node`，4.x 换成 `@cloudbase/node-sdk`，这个内置 HTTP 客户端没了 | 采集器用 `cloudfunctions/oilCollector/http-client.js`；`scripts/check-modules.js` 会挡住这类已移除 API 的引用 |
 
 ## 验证要求
 

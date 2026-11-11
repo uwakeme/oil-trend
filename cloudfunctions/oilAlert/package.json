@@ -4,6 +4,6 @@
   "description": "油势 · 降价提醒匹配与订阅消息下发",
   "main": "index.js",
   "dependencies": {
-    "wx-server-sdk": "~2.6.3"
+    "wx-server-sdk": "^4.0.2"
   }
 }

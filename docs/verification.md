@@ -74,7 +74,7 @@ node scripts/verify-in-devtools.js
 | 自定义 tabBar 点不动 | switchTab 拿不到 url | `wx:for` 里写 `{{path}}`，应写 `{{item.path}}` |
 | 五个页面同时白屏 | `Page.getData` 报 page destroyed | `utils/api.js` 里删了 `saveAlertHistory` 的函数体却忘了删 `module.exports` 的同名导出项，模块一被 require 就抛 ReferenceError。`node --check` 只查语法查不出来，靠 `scripts/check-modules.js` 兜住 |
 | 走势图盖在弹层上 | 打开「选择油价地区」，绿色曲线浮在弹层内容上方 | canvas 走的是**独立原生渲染层**，不在网页的层叠上下文里 —— 把弹层 z-index 提到 99999、图表压到 0 都不影响。改成弹层打开时用 `trend-chart` 的 `visible` 属性把画布从 DOM 里摘掉 |
-| 云端也是同一个坑 | 部署后才炸 | 云函数原先没有加载期门禁，`scripts/check-modules.js` 现在会 stub 掉 `wx-server-sdk` 再加载三个云函数入口 |
+| 云端也是同一个坑 | 部署后才炸 | 云函数原先没有加载期门禁，`scripts/check-modules.js` 现在会 stub 掉 `wx-server-sdk` 再加载三个云函数入口及其本地模块 |
 
 前两个是模拟器才会暴露的问题，静态检查查不出来。
 `scripts/lint-wxml.js` 后来补了「标签必须是 WXML 内置标签或已声明的自定义组件」这条规则，

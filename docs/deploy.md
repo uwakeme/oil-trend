@@ -35,6 +35,27 @@ module.exports = {
 node scripts/sync-cloud-shared.js
 ```
 
+### 运行时版本
+
+三个云函数的 `wx-server-sdk` 已升到 **4.0.2**，底层是 `@cloudbase/node-sdk`，
+要求 **Node ≥ 12**。`config.json` 里没写 `runtime` 字段，用的是平台默认运行时，
+部署时确认一下运行时不是 Node 8（Node 8 环境早已停用，也跑不动 4.x）。
+
+如果平台默认运行时低于 Node 12，在开发者工具的云函数设置里把运行时
+选成 Node 16 或更高。
+
+### 4.x 相比 2.x 的两处变化
+
+1. **`cloud.httpclient` 没了**。2.x 底层是 `tcb-admin-node`，带这个内置 HTTP 客户端；
+   4.x 换成 `@cloudbase/node-sdk` 后没有它了。采集器改用
+   `cloudfunctions/oilCollector/http-client.js`（Node 内置 https/http 自己封的），
+   云函数发外部请求没有域名限制，不需要额外依赖。
+2. **`cloud.openapi` 从对象变成了函数**。`cloud.openapi.subscribeMessage.send()`
+   的写法不变，订阅消息下发不受影响。
+
+数据库 API（`collection` / `where` / `orderBy` / `doc` / `add` / `command`）没变，
+`oilApi` 与 `oilAlert` 无需改动。
+
 ## 三、建集合
 
 云数据库里建好这些集合。

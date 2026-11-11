@@ -9,7 +9,8 @@
  *
  * 做法：在 Node 里 stub 掉小程序运行时全局（wx / App / Page / Component 等），
  * 然后把运行时目录下的所有 JS 都 require 一遍，任何加载期异常都算失败。
- * 云函数也一起查：stub 掉 wx-server-sdk 再加载入口，同一类错误云端也要挡住。
+ * 云函数也一起查：stub 掉 wx-server-sdk 再加载入口和它的本地模块，
+ * 同一类错误云端也要挡住。另外会扫一遍已从 SDK 移除的 API 引用。
  *
  * 用法：node scripts/check-modules.js
  * 退出码：0 = 全部可加载；1 = 有模块加载失败
@@ -181,8 +182,16 @@ const cloudRoot = path.join(ROOT, CLOUD_DIR);
 if (fs.existsSync(cloudRoot)) {
   fs.readdirSync(cloudRoot, { withFileTypes: true }).forEach((entry) => {
     if (!entry.isDirectory() || entry.name === '_shared') return;
-    const full = path.join(cloudRoot, entry.name, 'index.js');
-    if (fs.existsSync(full)) cloudFiles.push(full);
+    const dir = path.join(cloudRoot, entry.name);
+    // 入口和它引用的本地模块都要加载：只加载 index.js 的话，
+    // 「删了 http-client.js 的函数体、留着 require」这类错误查不出来
+    const entryFile = path.join(dir, 'index.js');
+    if (fs.existsSync(entryFile)) cloudFiles.push(entryFile);
+    fs.readdirSync(dir, { withFileTypes: true }).forEach((f) => {
+      if (!f.isFile() || !f.name.endsWith('.js')) return;
+      if (f.name === 'index.js' || f.name === 'shared.js') return;
+      cloudFiles.push(path.join(dir, f.name));
+    });
   });
 }
 
@@ -208,12 +217,44 @@ function loadAll(list) {
 const failures = loadAll(files);
 const cloudFailures = loadAll(cloudFiles);
 
+/* ---------- 云函数不得引用已从 SDK 移除的 API ---------- */
+
+// wx-server-sdk 4.x 底层从 tcb-admin-node 换成 @cloudbase/node-sdk，
+// cloud.httpclient 整个消失了（实测 2.6.3 顶层本来也没有，
+// 那是 tcb-admin-node 的东西）。这类引用静态检查查不出来，
+// 部署后第一次真跑采集才会炸 —— 所以在这里挡住。
+const REMOVED_SDK_APIS = [
+  { name: 'cloud.httpclient', hint: '4.x 已移除，改用 cloudfunctions/oilCollector/http-client.js' }
+];
+
+const apiProblems = [];
+cloudFiles.forEach(function (file) {
+  // 只看代码行：注释里提到某个 API 名字（比如说明迁移原因）不该误报
+  const codeLines = fs.readFileSync(file, 'utf8')
+    .split(/\r?\n/)
+    .map(function (line) { return line.replace(/^\s*\/\/.*$/, '').replace(/^\s*\*.*$/, ''); })
+    .join('\n');
+  REMOVED_SDK_APIS.forEach(function (api) {
+    if (codeLines.indexOf(api.name) !== -1) {
+      apiProblems.push({ rel: relOf(file), api: api.name, hint: api.hint });
+    }
+  });
+});
+
 console.log('已加载 ' + (files.length - failures.length) + '/' + files.length + ' 个运行时模块');
 if (cloudFiles.length) {
-  console.log('已加载 ' + (cloudFiles.length - cloudFailures.length) + '/' + cloudFiles.length + ' 个云函数入口');
+  console.log('已加载 ' + (cloudFiles.length - cloudFailures.length) + '/' + cloudFiles.length + ' 个云函数模块');
 }
 
-if (failures.length || cloudFailures.length) {
+if (apiProblems.length) {
+  console.log('\n--- 云函数引用了已移除的 SDK API ---');
+  apiProblems.forEach(function (p) {
+    console.log('  ' + p.rel + ' -> ' + p.api);
+    console.log('    ' + p.hint);
+  });
+}
+
+if (failures.length || cloudFailures.length || apiProblems.length) {
   if (failures.length) {
     console.log('\n--- 运行时模块加载失败 ---');
     failures.forEach((f) => {

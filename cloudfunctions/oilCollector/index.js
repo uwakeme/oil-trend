@@ -18,6 +18,7 @@
 const cloud = require('wx-server-sdk');
 const shared = require('./shared');
 const sources = require('./sources');
+const httpClient = require('./http-client');
 
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database();
@@ -50,18 +51,18 @@ async function fetchSource(source) {
     return { ok: false, reason: 'NO_URL', message: '来源未配置地址' };
   }
   try {
-    var res = await cloud.httpclient.request({
-      method: 'GET',
-      url: source.url,
-      header: Object.assign({ 'User-Agent': 'oil-trend-collector/1.0' }, source.headers || {}),
+    // 注意用的是 http-client 而不是 SDK 内置的 httpclient：
+    // wx-server-sdk 4.x 底层换成 @cloudbase/node-sdk 后已经没有这个 API 了。
+    var res = await httpClient.get(source.url, {
+      headers: Object.assign({ 'User-Agent': 'oil-trend-collector/1.0' }, source.headers || {}),
       timeout: 15000
     });
     if (res.statusCode !== 200) {
       return { ok: false, reason: 'HTTP_' + res.statusCode, message: '接口返回异常状态码' };
     }
-    return { ok: true, body: res.data };
+    return { ok: true, body: res.body };
   } catch (err) {
-    return { ok: false, reason: 'FETCH_ERROR', message: (err && err.errMsg) || String(err) };
+    return { ok: false, reason: 'FETCH_ERROR', message: (err && err.message) || String(err) };
   }
 }
 
