@@ -42,9 +42,13 @@
 node scripts/preview-qr.js wx你的AppID
 ```
 
-它会把 AppID 写进 `project.config.json`，再调开发者工具 CLI 上传预览包，
+它会把 AppID 写进**本地私有的** `project.private.config.json`（入库的
+`project.config.json` 只留 `touristappid` 占位符），再调开发者工具 CLI 上传预览包，
 最后把终端字符二维码渲染成可扫码的 PNG，输出到 `docs/preview-qr.png`。
 开发者工具要事先登录；主包不能超过 2MB（`packOptions.ignore` 已排除非运行文件）。
+
+换一个 AppID 之后要重新跑这条命令：预览包是按 AppID 上传的，
+旧的二维码会指向已经不存在的账号。
 
 ## 目录
 
