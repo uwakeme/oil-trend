@@ -101,6 +101,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 位置隐私协议没弹 | `wx.getLocation` 报隐私未授权 | 先调 `wx.requirePrivacyAuthorize()`，用户同意后再取位置 |
 | `wx.getLocation` 拿 wgs84 坐标 | 与省界数据差 300~600 米，江苏/河北这种贴着的省会判错 | 固定传 `type: 'gcj02'`，服务端省界数据也是 GCJ-02，两边不换算 |
 | 定位失败弹错误提示 | 用户被反复打扰，而且定位本来就是可选增强 | 失败一律静默返回 null，只在用户明确拒绝过权限时给一个「开启定位」入口 |
+| `<button>` 在 flex 容器里被撑成宽条 | 小程序 button 的 UA 默认样式带 `margin: auto`，放进 flex 行里就被自动外边距顶开 | 钉死 `flex: 0 0 <宽>` 和 `margin: 0`，别只写 `width` |
 
 ## 验证要求
 
