@@ -11,6 +11,7 @@ const express = require('express');
 const query = require('../services/query');
 const notices = require('../services/notices');
 const user = require('../services/user');
+const locate = require('../services/locate');
 const { requireAuth } = require('../middleware/auth');
 
 var router = express.Router();
@@ -39,6 +40,12 @@ function handle(fn) {
 
 router.get('/regions', handle(function (req, res) {
   return query.actionRegions().then(function (data) { res.json(ok(data)); });
+}));
+
+router.get('/locate', handle(function (req, res) {
+  // 经纬度 → 省份。参数缺失或不在国内时返回 regionCode=null、match='none'，
+  // 不报错：小程序端拿不到省份就保持原地区，不影响其他功能。
+  res.json(ok(locate.locateByLatLng(req.query.lat, req.query.lng)));
 }));
 
 router.get('/home', handle(function (req, res) {

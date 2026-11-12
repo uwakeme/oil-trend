@@ -1,6 +1,7 @@
 const api = require('../../utils/api');
 const store = require('../../utils/store');
 const fmt = require('../../utils/format');
+const location = require('../../utils/location');
 
 /** 把调价幅度转成展示文案 */
 function changeMeta(amount) {
@@ -37,7 +38,10 @@ Page({
     sourceNote: '',
     cloudStatus: '',
     aboutNote: '',
-    sheetType: ''
+    sheetType: '',
+    locateHint: '',
+    locateAction: '',
+    locateCode: ''
   },
 
   onLoad() {
@@ -46,6 +50,7 @@ Page({
     this._prefsKey = store.prefsKey(prefs);
     this.setData({ fuelId: prefs.fuelId || '92' });
     this.load(prefs.regionCode);
+    this.detectLocation();
   },
 
   onShow() {
@@ -68,13 +73,85 @@ Page({
 
   load(regionCode) {
     var self = this;
+    // 请求序号：定位切换地区会连发两轮请求，
+    // 先发的那轮可能后到，不能让它把新地区的结果盖回去。
+    this._reqSeq = (this._reqSeq || 0) + 1;
+    var seq = this._reqSeq;
     this.setData({ loading: true, loadError: '' });
     return api.getHome(regionCode, this.data.fuelId).then(function (payload) {
+      if (seq !== self._reqSeq) return;
       self._raw = payload;
       self.applyHome(payload);
     }).catch(function () {
+      if (seq !== self._reqSeq) return;
       self.setData({ loading: false, loadError: '油价数据加载失败，请检查网络后重试' });
     });
+  },
+
+  /**
+   * 自动定位所在省份。
+   *
+   * 规则：
+   *   - 用户没手动选过地区 → 直接切到定位到的省并重新取数
+   *   - 用户手动选过       → 不动用户的选择，只提示「检测到你在 XX，点此切换」
+   *   - 定位失败或被拒绝   → 保持原地区，给一个「开启定位」的入口
+   *
+   * 定位是锦上添花，任何一步失败都不该影响首页取数。
+   */
+  detectLocation() {
+    var self = this;
+    return location.detectRegion().then(function (hit) {
+      if (!hit || !hit.regionCode) {
+        return location.currentAuthState().then(function (state) {
+          if (state === 'denied') {
+            self.setData({
+              locateHint: '开启定位，自动识别所在省份',
+              locateAction: 'openSetting'
+            });
+          }
+        });
+      }
+      var prefs = store.getPrefs();
+      if (prefs.regionCode === hit.regionCode) {
+        self.setData({ locateHint: '', locateAction: '' });
+        return;
+      }
+      if (store.getRegionSource() === 'manual') {
+        self.setData({
+          locateHint: '检测到你现在在' + hit.regionName + '，点此切换',
+          locateAction: 'switch',
+          locateCode: hit.regionCode
+        });
+        return;
+      }
+      store.setRegion(hit.regionCode, 'auto');
+      self._prefsKey = store.prefsKey(store.getPrefs());
+      self.setData({ locateHint: '', locateAction: '' });
+      self.load(hit.regionCode);
+    }).catch(function () {
+      // 定位失败就算了，不打扰用户
+    });
+  },
+
+  onLocateHintTap() {
+    var self = this;
+    var action = this.data.locateAction;
+    if (action === 'switch') {
+      var code = this.data.locateCode;
+      if (!code) return;
+      store.setRegion(code, 'auto');
+      this._prefsKey = store.prefsKey(store.getPrefs());
+      this.setData({ locateHint: '', locateAction: '', locateCode: '' });
+      this.load(code);
+      return;
+    }
+    if (action === 'openSetting') {
+      location.openSetting().then(function (granted) {
+        if (!granted) return;
+        self.setData({ locateHint: '', locateAction: '' });
+        self.detectLocation();
+      });
+    }
   },
 
   applyHome(payload) {
@@ -257,8 +334,10 @@ Page({
   onSelectRegion(e) {
     var code = e.currentTarget.dataset.code;
     if (!code) return;
-    store.setPrefs({ regionCode: code });
-    this.setData({ sheetType: '' });
+    // 手动选的地区要记成 'manual'：之后自动定位只提示，不再覆盖用户的选择
+    store.setRegion(code, 'manual');
+    this.setData({ sheetType: '', locateHint: '', locateAction: '', locateCode: '' });
+    this._prefsKey = store.prefsKey(store.getPrefs());
     this.load(code);
   },
 

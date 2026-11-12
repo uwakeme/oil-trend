@@ -6,6 +6,14 @@
     "pages/global/global",
     "pages/alert/alert"
   ],
+  "permission": {
+    "scope.userLocation": {
+      "desc": "用于自动识别所在省份，显示当地油价"
+    }
+  },
+  "requiredPrivateInfos": [
+    "getLocation"
+  ],
   "window": {
     "backgroundTextStyle": "dark",
     "navigationBarBackgroundColor": "#f5f2e9",

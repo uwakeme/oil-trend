@@ -52,8 +52,25 @@ function setPrefs(patch) {
 }
 
 function seedRegionIfNeeded() {
-  // 首版不做强制定位，默认落在手动选择的默认地区
+  // 定位是可选增强，不是强制的：
+  // 用户拒绝授权、接口权限还没批、后端不可用 —— 都保持默认地区，
+  // 不影响首页取数和其他功能。
   return getPrefs();
+}
+
+/**
+ * 当前地区是怎么来的：
+ *   'manual' —— 用户自己手动选的，自动定位不再覆盖它
+ *   'auto'   —— 自动定位得到的
+ *   ''       —— 还没定，首次启动时的默认值
+ */
+function getRegionSource() {
+  return getPrefs().regionSource || '';
+}
+
+/** 记录地区，并标明来源（手动 / 自动） */
+function setRegion(code, source) {
+  return setPrefs({ regionCode: code, regionSource: source || '' });
 }
 
 function getRules() {
@@ -91,6 +108,8 @@ module.exports = {
   prefsKey: prefsKey,
   setPrefs: setPrefs,
   seedRegionIfNeeded: seedRegionIfNeeded,
+  getRegionSource: getRegionSource,
+  setRegion: setRegion,
   getRules: getRules,
   saveRules: saveRules,
   getHistory: getHistory,

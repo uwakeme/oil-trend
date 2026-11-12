@@ -147,6 +147,7 @@ async function main() {
     var cases = [
       { name: '健康检查', method: 'GET', url: '/health', docPath: '/health' },
       { name: '地区列表', method: 'GET', url: '/api/regions', docPath: '/api/regions' },
+      { name: '经纬度定位', method: 'GET', url: '/api/locate?lat=23.129112&lng=113.264385', docPath: '/api/locate' },
       { name: '首页', method: 'GET', url: '/api/home?regionCode=440000', docPath: '/api/home' },
       { name: '走势', method: 'GET', url: '/api/trend?regionCode=440000&fuelId=92&period=3m', docPath: '/api/trend' },
       { name: '调价通知', method: 'GET', url: '/api/notices?regionCode=440000&filter=official', docPath: '/api/notices' },
@@ -212,6 +213,20 @@ async function main() {
     check('market.axis 是字符串（不是数组）', typeof m.body.data.axis === 'string', typeof m.body.data.axis);
     var t = await request(port, 'GET', '/api/trend?regionCode=440000&fuelId=92&period=3m');
     check('trend.axis 是数组', Array.isArray(t.body.data.axis));
+
+    // ---------- 7. 定位语义 ----------
+    console.log('\n--- 定位语义 ---');
+    var locateCase = await request(port, 'GET', '/api/locate?lat=23.129112&lng=113.264385');
+    check('广州坐标定位到广东',
+      locateCase.body && locateCase.body.data && locateCase.body.data.regionCode === '440000',
+      JSON.stringify(locateCase.body && locateCase.body.data));
+    check('定位结果的 match 在文档枚举内',
+      doc.components.schemas.LocateResponse.properties.data.properties.match.enum
+        .indexOf(locateCase.body.data.match) !== -1);
+    var outside = await request(port, 'GET', '/api/locate?lat=35.689487&lng=139.691711');
+    check('境外坐标匹配不到省份',
+      outside.body && outside.body.data && outside.body.data.match === 'none',
+      JSON.stringify(outside.body && outside.body.data));
 
     console.log('\n--- 汇总 ---');
     console.log('检查 ' + checks + ' 项，失败 ' + failures.length + ' 项');

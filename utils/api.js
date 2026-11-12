@@ -85,6 +85,24 @@ function getRegions() {
   });
 }
 
+/**
+ * 经纬度 → 省份
+ *
+ * 只有后端能反查（省界数据在服务端），没有本地演示版本。
+ * 后端不可用或没匹配到时返回 null，页面保持原地区。
+ */
+function locate(lat, lng) {
+  if (!preferBackend()) return Promise.resolve(null);
+  return cloud.callFunction('oilApi', { action: 'locate', lat: lat, lng: lng })
+    .then(function (data) {
+      if (data && data.regionCode) return data;
+      return null;
+    })
+    .catch(function () {
+      return null;
+    });
+}
+
 /** 首页数据 */
 function getHome(regionCode, fuelId) {
   return fetchWithFallback('oilApi', { action: 'home', regionCode: regionCode, fuelId: fuelId }, function () {
@@ -165,6 +183,7 @@ function localHistory() {
 
 module.exports = {
   getRegions: getRegions,
+  locate: locate,
   getHome: getHome,
   getTrend: getTrend,
   getNotices: getNotices,

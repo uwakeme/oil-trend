@@ -29,6 +29,10 @@
       "description": "地区、首页、走势、调价通知"
     },
     {
+      "name": "定位",
+      "description": "经纬度换算省份"
+    },
+    {
       "name": "国际行情",
       "description": "Brent / WTI"
     },
@@ -145,6 +149,49 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RegionsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/locate": {
+      "get": {
+        "tags": [
+          "定位"
+        ],
+        "summary": "经纬度定位省份",
+        "description": "把经纬度换算成省份行政区划码，小程序用它自动切到当地油价。\n\n坐标系是 **GCJ-02**，与 `wx.getLocation` 的 `type: 'gcj02'` 一致。传 WGS84 会有几百米偏移，边界省份会判错。\n\n省界数据内置在服务端（`server/src/data/provinces.json`），不依赖第三方逆地理编码服务，也没有配额限制。",
+        "parameters": [
+          {
+            "name": "lat",
+            "in": "query",
+            "required": true,
+            "description": "纬度（GCJ-02）",
+            "schema": {
+              "type": "number",
+              "example": 23.129112
+            }
+          },
+          {
+            "name": "lng",
+            "in": "query",
+            "required": true,
+            "description": "经度（GCJ-02）",
+            "schema": {
+              "type": "number",
+              "example": 113.264385
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "定位结果。参数缺失或不在国内时 regionCode 为 null、match 为 none",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LocateResponse"
                 }
               }
             }
@@ -591,6 +638,54 @@
       }
     },
     "schemas": {
+      "LocateResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "regionCode": {
+                "type": "string",
+                "nullable": true,
+                "description": "行政区划码，未匹配到时为 null",
+                "example": "440000"
+              },
+              "regionName": {
+                "type": "string",
+                "nullable": true,
+                "description": "省份简称，未匹配到时为 null",
+                "example": "广东"
+              },
+              "city": {
+                "type": "string",
+                "nullable": true,
+                "description": "省会，未匹配到时为 null",
+                "example": "广州"
+              },
+              "match": {
+                "type": "string",
+                "enum": [
+                  "inside",
+                  "nearest",
+                  "none"
+                ],
+                "description": "inside = 落在省界内；nearest = 在省界外 25 公里内就近归属；none = 没匹配到",
+                "example": "inside"
+              },
+              "distanceKm": {
+                "type": "number",
+                "nullable": true,
+                "description": "距该省界的距离（公里），落在省内时为 0",
+                "example": 0
+              }
+            }
+          }
+        }
+      },
       "SourceInfo": {
         "type": "object",
         "description": "数据来源标注",

@@ -26,6 +26,12 @@
       </view>
     </view>
 
+    <!-- 定位提示：检测到人在别的省，或定位被拒后给一个开启入口 -->
+    <view wx:if="{{locateHint}}" class="locate-hint" bindtap="onLocateHintTap">
+      <image class="icon-inline" src="/assets/icons/pin-ink.png" mode="aspectFit" />
+      <text>{{locateHint}}</text>
+    </view>
+
     <!-- 主价格卡 -->
     <view class="price-hero">
       <text class="hero-ghost num">{{hero.id}}</text>

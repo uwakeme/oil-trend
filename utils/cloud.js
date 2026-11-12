@@ -27,6 +27,7 @@ var loginPromise = null;
  */
 var ACTION_MAP = {
   'regions': { method: 'GET', path: '/api/regions' },
+  'locate': { method: 'GET', path: '/api/locate' },
   'home': { method: 'GET', path: '/api/home' },
   'trend': { method: 'GET', path: '/api/trend' },
   'notices': { method: 'GET', path: '/api/notices' },

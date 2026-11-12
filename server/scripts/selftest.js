@@ -253,6 +253,60 @@ async function main() {
   });
   check('服务端与小程序端价格完全一致', mismatch === 0, mismatch + ' 组不一致');
 
+  // 经纬度 → 省份：小程序「自动定位所在省」的基础。
+  // 这里钉住每个省的省会坐标，省界数据被误改时会立刻暴露。
+  console.log('\n--- 省界反查 ---');
+  var locate = require(path.join(ROOT, 'src', 'services', 'locate.js'));
+  var provinceSamples = [
+    ['北京', 39.904989, 116.405285],
+    ['天津', 39.125596, 117.190182],
+    ['河北', 38.042307, 114.514861],
+    ['山西', 37.870590, 112.548879],
+    ['内蒙古', 40.841490, 111.751990],
+    ['辽宁', 41.805699, 123.431474],
+    ['吉林', 43.817072, 125.323544],
+    ['黑龙江', 45.803775, 126.534967],
+    ['上海', 31.230416, 121.473701],
+    ['江苏', 32.060255, 118.796877],
+    ['浙江', 30.287459, 120.153576],
+    ['安徽', 31.820586, 117.227219],
+    ['福建', 26.074507, 119.296494],
+    ['江西', 28.682022, 115.858198],
+    ['山东', 36.651225, 117.120085],
+    ['河南', 34.757975, 113.665412],
+    ['湖北', 30.584355, 114.298456],
+    ['湖南', 28.228209, 112.938814],
+    ['广东', 23.129112, 113.264385],
+    ['广西', 22.817002, 108.366543],
+    ['海南', 20.044220, 110.199890],
+    ['重庆', 29.563009, 106.551556],
+    ['四川', 30.659462, 104.065735],
+    ['贵州', 26.647661, 106.630153],
+    ['云南', 25.038864, 102.718267],
+    ['西藏', 29.660357, 91.114857],
+    ['陕西', 34.263161, 108.948024],
+    ['甘肃', 36.061089, 103.834303],
+    ['青海', 36.617144, 101.778228],
+    ['宁夏', 38.466370, 106.278179],
+    ['新疆', 43.825592, 87.616848]
+  ];
+  var locateMiss = [];
+  provinceSamples.forEach(function (item) {
+    var got = locate.locateByLatLng(item[1], item[2]);
+    if (got.regionName !== item[0] || got.match !== 'inside') {
+      locateMiss.push(item[0] + ' → ' + got.regionName + '(' + got.match + ')');
+    }
+  });
+  check('各省省会坐标全部落对省界内（' + provinceSamples.length + ' 个）', locateMiss.length === 0,
+    locateMiss.slice(0, 5).join('；'));
+  check('境外坐标匹配不到省份', locate.locateByLatLng(35.689487, 139.691711).match === 'none');
+  check('非法参数匹配不到省份', locate.locateByLatLng('abc', undefined).match === 'none');
+  check('越界坐标匹配不到省份', locate.locateByLatLng(200, 200).match === 'none');
+  var geoData = require(path.join(ROOT, 'src', 'data', 'provinces.json'));
+  check('省界数据覆盖全部支持地区（' + shared.REGIONS.length + ' 个）',
+    geoData.provinces.length === shared.REGIONS.length,
+    geoData.provinces.length + ' 个');
+
   console.log('\n--- 汇总 ---');
   console.log('检查 ' + checks + ' 项，失败 ' + failures.length + ' 项');
   if (failures.length) {
