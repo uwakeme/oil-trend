@@ -1,0 +1,32 @@
+name: probe-dns
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    environment: 腾讯云
+    steps:
+      - name: Probe
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            echo '=== /etc/nginx/ssl/ 目录 ==='
+            sudo ls -la /etc/nginx/ssl/ 2>&1
+            echo '=== 腾讯云证书的 SAN ==='
+            for f in /etc/nginx/ssl/*.crt; do
+              echo "--- $f"
+              sudo openssl x509 -in "$f" -noout -subject -dates -ext subjectAltName 2>&1 | head -8
+            done
+            echo '=== DNS 解析 ==='
+            for h in oil-trend.uwakeme.top lyric-lab.uwakeme.top uwakeme.top; do
+              echo -n "$h -> "
+              getent hosts $h | awk '{print $1}' | head -1 || echo '解析失败'
+            done
+            echo '=== 服务器公网 IP ==='
+            curl -s --max-time 5 ifconfig.me 2>/dev/null || echo '取不到'
