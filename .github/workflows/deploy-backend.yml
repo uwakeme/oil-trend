@@ -90,7 +90,22 @@ jobs:
               echo "错误: 未找到 oil-trend-pm2.json"
               exit 1
             fi
-            pm2 start ${DEPLOY_DIR}/server/oil-trend-pm2.json
+            # 入口文件不在就早报错，并列出实际内容，别让 PM2 抛一句
+            # 「Script not found」让人猜半天
+            if [ ! -f "${DEPLOY_DIR}/server/src/index.js" ]; then
+              echo "错误: 入口文件不存在 ${DEPLOY_DIR}/server/src/index.js"
+              echo "实际目录内容："
+              ls -la ${DEPLOY_DIR}/server/ || true
+              echo "src 下："
+              ls -la ${DEPLOY_DIR}/server/src/ || true
+              exit 1
+            fi
+            # PM2 配置里的 cwd / 日志路径不能写死 —— 部署目录由 DEPLOY_DIR 决定，
+            # 写死了就会去错的地方找脚本（报 Script not found）。
+            # 这里按实际部署目录替换掉占位符。
+            sed "s#__DEPLOY_DIR__#${DEPLOY_DIR}#g" \
+              ${DEPLOY_DIR}/server/oil-trend-pm2.json > ${DEPLOY_DIR}/server/pm2.runtime.json
+            pm2 start ${DEPLOY_DIR}/server/pm2.runtime.json
             pm2 save
 
             echo "部署完成"

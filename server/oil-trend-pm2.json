@@ -1,6 +1,6 @@
 {
   "name": "oil-trend-server",
-  "cwd": "/var/www/oil-trend/server",
+  "cwd": "__DEPLOY_DIR__/server",
   "script": "src/index.js",
   "exec_mode": "fork",
   "instances": 1,
@@ -11,8 +11,8 @@
     "NODE_ENV": "production",
     "PORT": "3002"
   },
-  "error_file": "/var/www/oil-trend/logs/oil-trend-error.log",
-  "out_file": "/var/www/oil-trend/logs/oil-trend-out.log",
+  "error_file": "__DEPLOY_DIR__/logs/oil-trend-error.log",
+  "out_file": "__DEPLOY_DIR__/logs/oil-trend-out.log",
   "merge_logs": true,
   "time": true
 }
