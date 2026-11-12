@@ -39,7 +39,7 @@ Repository secrets 依然可见。
 | `SERVER_USER` | Environment | SSH 用户（参考项目用 `ubuntu`） |
 | `SERVER_PORT` | Environment | SSH 端口，默认 22 |
 | `SERVER_SSH_KEY` | Environment | **服务器私钥全文**，含 `-----BEGIN OPENSSH PRIVATE KEY-----` 头尾 |
-| `DEPLOY_DIR` | Environment | 部署目录，默认 `/var/www/oil-trend` |
+| `DEPLOY_DIR` | Environment | 部署目录，默认 `/home/ubuntu/deploy/oil_trend` |
 | `DATABASE_URL` | Repository | PostgreSQL 连接串。**注意库名要换**：参考项目是 `lyric_lab`，油势要用独立的库（如 `oil_trend`） |
 | `OIL_API_BASE_URL` | Environment（可选） | 后端对外地址。**实际上从服务器 `.env` 读**，不依赖这个 secret |
 
@@ -72,7 +72,7 @@ sudo -u postgres psql -c "CREATE DATABASE oil_trend;"
 剩下的必须手动补 —— 这些是密钥，CI 里没有也不该有：
 
 ```bash
-sudo -vi /var/www/oil-trend/server/.env
+sudo -vi /home/ubuntu/deploy/oil_trend/server/.env
 ```
 
 ```

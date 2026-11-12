@@ -46,8 +46,8 @@ jobs:
 
       - name: Copy backend to server
         run: |
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key -p ${{ secrets.SERVER_PORT || 22 }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "mkdir -p ${{ secrets.DEPLOY_DIR || '/var/www/oil-trend' }}/server ${{ secrets.DEPLOY_DIR || '/var/www/oil-trend' }}/logs"
-          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key -P ${{ secrets.SERVER_PORT || 22 }} -r ./server/src ./server/scripts ./server/package.json ./server/package-lock.json ./server/schema.sql ./server/oil-trend-pm2.json ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.DEPLOY_DIR || '/var/www/oil-trend' }}/server/
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key -p ${{ secrets.SERVER_PORT || 22 }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "mkdir -p ${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/server ${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/logs"
+          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key -P ${{ secrets.SERVER_PORT || 22 }} -r ./server/src ./server/scripts ./server/package.json ./server/package-lock.json ./server/schema.sql ./server/oil-trend-pm2.json ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/server/
 
       - name: Deploy to server via SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -59,7 +59,7 @@ jobs:
           envs: PATH,DATABASE_URL
           script: |
             set -e
-            DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/var/www/oil-trend' }}"
+            DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}"
 
             echo "确保日志目录存在..."
             mkdir -p ${DEPLOY_DIR}/logs
@@ -122,7 +122,7 @@ jobs:
           port: ${{ secrets.SERVER_PORT || 22 }}
           script: |
             set -e
-            DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/var/www/oil-trend' }}"
+            DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}"
             echo "等待服务启动..."
             sleep 8
             # 对外域名从服务器上的 .env 读（OIL_API_BASE_URL），没配就退回本地端口

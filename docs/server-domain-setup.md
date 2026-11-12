@@ -7,12 +7,30 @@
 | 服务器 | 腾讯云 `124.221.89.106`，Ubuntu |
 | DNS 托管 | Cloudflare（NS: peaches/harlan.ns.cloudflare.com） |
 | 已跑服务 | `lyriclab-server`(3001)、`oil-trend-server`(3002) ✓ online、`openmaic` |
+| 部署目录 | `/home/ubuntu/deploy/oil_trend`（下划线，不是连字符） |
 | 现有证书 | `/etc/nginx/ssl/` 下两张**单域名**证书：
 | | `jiuguan.uwakeme.top.crt`（有效期到 2036）、`lyric.lab.uwakeme.top_bundle.crt`（到 2026-08-31） |
 | 过期证书 | `/etc/letsencrypt/live/moyu.uwakeme.top`（2026-10-14 过期，SAN 只有它自己） |
 
 **没有任何一张是泛域名证书**（SAN 里只有单个域名），所以 `oil-trend.uwakeme.top`
 必须单独签一张。
+
+## 〇、最容易踩的坑：DNS 指错机器
+
+certbot 报 `404` / `Invalid response`，**八成是 DNS 指到了另一台服务器**。
+
+排查方法（在服务器上执行）：
+
+```bash
+echo '本机公网 IP:' && curl -4 -s https://api.ipify.org
+echo '域名解析到:' && getent hosts oil-trend.uwakeme.top
+```
+
+两个值必须一致。
+
+> 这个坑的表现很有迷惑性：nginx 配置完全正确、
+> 服务器内部带 Host 头访问也是 200，但公网访问就是 404 ——
+> 因为请求根本没到这台机器。
 
 ## 一、加 DNS 解析（Cloudflare）
 
@@ -153,7 +171,7 @@ sudo nginx -t && sudo systemctl reload nginx
 现在 `.env` 里只有 `DATABASE_URL`（流水线自动建的）。要补四项：
 
 ```bash
-sudo vi /var/www/oil-trend/server/.env
+sudo vi /home/ubuntu/deploy/oil_trend/server/.env
 ```
 
 ```
@@ -172,7 +190,7 @@ PORT=3002
 改完重启：
 
 ```bash
-cd /var/www/oil-trend/server && pm2 restart oil-trend-server
+cd /home/ubuntu/deploy/oil_trend/server && pm2 restart oil-trend-server
 ```
 
 ## 五、验证
