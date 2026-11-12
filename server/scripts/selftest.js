@@ -85,6 +85,20 @@ async function main() {
   var eventCount = (await dao.events.listAll()).length;
   check('调价节点已写入（24 条）', eventCount === 24, '实际 ' + eventCount);
 
+  // DATE 列转换：pg 把 DATE 解析成「本地零点」的 Date，
+  // 用 toISOString() 取日期在 UTC+8 会整体退一天（生产上真踩过）。
+  // pg-mem 返回的是字符串，所以下面这条是唯一能钉住该行为的断言。
+  console.log('\n--- DATE 列转换 ---');
+  var localMidnight = new Date(2026, 10, 12, 0, 0, 0);
+  var expectLocal = localMidnight.getFullYear() + '-' +
+    ('0' + (localMidnight.getMonth() + 1)).slice(-2) + '-' +
+    ('0' + localMidnight.getDate()).slice(-2);
+  var gotLocal = dao.toDateString(localMidnight);
+  check('本地零点 Date 按本地日历日转字符串', gotLocal === expectLocal,
+    '实际 ' + gotLocal + '，期望 ' + expectLocal);
+  check('已是字符串的日期原样返回', dao.toDateString('2026-11-12') === '2026-11-12');
+  check('null 原样返回', dao.toDateString(null) === null);
+
   // 造一条已复核的通知
   await dao.notices.insert({
     dedupKey: 'test::2026-11-12::selftest',

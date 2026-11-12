@@ -40,10 +40,22 @@ var DATE_COLUMNS = {
   date: 1, changeat: 1, executeat: 1, cyclestart: 1
 };
 
-/** Date → 'YYYY-MM-DD'（按 UTC 取日期部分，和库里存的值一致） */
+/**
+ * Date → 'YYYY-MM-DD'。
+ *
+ * ⚠️ 必须按**本地**日历日取，不能用 toISOString()：
+ *   node-postgres 把 DATE 解析成「本地零点」的 Date。
+ *   服务器在 UTC+8 时，2026-11-12 的 Date 是 2026-11-11T16:00Z，
+ *   toISOString().slice(0,10) 会得到 2026-11-11 —— 整体退一天。
+ *   生产上真踩到了：窗口日期显示成昨天、daysLeft 变 -1。
+ *   pg-mem 返回的是字符串，所以本地测试没暴露这个问题。
+ */
 function toDateString(v) {
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
-  return v;
+  if (!(v instanceof Date)) return v;
+  var y = v.getFullYear();
+  var m = v.getMonth() + 1;
+  var d = v.getDate();
+  return y + '-' + (m < 10 ? '0' + m : m) + '-' + (d < 10 ? '0' + d : d);
 }
 
 function toCamel(row) {
@@ -485,6 +497,8 @@ const runs = {
 };
 
 module.exports = {
+  // 导出给自检用：DATE 转字符串在非 UTC 时区真踩过坑，要能被测试钉住
+  toDateString: toDateString,
   prices: prices,
   history: history,
   events: events,
