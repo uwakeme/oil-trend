@@ -121,6 +121,25 @@ async function main() {
   check('home 有 changes', !!home.changes);
   check('home 有 source', home.source && home.source.mode === 'server');
 
+  // ⚠️ 值也要对，不能只验字段存在：
+  // DATE 列没转成 'YYYY-MM-DD' 字符串时，daysLeft 会变 null、
+  // 走势曲线会是空数组 —— 字段都在，值全错，页面看着像没数据。
+  check('window.date 是 YYYY-MM-DD 字符串', typeof home.window.date === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(home.window.date), String(home.window.date));
+  check('window.daysLeft 是有效数字', typeof home.window.daysLeft === 'number' &&
+    isFinite(home.window.daysLeft), String(home.window.daysLeft));
+  check('window.progress 在 0~100 之间', typeof home.window.progress === 'number' &&
+    home.window.progress >= 0 && home.window.progress <= 100, String(home.window.progress));
+  check('trend30 有实际数据点（不是空数组）', home.trend30['92'].points.length > 0,
+    '点数 ' + home.trend30['92'].points.length);
+  check('trend30 的点日期是 YYYY-MM-DD', home.trend30['92'].points.length === 0 ||
+    /^\d{4}-\d{2}-\d{2}$/.test(home.trend30['92'].points[0].date),
+    home.trend30['92'].points.length ? home.trend30['92'].points[0].date : '无数据');
+  check('price.changeAt 是 YYYY-MM-DD', typeof home.prices[0].changeAt === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(home.prices[0].changeAt), String(home.prices[0].changeAt));
+  check('price.id 是字符串（不是数字）', typeof home.prices[0].id === 'string',
+    typeof home.prices[0].id + ' ' + home.prices[0].id);
+
   var trend = await query.actionTrend({ regionCode: '440000', fuelId: '92', period: '3m' });
   check('trend 有 points', Array.isArray(trend.points) && trend.points.length > 0);
   check('trend 有 axis', Array.isArray(trend.axis) && trend.axis.length === 3);

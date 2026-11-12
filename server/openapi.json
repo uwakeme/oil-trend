@@ -1,0 +1,1501 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "油势 · 后端 API",
+    "version": "1.0.0",
+    "description": "油势小程序的自建后端接口（Node + Express + PostgreSQL）。\n\n## 统一响应外壳\n\n所有接口都返回同一个外壳：\n\n```json\n{ \"ok\": true,  \"data\": { } }\n{ \"ok\": false, \"message\": \"错误说明\", \"code\": \"错误码\" }\n```\n\n`ok: false` 时 HTTP 状态码**仍是 200**（业务错误），只有鉴权失败才返回 401。\n小程序端 `utils/cloud.js` 按这个约定解析：`ok === false` 会 reject 并回落到本地演示源。\n\n## 认证\n\n查询类接口（`/api/regions`、`/api/home` 等）**不需要登录**。\n\n用户类接口（`/api/rules`、`/api/history`）需要登录态：\n\n1. 小程序 `wx.login()` 拿到 `code`，POST 到 `/api/login`\n2. 拿到 `token`，后续请求带 `Authorization: Bearer <token>`\n3. token 有效期 7 天；返回 401 时重新走一次登录\n\n## 错误码\n\n| code | 含义 |\n| --- | --- |\n| `NO_CODE` | 请求没带 code |\n| `UNAUTHORIZED` | 没带 token 或 token 无效/过期 |\n| `NO_OPENID` | 换不到 openid |\n| `UNKNOWN_ACTION` | 未知 action（仅云函数路径） |\n| `INTERNAL_ERROR` | 服务端异常 |\n| `NOT_FOUND` | 路径不存在 |\n\n## 数据来源\n\n返回的 `source` 字段如实标注数据来源：`mode` 为 `server` 表示来自本服务，\n`demo` 表示小程序本地演示源。`note` 是给用户看的说明。\n\n## 日期与数字格式\n\n- 日期（`date` / `executeAt` / `changeAt`）：`YYYY-MM-DD` 字符串\n- 时间戳（`publishedAt` / `updatedAt` / `time`）：ISO 8601 字符串\n- 价格与幅度：JSON number，单位元/升\n- 油品 id（`fuelId` / `id`）：**字符串**，取值 `92` / `95` / `98` / `0`\n- 地区 code：`440000` 这类 6 位行政区划码"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:3002",
+      "description": "本地开发（server/npm start）"
+    },
+    {
+      "url": "https://api.example.com",
+      "description": "生产环境（换成你自己的已备案域名）"
+    }
+  ],
+  "tags": [
+    {
+      "name": "健康检查",
+      "description": "部署探活"
+    },
+    {
+      "name": "认证",
+      "description": "登录与 token"
+    },
+    {
+      "name": "油价数据",
+      "description": "地区、首页、走势、调价通知"
+    },
+    {
+      "name": "国际行情",
+      "description": "Brent / WTI"
+    },
+    {
+      "name": "同步状态",
+      "description": "采集运行状态"
+    },
+    {
+      "name": "提醒",
+      "description": "提醒规则与记录（需登录）"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "健康检查"
+        ],
+        "summary": "健康检查",
+        "description": "部署后探活用。返回 200 说明服务活着。",
+        "responses": {
+          "200": {
+            "description": "服务正常",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "status": "up",
+                    "time": "2026-11-12T07:20:12.646Z"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/login": {
+      "post": {
+        "tags": [
+          "认证"
+        ],
+        "summary": "登录（code 换 token）",
+        "description": "小程序 `wx.login()` 拿到 code 后调这个接口。\n服务端用 code 换 openid（code2session），并签发一个自签 token。\n\n**code 5 分钟有效且只能用一次**，失败后要重新 `wx.login()`。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "code"
+                ],
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "description": "wx.login() 返回的临时凭证",
+                    "example": "0a3xY7K9mQ2pL8vR1sT4uW6yZ"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "登录结果（失败时 ok 为 false）",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                },
+                "examples": {
+                  "success": {
+                    "summary": "成功",
+                    "value": {
+                      "ok": true,
+                      "data": {
+                        "token": "eyJvcGVuaWQiOiJvcGVuaWQtdGVzdCJ9.abc123",
+                        "openid": "oXyZ1234567890abcdef"
+                      }
+                    }
+                  },
+                  "noCode": {
+                    "summary": "没带 code",
+                    "value": {
+                      "ok": false,
+                      "message": "缺少 code",
+                      "code": "NO_CODE"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/regions": {
+      "get": {
+        "tags": [
+          "油价数据"
+        ],
+        "summary": "地区列表",
+        "description": "返回所有支持地区的列表，带 92# 当前价。首页和地区选择弹层用。",
+        "responses": {
+          "200": {
+            "description": "地区列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegionsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/home": {
+      "get": {
+        "tags": [
+          "油价数据"
+        ],
+        "summary": "首页数据",
+        "description": "一次给全首页要的：各油品当前价、下一轮调价窗口、近 30 天走势、最新调价通知。",
+        "parameters": [
+          {
+            "name": "regionCode",
+            "in": "query",
+            "required": false,
+            "description": "地区 code，不传用默认（广东·广州 440000）",
+            "schema": {
+              "type": "string",
+              "default": "440000",
+              "example": "440000"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "首页数据",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/trend": {
+      "get": {
+        "tags": [
+          "油价数据"
+        ],
+        "summary": "价格走势",
+        "description": "指定油品与周期的阶梯线数据 + 区间内的调价节点。",
+        "parameters": [
+          {
+            "name": "regionCode",
+            "in": "query",
+            "required": false,
+            "description": "地区 code",
+            "schema": {
+              "type": "string",
+              "default": "440000"
+            }
+          },
+          {
+            "name": "fuelId",
+            "in": "query",
+            "required": false,
+            "description": "油品 id",
+            "schema": {
+              "type": "string",
+              "default": "92",
+              "enum": [
+                "92",
+                "95",
+                "98",
+                "0"
+              ]
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "description": "时间范围",
+            "schema": {
+              "type": "string",
+              "default": "3m",
+              "enum": [
+                "3m",
+                "6m",
+                "1y"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "走势数据",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrendResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/notices": {
+      "get": {
+        "tags": [
+          "油价数据"
+        ],
+        "summary": "调价通知列表",
+        "description": "只返回 `reviewStatus = approved` 的通知 —— 未复核的采集结果不对外发布。\n同时带上下一次调价窗口与采集同步状态。",
+        "parameters": [
+          {
+            "name": "regionCode",
+            "in": "query",
+            "required": false,
+            "description": "地区 code",
+            "schema": {
+              "type": "string",
+              "default": "440000"
+            }
+          },
+          {
+            "name": "filter",
+            "in": "query",
+            "required": false,
+            "description": "通知类型筛选",
+            "schema": {
+              "type": "string",
+              "default": "official",
+              "enum": [
+                "official",
+                "forecast"
+              ]
+            }
+          },
+          {
+            "name": "fuelId",
+            "in": "query",
+            "required": false,
+            "description": "油品 id",
+            "schema": {
+              "type": "string",
+              "default": "92"
+            }
+          },
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "description": "跳过的条数（分页用）",
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "通知列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NoticesResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/market": {
+      "get": {
+        "tags": [
+          "国际行情"
+        ],
+        "summary": "国际原油行情",
+        "description": "Brent / WTI 的分时曲线与当日行情。曲线按 period 裁剪，不是原样回显。",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "description": "品种",
+            "schema": {
+              "type": "string",
+              "default": "brent",
+              "enum": [
+                "brent",
+                "wti"
+              ]
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "description": "周期",
+            "schema": {
+              "type": "string",
+              "default": "1d",
+              "enum": [
+                "1d",
+                "1w",
+                "1m",
+                "3m"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "行情数据",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/sync-status": {
+      "get": {
+        "tags": [
+          "同步状态"
+        ],
+        "summary": "采集同步状态",
+        "description": "最近一次采集的结果。`status` 的取值决定页面顶部那行文案。",
+        "responses": {
+          "200": {
+            "description": "同步状态",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncStatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rules": {
+      "get": {
+        "tags": [
+          "提醒"
+        ],
+        "summary": "读取提醒规则",
+        "description": "返回当前用户（token 里的 openid）的全部提醒规则。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "规则列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RulesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录或 token 失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "example": {
+                  "ok": false,
+                  "message": "未登录或登录态已过期",
+                  "code": "UNAUTHORIZED"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "提醒"
+        ],
+        "summary": "保存提醒规则",
+        "description": "按 (地区, 油品) upsert —— 传了就更新，没传就新增，不用先查再判断。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "rules"
+                ],
+                "properties": {
+                  "rules": {
+                    "type": "array",
+                    "description": "规则数组",
+                    "items": {
+                      "$ref": "#/components/schemas/AlertRuleInput"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "保存结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RulesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录或 token 失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/history": {
+      "get": {
+        "tags": [
+          "提醒"
+        ],
+        "summary": "读取提醒记录",
+        "description": "返回当前用户最近的提醒记录，最多 50 条。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "记录列表",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录或 token 失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "提醒"
+        ],
+        "summary": "保存提醒记录",
+        "description": "写入本地产生的提醒记录。不传 dedupKey 时服务端会自己生成一个。",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "history"
+                ],
+                "properties": {
+                  "history": {
+                    "type": "array",
+                    "description": "记录数组",
+                    "items": {
+                      "$ref": "#/components/schemas/AlertHistoryInput"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "保存结果",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "未登录或 token 失效",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "登录接口返回的 token，格式 `Bearer <token>`"
+      }
+    },
+    "schemas": {
+      "SourceInfo": {
+        "type": "object",
+        "description": "数据来源标注",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "description": "server = 来自本服务；demo = 小程序本地演示源",
+            "example": "server"
+          },
+          "name": {
+            "type": "string",
+            "description": "来源名称",
+            "example": "服务端定时采集"
+          },
+          "note": {
+            "type": "string",
+            "description": "给用户看的说明",
+            "example": "数据来自服务端采集的官方公告"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "message",
+          "code"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": false
+          },
+          "message": {
+            "type": "string",
+            "example": "未登录或登录态已过期"
+          },
+          "code": {
+            "type": "string",
+            "example": "UNAUTHORIZED"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "example": "up"
+              },
+              "time": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        }
+      },
+      "LoginResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "自签 token，有效期 7 天"
+              },
+              "openid": {
+                "type": "string",
+                "description": "用户标识"
+              }
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        }
+      },
+      "Region": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "行政区划码",
+            "example": "440000"
+          },
+          "name": {
+            "type": "string",
+            "example": "广东"
+          },
+          "city": {
+            "type": "string",
+            "example": "广州"
+          },
+          "fullName": {
+            "type": "string",
+            "example": "广东 · 广州"
+          },
+          "price92": {
+            "type": "number",
+            "nullable": true,
+            "description": "92# 当前价（元/升），该地区无数据时为 null",
+            "example": 7.36
+          }
+        }
+      },
+      "RegionsResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "regions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Region"
+                }
+              }
+            }
+          }
+        }
+      },
+      "PriceItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "油品 id（字符串）",
+            "example": "92"
+          },
+          "name": {
+            "type": "string",
+            "example": "92# 汽油"
+          },
+          "short": {
+            "type": "string",
+            "example": "92#"
+          },
+          "unit": {
+            "type": "string",
+            "example": "元/升"
+          },
+          "price": {
+            "type": "number",
+            "description": "当前价",
+            "example": 7.36
+          },
+          "changeAmount": {
+            "type": "number",
+            "description": "最近一次调价幅度，负数是下调",
+            "example": -0.08
+          },
+          "changeAt": {
+            "type": "string",
+            "description": "最近一次调价日期 YYYY-MM-DD",
+            "example": "2026-11-04"
+          },
+          "direction": {
+            "type": "string",
+            "description": "涨跌方向",
+            "enum": [
+              "up",
+              "down",
+              "flat"
+            ],
+            "example": "down"
+          }
+        }
+      },
+      "Window": {
+        "type": "object",
+        "description": "下一轮调价窗口",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "调价日期 YYYY-MM-DD",
+            "example": "2026-11-14"
+          },
+          "time": {
+            "type": "string",
+            "example": "24:00"
+          },
+          "daysLeft": {
+            "type": "integer",
+            "description": "还剩几天",
+            "example": 2
+          },
+          "cycleStart": {
+            "type": "string",
+            "description": "本轮周期开始日 YYYY-MM-DD",
+            "example": "2026-11-14"
+          },
+          "cycleStarted": {
+            "type": "boolean",
+            "description": "周期是否已开始",
+            "example": false
+          },
+          "progress": {
+            "type": "integer",
+            "description": "周期进度百分比 0~100",
+            "example": 0
+          },
+          "isOfficial": {
+            "type": "boolean",
+            "description": "是否官方公布",
+            "example": false
+          },
+          "basis": {
+            "type": "string",
+            "description": "依据说明",
+            "example": "按 10 个工作日调价周期推算"
+          },
+          "forecast": {
+            "type": "object",
+            "description": "预测数据（非官方）",
+            "additionalProperties": true
+          }
+        }
+      },
+      "NoticeItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "通知 id",
+            "example": 1
+          },
+          "kind": {
+            "type": "string",
+            "description": "official = 官方正式；forecast = 市场预测",
+            "enum": [
+              "official",
+              "forecast"
+            ],
+            "example": "official"
+          },
+          "title": {
+            "type": "string",
+            "example": "国内成品油价格按机制上调"
+          },
+          "publishedAt": {
+            "type": "string",
+            "description": "发布时间 ISO 8601",
+            "example": "2026-11-12T07:20:12.610Z"
+          },
+          "executeAt": {
+            "type": "string",
+            "description": "执行日期 YYYY-MM-DD",
+            "example": "2026-11-12"
+          },
+          "changes": {
+            "type": "object",
+            "description": "各油品调整幅度（元/升），负数是下调",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "example": {
+              "0": 0.15,
+              "92": 0.15,
+              "95": 0.15,
+              "98": 0.15
+            }
+          },
+          "summary": {
+            "type": "string",
+            "example": "各油品每升上调 0.15 元"
+          },
+          "prices": {
+            "type": "object",
+            "description": "调整后各油品价格",
+            "additionalProperties": {
+              "type": "number"
+            }
+          },
+          "source": {
+            "type": "object",
+            "description": "原文来源",
+            "additionalProperties": true
+          }
+        }
+      },
+      "Point": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "description": "日期 YYYY-MM-DD（国际行情是 YYYY-MM-DD HH:mm:ss）",
+            "example": "2026-11-04"
+          },
+          "value": {
+            "type": "number",
+            "description": "价格",
+            "example": 7.36
+          }
+        }
+      },
+      "RegionRef": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "440000"
+          },
+          "fullName": {
+            "type": "string",
+            "example": "广东 · 广州"
+          }
+        }
+      },
+      "HomeResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "$ref": "#/components/schemas/RegionRef"
+              },
+              "prices": {
+                "type": "array",
+                "description": "各油品当前价",
+                "items": {
+                  "$ref": "#/components/schemas/PriceItem"
+                }
+              },
+              "window": {
+                "$ref": "#/components/schemas/Window"
+              },
+              "trend30": {
+                "type": "object",
+                "description": "近 30 天走势，key 是油品 id",
+                "additionalProperties": {
+                  "type": "object",
+                  "properties": {
+                    "points": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Point"
+                      }
+                    },
+                    "labels": {
+                      "type": "array",
+                      "description": "X 轴标签",
+                      "items": {
+                        "type": "string"
+                      },
+                      "example": [
+                        "10月14日",
+                        "10月29日",
+                        "11月12日"
+                      ]
+                    }
+                  }
+                }
+              },
+              "changes": {
+                "type": "object",
+                "description": "最新通知里各油品的调整幅度",
+                "additionalProperties": {
+                  "type": "number"
+                }
+              },
+              "notice": {
+                "nullable": true,
+                "description": "最新一条已复核的调价通知",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/NoticeItem"
+                  }
+                ]
+              },
+              "publishedAt": {
+                "type": "string",
+                "description": "最新通知的发布时间，没有则为空串",
+                "example": "2026-11-12T07:20:12.610Z"
+              },
+              "source": {
+                "$ref": "#/components/schemas/SourceInfo"
+              }
+            }
+          }
+        }
+      },
+      "TrendEvent": {
+        "type": "object",
+        "properties": {
+          "date": {
+            "type": "string",
+            "example": "2026-08-26"
+          },
+          "title": {
+            "type": "string",
+            "example": "国内成品油价格按机制上调"
+          },
+          "amount": {
+            "type": "number",
+            "description": "该油品的调整幅度",
+            "example": 0.1
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down"
+            ],
+            "example": "up"
+          },
+          "priceAfter": {
+            "type": "number",
+            "description": "调价当天的价格",
+            "example": 7.36
+          }
+        }
+      },
+      "TrendResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "$ref": "#/components/schemas/RegionRef"
+              },
+              "fuel": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "example": "92"
+                  },
+                  "name": {
+                    "type": "string",
+                    "example": "92# 汽油"
+                  }
+                }
+              },
+              "price": {
+                "type": "number",
+                "description": "区间末价格",
+                "example": 7.36
+              },
+              "deltaPercent": {
+                "type": "number",
+                "description": "区间涨跌百分比",
+                "example": -1.24
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "up",
+                  "down",
+                  "flat"
+                ],
+                "example": "down"
+              },
+              "rangeLabel": {
+                "type": "string",
+                "example": "近 3 个月"
+              },
+              "low": {
+                "type": "number",
+                "example": 7.28
+              },
+              "high": {
+                "type": "number",
+                "example": 7.55
+              },
+              "count": {
+                "type": "integer",
+                "description": "区间内调价节点数",
+                "example": 6
+              },
+              "axis": {
+                "type": "array",
+                "description": "X 轴标签（三个）",
+                "items": {
+                  "type": "string"
+                },
+                "example": [
+                  "2026/08",
+                  "2026/09",
+                  "2026/11"
+                ]
+              },
+              "points": {
+                "type": "array",
+                "description": "阶梯线数据点",
+                "items": {
+                  "$ref": "#/components/schemas/Point"
+                }
+              },
+              "events": {
+                "type": "array",
+                "description": "区间内调价节点",
+                "items": {
+                  "$ref": "#/components/schemas/TrendEvent"
+                }
+              },
+              "source": {
+                "$ref": "#/components/schemas/SourceInfo"
+              }
+            }
+          }
+        }
+      },
+      "SyncInfo": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "采集状态",
+            "enum": [
+              "ok",
+              "idle",
+              "pending",
+              "partial",
+              "error"
+            ],
+            "example": "idle"
+          },
+          "lastCheckedAt": {
+            "type": "string",
+            "description": "最近检查时间 ISO 8601，没有则为空串",
+            "example": ""
+          },
+          "sourceName": {
+            "type": "string",
+            "example": "服务端定时采集"
+          },
+          "sourceUrl": {
+            "type": "string",
+            "example": ""
+          }
+        }
+      },
+      "NoticesResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "region": {
+                "$ref": "#/components/schemas/RegionRef"
+              },
+              "window": {
+                "$ref": "#/components/schemas/Window"
+              },
+              "sync": {
+                "$ref": "#/components/schemas/SyncInfo"
+              },
+              "notices": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/NoticeItem"
+                }
+              },
+              "source": {
+                "$ref": "#/components/schemas/SourceInfo"
+              }
+            }
+          }
+        }
+      },
+      "MarketResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "symbol": {
+                "type": "string",
+                "enum": [
+                  "brent",
+                  "wti"
+                ],
+                "example": "brent"
+              },
+              "name": {
+                "type": "string",
+                "example": "布伦特原油"
+              },
+              "price": {
+                "type": "number",
+                "example": 78.42
+              },
+              "changeAmount": {
+                "type": "number",
+                "example": 0.64
+              },
+              "changePercent": {
+                "type": "number",
+                "example": 0.82
+              },
+              "open": {
+                "type": "number",
+                "example": 77.81
+              },
+              "prevClose": {
+                "type": "number",
+                "example": 77.78
+              },
+              "high": {
+                "type": "number",
+                "example": 78.67
+              },
+              "low": {
+                "type": "number",
+                "example": 77.56
+              },
+              "points": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Point"
+                }
+              },
+              "axis": {
+                "type": "string",
+                "description": "X 轴标签（国际行情是单个字符串，不是数组）",
+                "example": "15:08"
+              },
+              "delayed": {
+                "type": "boolean",
+                "description": "是否延时数据",
+                "example": true
+              },
+              "quoteTime": {
+                "type": "string",
+                "example": "11-12 15:08:12"
+              },
+              "source": {
+                "$ref": "#/components/schemas/SourceInfo"
+              }
+            }
+          }
+        }
+      },
+      "SyncStatusResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "ok",
+                  "idle",
+                  "pending",
+                  "partial",
+                  "error"
+                ],
+                "example": "idle"
+              },
+              "sourceName": {
+                "type": "string",
+                "example": "服务端定时采集"
+              },
+              "lastCheckedAt": {
+                "type": "string",
+                "example": ""
+              },
+              "needsReview": {
+                "type": "array",
+                "description": "待人工核对的采集项",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "sourceId": {
+                      "type": "string",
+                      "example": "ndrc-notice"
+                    },
+                    "reason": {
+                      "type": "string",
+                      "example": "PARSE_FAILED"
+                    },
+                    "message": {
+                      "type": "string",
+                      "example": "正文抓取成功但无法解析出结构化字段，已转人工核对"
+                    },
+                    "at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              },
+              "source": {
+                "$ref": "#/components/schemas/SourceInfo"
+              }
+            }
+          }
+        }
+      },
+      "AlertRuleInput": {
+        "type": "object",
+        "required": [
+          "regionCode",
+          "fuelId"
+        ],
+        "properties": {
+          "regionCode": {
+            "type": "string",
+            "description": "地区 code",
+            "example": "440000"
+          },
+          "fuelId": {
+            "type": "string",
+            "description": "油品 id",
+            "enum": [
+              "92",
+              "95",
+              "98",
+              "0"
+            ],
+            "example": "92"
+          },
+          "officialDrop": {
+            "type": "boolean",
+            "description": "官方降价即提醒",
+            "default": true
+          },
+          "targetPrice": {
+            "type": "number",
+            "nullable": true,
+            "description": "目标价（元/升），null 表示不启用",
+            "example": 7.2
+          },
+          "predictDrop": {
+            "type": "boolean",
+            "description": "预测下调也提醒（默认关）",
+            "default": false
+          },
+          "subscribeGranted": {
+            "type": "boolean",
+            "description": "用户是否已授权订阅消息",
+            "default": false
+          }
+        }
+      },
+      "AlertRule": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AlertRuleInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer",
+                "example": 1
+              },
+              "userId": {
+                "type": "string",
+                "description": "用户 openid"
+              },
+              "extra": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "createdAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "updatedAt": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        ]
+      },
+      "RulesResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "rules": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AlertRule"
+                }
+              }
+            }
+          }
+        }
+      },
+      "AlertHistoryInput": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "记录标题",
+            "example": "官方降价提醒"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "发生时间，不传用当前时间"
+          },
+          "sent": {
+            "type": "boolean",
+            "description": "是否已下发",
+            "default": false
+          },
+          "dedupKey": {
+            "type": "string",
+            "description": "去重键，不传服务端自己生成"
+          }
+        }
+      },
+      "AlertHistory": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AlertHistoryInput"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer",
+                "example": 1
+              },
+              "userId": {
+                "type": "string"
+              },
+              "dedupKey": {
+                "type": "string"
+              },
+              "failReason": {
+                "type": "string",
+                "nullable": true,
+                "example": null
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          }
+        ]
+      },
+      "HistoryResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "history": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AlertHistory"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

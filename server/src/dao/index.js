@@ -28,14 +28,35 @@ var NUMERIC_COLUMNS = {
   open: 1, prevclose: 1, high: 1, low: 1
 };
 
+/**
+ * DATE 列：pg 会转成 JS Date 对象，但业务层要的是 'YYYY-MM-DD' 字符串。
+ *
+ * ⚠️ 不转的话会出两个静默错误：
+ *   1. dayDiff('2026-11-14', Date对象) → NaN，窗口的 daysLeft / progress 变 null；
+ *   2. '2026-11-04' >= '2026-10-14' 之类的字符串比较失效，走势曲线空数组。
+ * 页面和云函数那边拿到的都是日期字符串，所以这里必须对齐。
+ */
+var DATE_COLUMNS = {
+  date: 1, changeat: 1, executeat: 1, cyclestart: 1
+};
+
+/** Date → 'YYYY-MM-DD'（按 UTC 取日期部分，和库里存的值一致） */
+function toDateString(v) {
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  return v;
+}
+
 function toCamel(row) {
   if (!row) return row;
   var out = {};
   Object.keys(row).forEach(function (k) {
     var camel = k.replace(/_([a-z])/g, function (_, c) { return c.toUpperCase(); });
     var v = row[k];
-    // NUMERIC 在 pg 里默认返回字符串，这些列要转成数字，页面才不用自己 parse
-    if (NUMERIC_COLUMNS[camel.toLowerCase()] && typeof v === 'string' && v !== '') {
+    var lower = camel.toLowerCase();
+    if (DATE_COLUMNS[lower] && v instanceof Date) {
+      out[camel] = toDateString(v);
+    } else if (NUMERIC_COLUMNS[lower] && typeof v === 'string' && v !== '') {
+      // NUMERIC 在 pg 里默认返回字符串，这些列要转成数字，页面才不用自己 parse
       out[camel] = Number(v);
     } else {
       out[camel] = v;
