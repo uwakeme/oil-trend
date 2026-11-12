@@ -1,0 +1,30 @@
+name: inspect-80
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    environment: 腾讯云
+    steps:
+      - name: Read-only inspection
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            echo '=== nginx 状态（只读，不改动）==='
+            systemctl is-active nginx
+            echo '=== 80 端口占用（只读）==='
+            sudo ss -tlnp | grep ':80 ' || echo '80 端口空闲'
+            echo '=== letsencrypt 日志里 certbot 的校验细节（只读）==='
+            sudo grep -iE 'challenge|404|standalone|Connection|timeout' /var/log/letsencrypt/letsencrypt.log 2>/dev/null | tail -25
+            echo '=== 是否有别的服务在 80（cloudflared / frp / 宝塔等）==='
+            sudo ss -tlnp | head -20
+            echo '=== 本机 curl 自测 80（带 Host 头）==='
+            curl -s -o /dev/null -w 'HTTP %{http_code}\n' -H 'Host: oil-trend.uwakeme.top' http://127.0.0.1/ || true
+            echo '=== 公网访问 80（从服务器自己出去）==='
+            curl -s -o /dev/null -w 'HTTP %{http_code}\n' --max-time 8 http://oil-trend.uwakeme.top/ || true
