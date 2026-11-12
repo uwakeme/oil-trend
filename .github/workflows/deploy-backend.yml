@@ -88,13 +88,7 @@ jobs:
             echo "检查是否需要灌演示数据..."
             # 表建好了但没数据时，接口能通、页面却是空的。
             # 只在当前价表为空时灌，不覆盖采集器写进来的真实数据。
-            NEED_SEED=$(node -e "
-              const db = require('./src/db');
-              db.query('SELECT COUNT(*) AS n FROM oil_prices').then(r => {
-                console.log(r[0].n === 0 ? 'yes' : 'no');
-                process.exit(0);
-              }).catch(() => { console.log('no'); process.exit(0); });
-            ")
+            NEED_SEED=$(node scripts/need-seed.js)
             if [ "$NEED_SEED" = "yes" ]; then
               echo "  数据库为空，灌入演示数据..."
               node scripts/seed.js
