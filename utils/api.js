@@ -31,15 +31,20 @@ function preferCloud() {
  * 云端失败回落到演示数据时，必须如实标成演示源。
  *
  * mode 说明：
- *   'demo'  本地演示数据
- *   'live'  真实后端返回（自建服务器或云开发，transport 里区分）
+ *   'demo'  演示数据
+ *   'live'  真实数据
  *
- * 页面只判断 mode === 'demo' 来决定要不要标「（演示数据）」，
- * 所以从 'cloud' 改成 'live' 不影响任何页面逻辑。
+ * 两种情况是 demo：
+ *   1. 本地兜底（后端挂了，取本地演示源）
+ *   2. 后端自己标的 —— 比如服务端库里还没采集到真实行情，
+ *      接口返回的是演示曲线但如实标了 mode=demo。
+ * 所以后端已经标了 demo 就尊重它，别覆盖成 live。
  */
 function stampSource(data, mode, transport) {
   if (data && typeof data === 'object') {
-    data.source = Object.assign({}, data.source || {}, { mode: mode, transport: transport });
+    var existing = data.source || {};
+    var finalMode = existing.mode === 'demo' ? 'demo' : mode;
+    data.source = Object.assign({}, existing, { mode: finalMode, transport: transport });
   }
   return data;
 }

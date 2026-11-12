@@ -79,6 +79,13 @@ Page({
         direction: item.direction
       };
     }
+    // 演示数据（服务端还没采集到真实行情）不能标「实时」——
+    // 那会把演示曲线说成真实行情，与「如实展示来源」冲突。
+    var isDemo = !!(main.source && main.source.mode === 'demo');
+    var delayText = isDemo
+      ? '演示数据'
+      : (main.delayed ? ('延时 ' + main.delayMinutes + ' 分钟') : '实时');
+
     this.setData({
       loading: false,
       loadError: '',
@@ -94,11 +101,11 @@ Page({
         highText: fmt.price(main.high),
         lowText: fmt.price(main.low),
         quoteTime: main.quoteTime,
-        delayText: main.delayed ? ('延时 ' + main.delayMinutes + ' 分钟') : '实时',
+        delayText: delayText,
         points: main.points || [],
         axis: main.axis || []
       },
-      delayText: main.delayed ? ('行情延时 ' + main.delayMinutes + ' 分钟') : '行情实时',
+      delayText: isDemo ? '演示数据' : (main.delayed ? ('行情延时 ' + main.delayMinutes + ' 分钟') : '行情实时'),
       sourceNote: (main.source && main.source.note) || ''
     });
   },

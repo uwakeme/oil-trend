@@ -116,7 +116,9 @@ function actionMarket(payload) {
         axis: fallback.axis,
         delayed: fallback.delayed,
         quoteTime: fallback.quoteTime,
-        source: { mode: 'server', name: '服务端定时采集', note: '演示数据（尚未采集真实行情）' }
+        // mode 必须标 demo：前端靠它判断该不该显示「（演示数据）」，
+        // 以及该不该把延迟状态写成「实时」。
+        source: { mode: 'demo', name: '服务端定时采集', note: '演示数据（尚未采集真实行情）' }
       };
     }
 
