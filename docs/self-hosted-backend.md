@@ -132,30 +132,42 @@ POST https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token=XXX
 | `oil_users` | `oil_users` | 用户标识，openid 唯一 |
 | `collector_runs` | `collector_runs` | 采集运行记录 |
 
-字段命名：云端用 camelCase，库里用 snake_case，映射集中在 DAO 层做，
+字段命名：业务层用 camelCase，库里用 snake_case，映射集中在 DAO 层做，
 不把命名转换散落在业务代码里。
+
+⚠️ `DATE` 列要转成 `YYYY-MM-DD` 字符串，且必须按**本地**日历日取：
+node-postgres 把 DATE 解析成「本地零点」的 Date，用 `toISOString()` 取日期
+在 UTC+8 会整体退一天（线上真踩过，窗口日期显示成昨天）。
+
+⚠️ 新增列用 `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` 写在 schema.sql 末尾，
+部署脚本每次都跑这个文件，老库能自动补列。`forecast_direction` 就是这么加的。
 
 ### 共享算法不能重写
 
 `data/` 下的调价时间线（24 条）、地区价差、油品定义、行情生成是**纯 JS**，
 现在靠 `scripts/sync-shared.js` 从 `data/` 生成到 `server/src/shared/` 并加一致性断言。
 
-服务端也要用同一份 —— 同步脚本改成把 `data/` 同步到 `server/shared/`，
+服务端也要用同一份 —— 同步脚本把 `data/` 生成到 `server/src/shared/shared.js`，
 断言逻辑照抄。这样两端数值必然一致，不需要重新实现价格模型。
 
 ## 五、定时任务
 
 云开发用触发器，自建用 crontab 或进程内调度：
 
-| 任务 | 频率 | 对应服务 |
+| 任务 | 频率 | 入口 |
 | --- | --- | --- |
-| 采集 | 每 30 分钟 | `oilCollector` 定时触发器 |
-| 提醒匹配 | 每 10 分钟 | `oilAlert` 定时触发器 |
+| 采集 | 每 30 分钟 | `collector.run()` |
+| 提醒匹配 | 每 10 分钟 | `alert.run()` |
 
-用进程内调度（node-cron）比 crontab 好：不用关心部署环境的 crontab 配置，
-日志也在同一个进程里。但要保证**多实例部署时不会重复执行** ——
-采集器靠 dedupKey 去重，提醒器靠 alert_logs 的 dedupKey，
-所以即使重复跑也不会发重复消息，但会浪费配额。
+用进程内调度（`server/src/scheduler.js`，自己实现的 6 段 cron，没引 node-cron）
+比 crontab 好：不用关心部署环境的 crontab 配置，日志也在同一个进程里。
+
+⚠️ cron 字段必须支持星号步长（`*` + `/N` 那种写法）—— 第一版只认纯数字，
+默认配置直接解析成 `null`，采集器和提醒器在线上一次都没跑过。
+现在由 `server/scripts/scheduler-test.js` 钉住。
+
+多实例部署时同一时刻会各跑一次：采集器靠 dedupKey 去重，提醒器靠
+alert_logs 的 dedupKey，所以即使重复跑也不会发重复消息，但会浪费配额。
 
 ## 六、目录结构
 

@@ -125,8 +125,9 @@ node scripts/verify-in-devtools.js
 
 ## 采集器验证（2026-11-12）
 
-`node scripts/verify-collector.js`：39 个 fixture/构造用例，
-两份 `sources.js` 跑同一套，输出必须一致。fixture 是当天真实抓取的
+`node scripts/verify-collector.js`：19 个 fixture/构造用例
+（云函数那份实现删掉后从 39 项收敛到 19 项，不再需要两份比对）。
+fixture 是当天真实抓取的
 北京/陕西/云南省页快照（`scripts/fixtures/`），解析价与
 `data/reference-prices.js`（独立来源）124 个值逐值一致。
 `--live` 追加真实抓取 + pg-mem 入库链路：单地区采集 → 新鲜期跳过 →

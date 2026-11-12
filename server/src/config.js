@@ -63,6 +63,4 @@ module.exports = {
   collectCron: optional('OIL_COLLECT_CRON', '0 */30 * * * *'),
   alertCron: optional('OIL_ALERT_CRON', '0 */10 * * * *'),
 
-  // 采集开关（见 src/services/sources.js）：默认关
-  collectorEnabled: optional('OIL_COLLECTOR_ENABLED', 'false') === 'true'
 };

@@ -36,11 +36,13 @@ cp .env.example .env
 | 变量 | 说明 |
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL 连接串 |
+| `PORT` | 服务端口，默认 3000；线上用 3002（避开同机的 lyric_lab） |
 | `WX_APP_ID` | 小程序 AppID（与 `project.private.config.json` 同一个） |
 | `WX_APP_SECRET` | 小程序 AppSecret，**只在服务器上** |
 | `OIL_SUBSCRIBE_TEMPLATE_ID` | 订阅消息模板 ID |
 | `OIL_TOKEN_SECRET` | 自签 token 的密钥，随便一串长随机字符 |
-| `OIL_COLLECT_CRON` | 采集频率，默认 `0 */30 * * * *` |
+| `OIL_API_BASE_URL` | 后端对外地址，部署流水线拿它做健康检查 |
+| `OIL_COLLECT_CRON` | 采集频率，默认 `0 */30 * * * *`（6 段：秒 分 时 日 月 周） |
 | `OIL_ALERT_CRON` | 提醒频率，默认 `0 */10 * * * *` |
 
 ## 四、数据从哪来
@@ -51,8 +53,9 @@ cp .env.example .env
 
 数据来源只有两条：
 
-1. **真实采集**：`server/src/services/sources.js` 里启用采集源后，
-   采集器按 `OIL_COLLECT_CRON` 的频率写库
+1. **真实采集**：`server/src/services/sources.js` 里汽油价格网（qiyoujiage）
+   默认启用，采集器按 `OIL_COLLECT_CRON` 的频率抓 31 个省页写库；
+   ndrc 公告与国际行情两个源仍默认关闭
 2. **人工录入**：直接往库里写（正式公告需要人工复核时走这条路）
 
 演示数据只存在于测试里：`server/scripts/test-fixtures.js`，
@@ -113,9 +116,9 @@ HTTP。
 | --- | --- |
 | 服务活着 | `curl /health` 返回 `{"ok":true,...}` |
 | 接口通 | `curl /api/regions` 返回 31 个地区 |
-| 数据对 | `curl /api/home?regionCode=440000` 的价格与小程序演示源一致 |
+| 数据对 | `curl /api/home?regionCode=440000` 的 92# 落在 8.6–10.1 元/升（各省挂牌价区间），`source.mode` 是 `server` |
 | 登录通 | 小程序「提醒」页保存规则后刷新，规则还在（说明 token 生效） |
-| 采集跑 | 服务端日志有「[collector] 运行」；`collector_runs` 表有记录 |
+| 采集跑 | `collector_runs` 每 30 分钟多一条 `ok`；`oil_prices` 共 124 行（31 省 × 4 油品） |
 | 提醒能发 | 造一条已复核的降价通知，等一个 `OIL_ALERT_CRON` 周期，看 `alert_logs` 里 `sent` 为 true |
 
 ## 十、出问题先看这里

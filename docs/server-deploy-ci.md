@@ -138,11 +138,16 @@ gh run watch --repo uwakeme/oil-trend
 
 ## 六、流水线做了什么
 
-1. 装依赖（`npm ci`）
-2. **跑自检**（`npm test`，66 项）—— 结构或 HTTP 契约不对就直接失败，不部署
-3. SSH 上传 `server/`（src、scripts、package.json、schema.sql、pm2 配置）
-4. 服务器上：建表 → `pm2 delete` 旧进程 → `npm install --omit=dev` → `pm2 start`
-5. 健康检查打 `OIL_API_BASE_URL/health`，不通过则整条流水线失败
+1. 装依赖（`npm ci`，含 devDependencies —— 自检要用 pg-mem）
+2. **跑自检**（`npm test`）：调度器 cron 14 项、结构 51 项、HTTP 26 项、
+   文档一致性 60 项、采集器 fixture 回归 19 项。任何一项失败就直接不部署
+3. SSH 上传 `server/`（src、scripts、package.json、lock、schema.sql、pm2 配置）
+4. 服务器上：`.env` 缺失才创建 → `pm2 delete` 旧进程 → `npm install --omit=dev`
+   → `apply-schema.js` 建表/补列 → `pm2 start` → `pm2 save`
+5. 在**服务器上**健康检查（runner 上的 127.0.0.1 不是服务器）不通过则整条流水线失败
+
+⚠️ 部署**不会**灌演示数据。之前「库空就自动 seed」的逻辑会导致每次部署
+都把演示数据灌回去，手动清理完下一次部署又白清 —— 已删掉。
 
 ## 七、端口
 

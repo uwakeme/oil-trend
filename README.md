@@ -176,11 +176,11 @@ module.exports = {
 | 方法 | 路径 | 入参 | 返回 |
 | --- | --- | --- | --- |
 | GET | `/api/regions` | 无 | `{ regions }` |
-| GET | `/api/home` | `regionCode` | `{ prices, window, trend30, changes, notice }` |
-| GET | `/api/trend` | `regionCode, fuelId, period` | `{ points, labels, events }` |
-| GET | `/api/notices` | `regionCode, filter, fuelId, skip` | `{ notices, total }` |
-| GET | `/api/market` | `symbol, period` | `{ price, changePercent, points, delayed }` |
-| GET | `/api/sync-status` | 无 | `{ status, sourceName, needsReview }` |
+| GET | `/api/home` | `regionCode` | `{ region, prices, window, trend30, changes, notice, publishedAt, source }` |
+| GET | `/api/trend` | `regionCode, fuelId, period` | `{ region, fuel, price, deltaPercent, direction, axis, points, events, source }` |
+| GET | `/api/notices` | `regionCode, filter, fuelId, skip` | `{ region, window, sync, notices, source }` |
+| GET | `/api/market` | `symbol, period` | `{ symbol, price, changeAmount, changePercent, direction, open, prevClose, high, low, points, axis, delayed, quoteTime, source }` |
+| GET | `/api/sync-status` | 无 | `{ status, sourceName, lastCheckedAt, needsReview, source }` |
 
 用户类要带 `Authorization: Bearer <token>`：
 
@@ -252,7 +252,6 @@ node scripts/verify-in-devtools.js
 | `PORT` | 服务端口 | `3000` |
 | `OIL_COLLECT_CRON` | 采集频率，六段 cron | `0 */30 * * * *` |
 | `OIL_ALERT_CRON` | 提醒频率，六段 cron | `0 */10 * * * *` |
-| `OIL_COLLECTOR_ENABLED` | 采集总开关 | `false` |
 
 完整步骤和排查表都在[部署指南](./docs/server-deploy.md)里。
 
@@ -262,7 +261,7 @@ node scripts/verify-in-devtools.js
 
 - 订阅消息还没走通到底，缺正式 AppID 与模板 ID。没配置时「提醒」页会明说未配置，不会假装授权成功
 - 国家发改委公告与国际行情两个采集源还没启用，调价窗口的预测目前来自汽油价格网
-- 页面 WXSS 里还有 26 处硬编码色值没走 `styles/tokens.wxss` 的设计令牌，纯样式一致性问题，不影响功能
+- 页面 WXSS 里还有 42 处硬编码色值（26 处 hex + 16 处 rgba 阴影/边框）没走 `styles/tokens.wxss` 的设计令牌，纯样式一致性问题，不影响功能
 - 小程序主包有 2MB 上限，`project.config.json` 的 `packOptions.ignore` 已经排除了 `docs`、`design`、`scripts`、`server` 这些非运行文件
 - 换过 AppID 之后预览二维码要重出，预览包是按 AppID 上传的，旧码会指向已经不存在的账号
 
