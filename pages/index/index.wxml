@@ -124,7 +124,17 @@
 
   <!-- 地区选择 -->
   <bottom-sheet visible="{{sheetType === 'city'}}" title="选择油价地区" bind:close="onSheetClose">
-    <view class="sheet-body">不同地区零售价可能不同，首版将记住你的选择。</view>
+    <view class="sheet-body">不同地区零售价可能不同，你选过的地区会被记住。</view>
+
+    <!-- 当前位置：手动再定位一次 -->
+    <view class="city-current {{locating ? 'busy' : ''}}" bindtap="onLocateCurrent">
+      <image class="icon-inline" src="/assets/icons/target-amber.png" mode="aspectFit" />
+      <view class="city-current-body">
+        <text class="city-current-title">{{locating ? '定位中…' : '当前位置'}}</text>
+        <text class="city-current-desc">{{locateCurrentDesc}}</text>
+      </view>
+    </view>
+
     <!-- 31 个省，滚动翻找太慢，给个搜索框 -->
     <view class="city-search">
       <input class="city-search-input" type="text" value="{{regionKeyword}}"

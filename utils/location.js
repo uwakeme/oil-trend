@@ -63,11 +63,17 @@ function authState() {
   });
 }
 
-/** 拿一次经纬度 */
+/**
+ * 拿一次经纬度。
+ *
+ * 失败时给出具体原因，页面上要按原因给不同的提示：
+ *   denied     用户拒绝过位置权限（可以去设置里再开）
+ *   unavailable 取不到位置（定位服务没开、没信号等）
+ */
 function requestPosition() {
   return new Promise(function (resolve) {
     if (typeof wx.getLocation !== 'function') {
-      resolve(null);
+      resolve({ error: 'unavailable' });
       return;
     }
     wx.getLocation({
@@ -79,22 +85,32 @@ function requestPosition() {
           resolve({ latitude: res.latitude, longitude: res.longitude });
           return;
         }
-        resolve(null);
+        resolve({ error: 'unavailable' });
       },
-      fail: function () { resolve(null); }
+      fail: function (err) {
+        // 系统弹窗上点了拒绝：errMsg 是 getLocation:fail auth deny
+        var msg = (err && err.errMsg) || '';
+        if (msg.indexOf('auth deny') >= 0 || msg.indexOf('authorize') >= 0) {
+          resolve({ error: 'denied' });
+          return;
+        }
+        resolve({ error: 'unavailable' });
+      }
     });
   });
 }
 
 /**
  * 定位一次。
- * 返回 { latitude, longitude } 或 null
+ *
+ * 返回 { latitude, longitude }
+ * 或 { error: 'privacy' | 'denied' | 'unavailable' }
  */
 function detectPosition() {
   return authorizePrivacy().then(function (ok) {
-    if (!ok) return null;
+    if (!ok) return { error: 'privacy' };
     return authState().then(function (state) {
-      if (state === 'denied') return null;
+      if (state === 'denied') return { error: 'denied' };
       return requestPosition();
     });
   });
@@ -103,12 +119,12 @@ function detectPosition() {
 /**
  * 定位所在省份。
  *
- * 返回 { regionCode, regionName, city, match } 或 null。
- * match: inside 落在省界内 / nearest 就近归属 / none 没匹配到
+ * 返回 { regionCode, regionName, city, match }（match: inside / nearest）
+ * 或 { error: 'privacy' | 'denied' | 'unavailable' | 'no-match' | 'no-backend' }
  */
 function detectRegion() {
   return detectPosition().then(function (pos) {
-    if (!pos) return null;
+    if (!pos || pos.error) return pos || { error: 'unavailable' };
     return api.locate(pos.latitude, pos.longitude);
   });
 }

@@ -409,6 +409,47 @@
 
 /* ---------- 弹层内样式 ---------- */
 
+/* ---------- 当前位置入口 ---------- */
+.city-current {
+  display: flex;
+  align-items: center;
+  gap: 18rpx;
+  border: 1rpx solid var(--line);
+  background: #fffef9;
+  border-radius: 26rpx;
+  padding: 24rpx 26rpx;
+  margin-bottom: 20rpx;
+}
+
+.city-current.busy {
+  opacity: .55;
+}
+
+.city-current .icon-inline {
+  width: 44rpx;
+  height: 44rpx;
+  flex: 0 0 44rpx;
+}
+
+.city-current-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.city-current-title {
+  display: block;
+  font-size: 24rpx;
+  font-weight: 600;
+  margin-bottom: 6rpx;
+}
+
+.city-current-desc {
+  display: block;
+  font-size: 18rpx;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 /* 地区搜索：31 个省，滚动翻找太慢，给个搜索框 */
 .city-search {
   display: flex;

@@ -3,6 +3,20 @@ const store = require('../../utils/store');
 const fmt = require('../../utils/format');
 const location = require('../../utils/location');
 
+/**
+ * 定位入口的提示文案。
+ * key 与 utils/location.js、utils/api.js 返回的 error 码一一对应。
+ */
+var LOCATE_DESC = {
+  idle: '打开定位，识别所在省份并切换',
+  locating: '正在获取位置…',
+  denied: '未获得位置权限，点此去设置开启',
+  privacy: '需要同意隐私协议才能定位',
+  unavailable: '定位失败，请检查定位服务后重试',
+  'no-match': '没识别出所在省份，请手动选择',
+  'no-backend': '服务暂时不可用，请手动选择'
+};
+
 /** 把调价幅度转成展示文案 */
 function changeMeta(amount) {
   var value = Number(amount) || 0;
@@ -41,7 +55,10 @@ Page({
     sheetType: '',
     locateHint: '',
     locateAction: '',
-    locateCode: ''
+    locateCode: '',
+    locating: false,
+    locateCurrentDesc: LOCATE_DESC.idle,
+    locateCurrentAction: ''
   },
 
   onLoad() {
@@ -101,15 +118,16 @@ Page({
   detectLocation() {
     var self = this;
     return location.detectRegion().then(function (hit) {
-      if (!hit || !hit.regionCode) {
-        return location.currentAuthState().then(function (state) {
-          if (state === 'denied') {
-            self.setData({
-              locateHint: '开启定位，自动识别所在省份',
-              locateAction: 'openSetting'
-            });
-          }
-        });
+      if (!hit) return;
+      if (hit.error) {
+        // 只有「用户拒绝过权限」才值得给入口，其余情况静默降级
+        if (hit.error === 'denied') {
+          self.setData({
+            locateHint: '开启定位，自动识别所在省份',
+            locateAction: 'openSetting'
+          });
+        }
+        return;
       }
       var prefs = store.getPrefs();
       if (prefs.regionCode === hit.regionCode) {
@@ -130,6 +148,73 @@ Page({
       self.load(hit.regionCode);
     }).catch(function () {
       // 定位失败就算了，不打扰用户
+    });
+  },
+
+  /**
+   * 定位并切到当前所在省。
+   *
+   * 不管用户之前手动选过什么 —— 他明确点了「当前位置」，就该以位置为准。
+   *
+   * 返回 { switched, same, regionName } 或 { error }
+   */
+  locateAndSwitch() {
+    var self = this;
+    return location.detectRegion().then(function (hit) {
+      if (!hit) return { error: 'unavailable' };
+      if (hit.error) return hit;
+      if (store.getPrefs().regionCode === hit.regionCode) {
+        return { same: true, regionName: hit.regionName };
+      }
+      store.setRegion(hit.regionCode, 'auto');
+      self._prefsKey = store.prefsKey(store.getPrefs());
+      self.setData({ sheetType: '', locateHint: '', locateAction: '', locateCode: '' });
+      self.load(hit.regionCode);
+      return { switched: true, regionName: hit.regionName };
+    });
+  },
+
+  /**
+   * 地区弹层里的「当前位置」：手动再定位一次。
+   *
+   * 失败时把原因直接写在条目上，别只弹个 toast 让人一头雾水；
+   * 用户拒绝过权限的话，下一次点击直接拉起系统设置页。
+   */
+  onLocateCurrent() {
+    var self = this;
+    if (this.data.locating) return;
+
+    // 上次点开过「去设置开启」，这次直接去设置
+    if (this.data.locateCurrentAction === 'openSetting') {
+      this.setData({ locating: true, locateCurrentDesc: '正在打开设置…' });
+      return location.openSetting().then(function (granted) {
+        self.setData({ locating: false });
+        if (!granted) {
+          self.setData({ locateCurrentDesc: LOCATE_DESC.denied });
+          return;
+        }
+        self.setData({ locateCurrentDesc: LOCATE_DESC.idle, locateCurrentAction: '' });
+        self.onLocateCurrent();
+      });
+    }
+
+    this.setData({ locating: true, locateCurrentDesc: LOCATE_DESC.locating });
+    return this.locateAndSwitch().then(function (result) {
+      self.setData({ locating: false });
+      if (result.error) {
+        self.setData({
+          locateCurrentDesc: LOCATE_DESC[result.error] || LOCATE_DESC.unavailable,
+          locateCurrentAction: result.error === 'denied' ? 'openSetting' : ''
+        });
+        return;
+      }
+      if (result.same) {
+        self.setData({ locateCurrentDesc: '你当前就在' + result.regionName });
+        wx.showToast({ title: '当前已在' + result.regionName, icon: 'none' });
+        return;
+      }
+      self.setData({ locateCurrentDesc: LOCATE_DESC.idle });
+      wx.showToast({ title: '已切换到' + result.regionName, icon: 'none' });
     });
   },
 
@@ -316,6 +401,14 @@ Page({
 
   onPickRegion() {
     var self = this;
+    // 弹层里的「当前位置」入口要按当前授权状态给提示
+    location.currentAuthState().then(function (state) {
+      if (state === 'denied') {
+        self.setData({ locateCurrentDesc: LOCATE_DESC.denied, locateCurrentAction: 'openSetting' });
+      } else {
+        self.setData({ locateCurrentDesc: LOCATE_DESC.idle, locateCurrentAction: '' });
+      }
+    });
     api.getRegions().then(function (regions) {
       var list = (regions || []).map(function (r) {
         return Object.assign({}, r, { priceText: fmt.price(r.price92) });
