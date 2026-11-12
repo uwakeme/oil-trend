@@ -7,7 +7,7 @@
  *
  * dataSource 说明：
  *   'demo'  —— 使用内置演示数据源（默认，克隆即可跑通全部交互）
- *   'cloud' —— 优先走云函数 oilApi，失败时自动回落演示数据源
+ *   'cloud' —— 优先走后端，失败时自动回落演示数据源
  *
  * ⚠️ 引用方式必须是 '../config/index'，不能写 '../config'：
  *   微信小程序运行时的 require 不做目录 index 解析，
@@ -17,11 +17,13 @@ module.exports = {
   cloudEnvId: 'cloud1-d8ghtbekgdfa26c8f',
   subscribeTemplateIds: [],
 
-  // 后端地址：自建服务器。留空则回落到微信云开发。
-  // ⚠️ 必须是已在公众平台配置的 request 合法域名（HTTPS + 已备案）。
-  apiBaseUrl: '',
+  // 后端地址：自建服务器（server/ 部署的那台）。
+  // 留空则回落到微信云开发；填了就走 HTTP。
+  // ⚠️ 必须已在公众平台「服务器域名 → request 合法域名」里配好，
+  //   否则小程序端请求会被直接拦掉，页面一直显示演示数据。
+  apiBaseUrl: 'https://oil-trend.uwakeme.top',
 
-  // 'auto' 会在云端可用时自动优先云端；'demo' 强制只用本地演示源
+  // 'auto' 会在后端可用时自动优先走后端；'demo' 强制只用本地演示源
   dataSource: 'auto',
 
   // 演示数据集的锚点日期：所有演示日期会按「今天 - 锚点」整体平移，
