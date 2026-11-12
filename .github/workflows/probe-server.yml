@@ -6,6 +6,7 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
+    environment: 腾讯云
     steps:
       - name: Probe
         uses: appleboy/ssh-action@v1.0.3
