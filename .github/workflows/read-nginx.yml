@@ -1,0 +1,37 @@
+name: read-nginx
+
+on:
+  workflow_dispatch:
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    environment: 腾讯云
+    steps:
+      - name: Read only
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            echo '=== sites-enabled 列表 ==='
+            sudo ls -la /etc/nginx/sites-enabled/
+            echo '=== oil-trend 站点内容（刚由脚本写入）==='
+            sudo cat /etc/nginx/sites-available/oil-trend 2>/dev/null || echo '不存在'
+            echo '=== default 站点里所有 server 块与 listen/server_name ==='
+            sudo grep -nE 'server\s*\{|listen|server_name|default_server|location|proxy_pass|root' /etc/nginx/sites-enabled/default
+            echo '=== nginx.conf 顶层 include ==='
+            sudo grep -nE 'include|server_names|default_server' /etc/nginx/nginx.conf
+            echo '=== 本机 curl 各 Host 的实际响应（服务器内部）==='
+            for hh in oil-trend.uwakeme.top lyric-lab.uwakeme.top ''; do
+              echo "--- Host: '$hh'"
+              if [ -z "$hh" ]; then
+                curl -s -o /dev/null -w '  code=%{http_code} redirect=%{redirect_url}\n' --max-time 5 http://127.0.0.1/ || true
+              else
+                curl -s -o /dev/null -w '  code=%{http_code} redirect=%{redirect_url}\n' --max-time 5 -H "Host: $hh" http://127.0.0.1/ || true
+              fi
+            done
+            echo '=== nginx 错误日志最后 20 行 ==='
+            sudo tail -20 /var/log/nginx/error.log 2>/dev/null || echo '无'
