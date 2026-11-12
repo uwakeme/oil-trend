@@ -187,7 +187,10 @@ server/
 │   └── shared/               # 由 sync-cloud-shared.js 生成，勿手改
 │       └── shared.js
 └── scripts/
-    └── seed.js               # 灌演示数据
+    ├── test-fixtures.js      # 测试夹具：灌演示数据到内存库
+    ├── selftest.js           # 结构自检
+    ├── http-test.js          # HTTP 层自检
+    └── check-openapi.js      # 文档与实现一致性检查
 ```
 
 ## 七、迁移步骤
@@ -201,7 +204,7 @@ server/
 7. 改 `utils/cloud.js`：加 HTTP 分支，保留云函数分支做兜底
 8. 改 `app.js`：加 `wx.login` 换 token
 9. 真机联调：配 request 合法域名
-10. 灌演示数据（`server/scripts/seed.js`），验证云端链路
+10. 验证链路：跑 `cd server && npm test`（测试跑在内存库上，不碰真实库）
 11. 上线后把云函数停掉（保留作为应急回滚）
 
 第 7 步之前，小程序端一行都不用改 —— 所以可以先在服务端把接口全部验通，
@@ -217,4 +220,4 @@ server/
 | **access_token 缓存** | 2 小时有效，多实例各自缓存；要处理刷新失败重试 |
 | **微信接口可达性** | 服务器要能稳定访问 `api.weixin.qq.com`，境内节点更稳 |
 | **云函数保留期** | 切换期间保留云函数作为回滚手段，别急着删 |
-| **数据迁移** | 云数据库里现有的演示数据可以重新 seed，不必搬迁 |
+| **数据迁移** | 云数据库里现有的演示数据不必搬迁，自建后端不灌演示数据 |

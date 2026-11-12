@@ -98,8 +98,8 @@ async function main() {
   var pgPool = new adapter.Pool();
   dbModule.pool.query = function (text, params) { return pgPool.query(text, params); };
   await db.public.query(fs.readFileSync(path.join(ROOT, 'schema.sql'), 'utf8'));
-  var collector = require(path.join(ROOT, 'src', 'services', 'collector.js'));
-  await collector.seed();
+  var fixtures = require(path.join(ROOT, 'scripts', 'test-fixtures.js'));
+  await fixtures.seed();
 
   // 起服务
   var { createApp } = require(path.join(ROOT, 'src', 'app.js'));

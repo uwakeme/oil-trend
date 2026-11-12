@@ -65,10 +65,10 @@ async function main() {
     check('表 ' + t + ' 已创建', names.indexOf(t) !== -1);
   });
 
-  // 灌演示数据
+  // 灌演示数据（测试夹具，不在生产代码里）
   console.log('\n--- 灌演示数据 ---');
-  var collector = require(path.join(ROOT, 'src', 'services', 'collector.js'));
-  var seedResult = await collector.seed();
+  var fixtures = require(path.join(ROOT, 'scripts', 'test-fixtures.js'));
+  var seedResult = await fixtures.seed();
   check('seed 返回成功', !!(seedResult && seedResult.ok));
 
   var dao = require(path.join(ROOT, 'src', 'dao', 'index.js'));

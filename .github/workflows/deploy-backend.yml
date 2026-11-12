@@ -85,22 +85,10 @@ jobs:
             # schema.sql 全是 CREATE TABLE IF NOT EXISTS，重复执行安全。
             node scripts/apply-schema.js
 
-            echo "检查是否需要灌演示数据..."
-            # ⚠️ 默认不灌。
+            echo "跳过演示数据灌入..."
+            # 生产库不灌演示数据。
             # 之前这里是「库空就自动灌」，结果每次部署都会把演示数据
             # 重新灌回去 —— 手动清理完，下一次部署又白清了。
-            # 现在只有显式设置 SEED_DEMO=true 才灌。
-            if [ "${SEED_DEMO:-false}" = "true" ]; then
-              NEED_SEED=$(node scripts/need-seed.js)
-              if [ "$NEED_SEED" = "yes" ]; then
-                echo "  数据库为空，灌入演示数据..."
-                node scripts/seed.js
-              else
-                echo "  数据库已有数据，跳过（不覆盖真实数据）"
-              fi
-            else
-              echo "  跳过（默认不灌演示数据；需要时设 SEED_DEMO=true）"
-            fi
 
             echo "用 PM2 启动..."
             if [ ! -f "${DEPLOY_DIR}/server/oil-trend-pm2.json" ]; then

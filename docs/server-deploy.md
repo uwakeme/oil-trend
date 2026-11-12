@@ -43,14 +43,20 @@ cp .env.example .env
 | `OIL_COLLECT_CRON` | 采集频率，默认 `0 */30 * * * *` |
 | `OIL_ALERT_CRON` | 提醒频率，默认 `0 */10 * * * *` |
 
-## 四、灌演示数据
+## 四、数据从哪来
 
-真实数据源启用前先灌一套演示数据，验证链路通不通：
+**生产库不灌演示数据。** 部署流水线不会自动 seed ——
+之前「库空就自动灌」的逻辑会导致每次部署都把演示数据灌回去，
+手动清理完下一次部署又白清。
 
-```bash
-cd server
-node -e "require('./src/services/collector').seed().then(r=>console.log(r))"
-```
+数据来源只有两条：
+
+1. **真实采集**：`server/src/services/sources.js` 里启用采集源后，
+   采集器按 `OIL_COLLECT_CRON` 的频率写库
+2. **人工录入**：直接往库里写（正式公告需要人工复核时走这条路）
+
+演示数据只存在于测试里：`server/scripts/test-fixtures.js`，
+测试跑在内存库（pg-mem）上，不会碰真实数据库。
 
 ## 五、起服务
 
