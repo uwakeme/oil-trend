@@ -112,27 +112,40 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
-      - name: Health check
-        run: |
-          echo "等待服务启动..."
-          sleep 8
-          # 优先打对外域名；没配 OIL_API_BASE_URL 就退回服务器本地端口，
-          # 至少能确认进程起来了、路由通了。
-          BASE="${{ secrets.OIL_API_BASE_URL }}"
-          if [ -z "$BASE" ]; then
-            BASE="http://127.0.0.1:3002"
-            echo ">> 未配置 OIL_API_BASE_URL，改查本地端口"
-          fi
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            --connect-timeout 5 --max-time 15 \
-            "$BASE/health" || echo "000")
-          if [ "$HTTP_CODE" = "200" ]; then
-            echo "✓ 健康检查通过 ($BASE)"
-          else
-            echo "✗ 健康检查失败 (HTTP $HTTP_CODE) —— $BASE"
-            echo "排查：pm2 logs oil-trend-server；.env 里的 DATABASE_URL 是否正确"
-            exit 1
-          fi
+      # 健康检查在服务器上跑：runner 上的 127.0.0.1 是 runner 自己，不是服务器。
+      - name: Health check on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            set -e
+            DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/var/www/oil-trend' }}"
+            echo "等待服务启动..."
+            sleep 8
+            # 对外域名从服务器上的 .env 读（OIL_API_BASE_URL），没配就退回本地端口
+            PUBLIC_URL=$(grep -E '^OIL_API_BASE_URL=' ${DEPLOY_DIR}/server/.env 2>/dev/null | cut -d= -f2- | tr -d "'\"")
+            if [ -z "$PUBLIC_URL" ]; then
+              echo ">> .env 里没配 OIL_API_BASE_URL，改查服务器本地端口"
+              BASE="http://127.0.0.1:3002"
+            else
+              BASE="$PUBLIC_URL"
+            fi
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              --connect-timeout 5 --max-time 15 \
+              "$BASE/health" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✓ 健康检查通过 ($BASE)"
+            else
+              echo "✗ 健康检查失败 (HTTP $HTTP_CODE) —— $BASE"
+              echo "--- pm2 状态 ---"
+              pm2 list || true
+              echo "--- 最近日志 ---"
+              pm2 logs oil-trend-server --lines 30 --nostream || true
+              exit 1
+            fi
 
       - name: Summary
         if: always()
