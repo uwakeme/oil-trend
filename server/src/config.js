@@ -53,6 +53,9 @@ module.exports = {
   // 自签 token 的密钥，只在服务端
   tokenSecret: optional('OIL_TOKEN_SECRET', ''),
 
+  // 后端对外地址（部署流水线用它做健康检查）
+  apiBaseUrl: optional('OIL_API_BASE_URL', ''),
+
   // 数据库（读取时才校验，见 db.js）
   databaseUrl: optional('DATABASE_URL', ''),
 

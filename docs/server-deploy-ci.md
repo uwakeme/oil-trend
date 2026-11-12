@@ -41,7 +41,7 @@ Repository secrets 依然可见。
 | `SERVER_SSH_KEY` | Environment | **服务器私钥全文**，含 `-----BEGIN OPENSSH PRIVATE KEY-----` 头尾 |
 | `DEPLOY_DIR` | Environment | 部署目录，默认 `/var/www/oil-trend` |
 | `DATABASE_URL` | Repository | PostgreSQL 连接串。**注意库名要换**：参考项目是 `lyric_lab`，油势要用独立的库（如 `oil_trend`） |
-| `OIL_API_BASE_URL` | Environment（可选） | 后端对外地址，健康检查用。没配就退回查服务器本地端口 `127.0.0.1:3002` |
+| `OIL_API_BASE_URL` | Environment（可选） | 后端对外地址。**实际上从服务器 `.env` 读**，不依赖这个 secret |
 
 命令行配 Environment secret：
 
@@ -81,32 +81,23 @@ WX_APP_ID=wx你的AppID
 WX_APP_SECRET=你的AppSecret
 OIL_SUBSCRIBE_TEMPLATE_ID=你的模板ID
 OIL_TOKEN_SECRET=一串足够长的随机字符串
+OIL_API_BASE_URL=https://oil-trend.uwakeme.top
 PORT=3002
 ```
 
 ### 3. Nginx 反代 + HTTPS
 
-小程序只认 **HTTPS + 已备案域名**，所以后端必须挂在域名后面：
+小程序只认 **HTTPS + 已备案域名**，所以后端必须挂在域名后面。
+本项目用 `oil-trend.uwakeme.top`，完整步骤（DNS、签证书、nginx 配置、验证）
+见 [server-domain-setup.md](server-domain-setup.md)。
 
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name api.你的域名;
+现成的 nginx 配置文件在 `server/oil-trend.nginx.conf`：
 
-    ssl_certificate     /etc/letsencrypt/live/你的域名/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/你的域名/privkey.pem;
-
-    location / {
-        proxy_pass http://127.0.0.1:3002;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
+```bash
+sudo cp server/oil-trend.nginx.conf /etc/nginx/sites-available/oil-trend
+sudo ln -sf /etc/nginx/sites-available/oil-trend /etc/nginx/sites-enabled/oil-trend
+sudo nginx -t && sudo systemctl reload nginx
 ```
-
-配置完 `nginx -t && nginx -s reload`。
 
 ## 三、公众平台配 request 合法域名
 
