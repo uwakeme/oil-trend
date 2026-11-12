@@ -55,12 +55,27 @@ CERTBOT_EMAIL=你的邮箱@example.com bash setup-domain.sh
 
 ## 二、签证书
 
-服务器上 80 端口被 nginx 占着，所以 **不能用 `--standalone`**（会报
-`Could not bind TCP port 80 because it is already in use`）。
+### ⚠️ 必须用 `--nginx`，不能用 `--standalone`
 
-### 方案 A：certbot --nginx（推荐，不用停 nginx）
+在这台机器上试过 `--standalone`，**校验失败**：
 
-服务器上已装 `certbot_nginx` 插件，它会自己处理端口和 nginx 配置：
+```
+Detail: 124.221.89.106: Invalid response from
+  http://oil-trend.uwakeme.top/.well-known/acme-challenge/xxx: 404
+```
+
+原因在 certbot 日志里：
+
+```
+Successfully bound to :80 using IPv6
+Certbot wasn't able to bind to :80 using IPv4, this is often expected
+due to the dual stack nature of IPv6 socket implementation
+```
+
+**certbot 的 standalone 服务器只绑了 IPv6 的 `:80`，IPv4 绑不上** ——
+而 Let's Encrypt 的校验服务器走 IPv4，于是请求打到了 nginx 的默认站点，拿到 404。
+
+`--nginx` 走 nginx 自己的 80 端口，nginx 是 IPv4/IPv6 都监听的，能通过。
 
 ```bash
 sudo certbot certonly --nginx -d oil-trend.uwakeme.top \
@@ -71,20 +86,6 @@ sudo certbot certonly --nginx -d oil-trend.uwakeme.top \
 
 签完在 `/etc/letsencrypt/live/oil-trend.uwakeme.top/` 下生成
 `fullchain.pem` 和 `privkey.pem`。
-
-### 方案 B：standalone（需要短暂停 nginx）
-
-如果 `--nginx` 报错，退回这个：
-
-```bash
-sudo systemctl stop nginx
-sudo certbot certonly --standalone -d oil-trend.uwakeme.top \
-  --agree-tos --no-eff-email -m 你的邮箱@example.com
-sudo systemctl start nginx
-```
-
-> 停 nginx 期间 `lyric-lab.uwakeme.top` 和 `jiuguan.uwakeme.top` 会短暂不可访问，
-> 一般就几秒。
 
 ### 验证证书
 

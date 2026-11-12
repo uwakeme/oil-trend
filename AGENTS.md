@@ -86,6 +86,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | pg 的参数会把数字序列化成文本 | `LIMIT $1` 传过来是 `'20'`，Postgres 直接报错 | LIMIT/OFFSET 内联整数（先 `Number()` 过一遍）；`server/src/dao/index.js` 里都有注释 |
 | JSONB / NUMERIC 读出来是字符串 | pg 不自动解析，`deltas` 是对象、`price` 是字符串 | `server/src/dao/index.js` 的 `toCamel` 里用列名白名单转数字 —— **不能见数字就转**，`fuelId` 是 `'92'`，转成数字前端判断全失效 |
 | 自建后端没有 `cloud.getWXContext()` | 拿不到 openid | 走 `wx.login()` → code → `code2session` 换 openid，服务端自签 token；`utils/cloud.js` 的 `loginReady()` 保证用户类接口等 token 到位 |
+| certbot `--standalone` 在这台机器上校验失败 | 报 `404` + `Invalid response`；日志里是 `Certbot wasn't able to bind to :80 using IPv4` —— certbot 的临时服务器只绑了 IPv6 的 80，Let's Encrypt 走 IPv4 就打不到 | 用 `certbot --nginx`（走 nginx 自己的 80，IPv4/IPv6 都监听）；这台机器是双栈，别用 standalone |
 
 ## 验证要求
 
@@ -102,6 +103,9 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - 远端 `origin` 已有提交，用 `git push git@github.com:uwakeme/oil-trend.git main:main` 推送（443 不通时走 SSH）
 - 用 `git push <url>` 形式推送**不会更新** `origin/main` 远程跟踪引用，`git log origin/main..main` 会误报「没推上去」，以 `git ls-remote` 的实际结果为准
 - 改动前先看 `git status`，工作区经常有未提交的 WIP，**不要替用户丢弃或覆盖**
+- **共享服务器上有别人的线上服务**（`lyric-lab.uwakeme.top`、`jiuguan.uwakeme.top`、openmaic）。
+  涉及停服务、改 nginx、写 `/etc`、装证书这类操作，**只给命令让用户自己跑**；
+  流水线只允许「上传代码 + 重启油势自己的 pm2 进程」，不许碰 nginx 与其他服务
 
 ## 安全
 
