@@ -33,60 +33,95 @@ nslookup oil-trend.uwakeme.top
 
 解析出 `124.221.89.106` 即可继续。
 
-## 二、签证书
+## 〇、最省事：一键脚本
+
+上面所有步骤都写成一个脚本了，直接跑：
 
 ```bash
-sudo apt install -y certbot python3-certbot-nginx
-sudo certbot certonly --standalone -d oil-trend.uwakeme.top \
+curl -sO https://raw.githubusercontent.com/uwakeme/oil-trend/main/server/setup-domain.sh
+bash setup-domain.sh
+```
+
+它会依次做完：检查 DNS → 放临时 80 站点 → 用 `certbot --nginx` 签证书 →
+换成完整 443 配置 → 把 `OIL_API_BASE_URL` 写进 `.env` → 重启 pm2 → 验证。
+
+脚本里的 nginx 配置已在真实服务器上用 `nginx -t` 验证过语法。
+
+想换 certbot 邮箱：
+
+```bash
+CERTBOT_EMAIL=你的邮箱@example.com bash setup-domain.sh
+```
+
+## 二、签证书
+
+服务器上 80 端口被 nginx 占着，所以 **不能用 `--standalone`**（会报
+`Could not bind TCP port 80 because it is already in use`）。
+
+### 方案 A：certbot --nginx（推荐，不用停 nginx）
+
+服务器上已装 `certbot_nginx` 插件，它会自己处理端口和 nginx 配置：
+
+```bash
+sudo certbot certonly --nginx -d oil-trend.uwakeme.top \
   --agree-tos --no-eff-email -m 你的邮箱@example.com
 ```
 
-签完会在 `/etc/letsencrypt/live/oil-trend.uwakeme.top/` 下生成
+它会：临时改 nginx 配置放行校验 → 签发 → 自动还原 → 自动配好续期。
+
+签完在 `/etc/letsencrypt/live/oil-trend.uwakeme.top/` 下生成
 `fullchain.pem` 和 `privkey.pem`。
 
-> 如果 80 端口被 nginx 占着导致签不了，先临时停 nginx：
-> `sudo systemctl stop nginx` → 签完 → `sudo systemctl start nginx`
+### 方案 B：standalone（需要短暂停 nginx）
+
+如果 `--nginx` 报错，退回这个：
+
+```bash
+sudo systemctl stop nginx
+sudo certbot certonly --standalone -d oil-trend.uwakeme.top \
+  --agree-tos --no-eff-email -m 你的邮箱@example.com
+sudo systemctl start nginx
+```
+
+> 停 nginx 期间 `lyric-lab.uwakeme.top` 和 `jiuguan.uwakeme.top` 会短暂不可访问，
+> 一般就几秒。
+
+### 验证证书
+
+```bash
+sudo certbot certificates
+```
+
+应该能看到 `Certificate Name: oil-trend.uwakeme.top`，
+`Expiry Date` 是将来时间（不是 EXPIRED）。
 
 ## 三、加 nginx 站点
 
+### 先说顺序问题
+
+完整配置里引用了 `/etc/letsencrypt/live/oil-trend.uwakeme.top/fullchain.pem`，
+但证书是下一步才签的 —— 证书还不存在时 `nginx -t` 会直接失败，nginx 就起不来。
+
+所以按这个顺序走：
+
+**① 先放一个只监听 80 的临时站点**（不引用证书），并把校验目录暴露出来：
+
 ```bash
+sudo mkdir -p /var/www/html/.well-known/acme-challenge
 sudo tee /etc/nginx/sites-available/oil-trend > /dev/null <<'EOF'
 server {
     listen 80;
     listen [::]:80;
     server_name oil-trend.uwakeme.top;
 
-    # certbot 续期用，改完记得 nginx -s reload
+    # certbot 校验与续期都走这里
     location /.well-known/acme-challenge/ {
         root /var/www/html;
     }
 
     location / {
+        # 证书还没签出来时先别跳 https
         return 301 https://$host$request_uri;
-    }
-}
-
-server {
-    listen 443 ssl;
-    listen [::]:443 ssl;
-    server_name oil-trend.uwakeme.top;
-
-    ssl_certificate     /etc/letsencrypt/live/oil-trend.uwakeme.top/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/oil-trend.uwakeme.top/privkey.pem;
-    ssl_protocols       TLSv1.2 TLSv1.3;
-    ssl_ciphers         HIGH:!aNULL:!MD5;
-
-    # 小程序请求体不大，但通知接口偶尔带长文本
-    client_max_body_size 2m;
-
-    location / {
-        proxy_pass http://127.0.0.1:3002;
-        proxy_http_version 1.1;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 60s;
     }
 }
 EOF
@@ -94,6 +129,23 @@ EOF
 sudo ln -sf /etc/nginx/sites-available/oil-trend /etc/nginx/sites-enabled/oil-trend
 sudo nginx -t && sudo systemctl reload nginx
 ```
+
+**② 签证书**（用方案 A 的 `--nginx`）：
+
+```bash
+sudo certbot certonly --nginx -d oil-trend.uwakeme.top \
+  --agree-tos --no-eff-email -m 你的邮箱@example.com
+```
+
+**③ 换成完整配置**（含 443 反代）：
+
+```bash
+sudo cp server/oil-trend.nginx.conf /etc/nginx/sites-available/oil-trend
+sudo nginx -t && sudo systemctl reload nginx
+```
+
+> `server/oil-trend.nginx.conf` 在仓库里，包含 443 反代到 3002 的完整配置。
+> 下载：`curl -sO https://raw.githubusercontent.com/uwakeme/oil-trend/main/server/oil-trend.nginx.conf`
 
 ## 四、补服务器上的 .env
 
