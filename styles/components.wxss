@@ -186,6 +186,8 @@
   background: #e8e5db;
   width: 56rpx;
   height: 56rpx;
+  flex: 0 0 56rpx;
+  margin: 0;
   border-radius: 50%;
   font-size: 32rpx;
   line-height: 52rpx;
