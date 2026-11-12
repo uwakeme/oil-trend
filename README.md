@@ -8,20 +8,15 @@
 ## 现在是什么状态
 
 前端五个页面都写完了，在开发者工具模拟器里逐页跑过并截图核对过。
-当前数据来自内置的演示数据集，不是真实行情。
-真实数据源还没接。
+
+**后端已上线**：`server/`（Node + Express + PostgreSQL）部署在
+`https://oil-trend.uwakeme.top`，采集器每 30 分钟从**汽油价格网**抓 31 个
+省级行政区的挂牌价（92#/95#/98#/0#）。页面显示的是真实挂牌价。
+部署步骤见 [docs/server-deploy.md](docs/server-deploy.md)。
 
 预览二维码已经能出了（AppID 填在本地的 `project.private.config.json` 里，仓库中不保留）。
 
-云函数三个（`oilApi` / `oilCollector` / `oilAlert`）也写完了，但还没部署过，
-云开发环境要在开发者工具里开通，并把 `docs/deploy.md` 里的集合建好。
-
-另外写了一套**自建后端**（`server/`，Node + Express + PostgreSQL），
-接口契约与云函数一致。填上 `config/index.js` 的 `apiBaseUrl` 就切过去，
-清空就切回云开发 —— 两套并存，云函数留着当回滚手段。
-部署步骤见 [docs/server-deploy.md](docs/server-deploy.md)。
-
-订阅消息这条路还没走通到底。模板 ID 要在公众平台申请（`subscribeTemplateIds` 与云函数
+订阅消息这条路还没走通到底。模板 ID 要在公众平台申请（`subscribeTemplateIds` 与服务端
 环境变量 `OIL_SUBSCRIBE_TEMPLATE_ID` 填同一个值）。
 所以「提醒」页在没配模板时会明说「订阅消息未配置」，不会假装授权成功。
 
@@ -34,7 +29,7 @@
 开发者工具会把它合并覆盖到工程配置上。
 
 **AppSecret 不要进代码** —— 小程序包里放密钥会被上传泄露。
-这个项目的前端也不需要它：云函数走云开发凭据，用不到 AppSecret。
+这个项目的前端也不需要它：AppSecret 只放在服务器的 `server/.env` 里。
 
 基础库版本：工程配置写 3.8.10，本地 `project.private.config.json` 也写 3.8.10，
 登录开发者工具后会自动下载。
@@ -68,7 +63,7 @@ oil_trend/
 ├── data/               演示数据集、调价时间线、地区价差
 ├── utils/              api / chart / store / format / cloud / subscribe
 ├── styles/             设计令牌与通用组件类
-├── cloudfunctions/     oilApi · oilCollector · oilAlert
+├── server/             后端（Node + Express + PostgreSQL）
 ├── scripts/            构建与自检脚本
 └── docs/
 ```
@@ -106,13 +101,11 @@ oil_trend/
 
 ## 接真实数据
 
-`utils/api.js` 是唯一取数入口。它先调云函数，失败或者没配云环境就回落本地演示源。
+`utils/api.js` 是唯一取数入口。它先调后端（`utils/cloud.js` → `config.apiBaseUrl`），
+失败或者没配后端地址就回落本地演示源。
 回落这件事对页面是透明的，但首页右上角齿轮里会写明当前数据来源，不含糊。
 
-换真实源有两条路：改云函数 `oilApi`，或者直接改 `utils/api.js` 里的本地实现。
-页面代码一行都不用动。
-
-采集侧的真实来源默认全是关的，要改 `cloudfunctions/oilCollector/sources.js`。
+换数据来源改 `server/src/services/sources.js`（采集器配置）。
 解析器解析不出结构化字段时会转人工核对队列，不会把猜测值发布成正式结果。
 
 ## 脚本
@@ -122,7 +115,7 @@ node scripts/verify-data.js       # 打印数据层算出的价格、走势、�
 node scripts/lint-wxml.js         # 检查 WXML 绑定、事件、样式类、标签闭合
 node scripts/check-modules.js     # 运行时模块逐个 require 一遍，挡加载期 ReferenceError
 node scripts/build-icons.js       # 重生成 PNG 图标（SVG 精灵内联在脚本里）
-node scripts/sync-cloud-shared.js # 由 data/ 生成云函数共享代码并做一致性断言
+node scripts/sync-shared.js       # 由 data/ 生成服务端共享模块并做一致性断言
 node scripts/preview-qr.js         # 上传预览包并生成扫码图
 node scripts/verify-in-devtools.js # 逐页截图 + 运行时异常捕获（需 IDE 自动化服务）
 cd server && npm test              # 自建后端自检（40 项结构 + 26 项 HTTP）
@@ -141,14 +134,7 @@ node scripts/verify-in-devtools.js
 
 ## 还没做的
 
-真实数据源接入，订阅消息的真机联调。
-云开发环境还要先建好集合才能跑通，步骤在 [docs/deploy.md](docs/deploy.md)。
-自建后端已经写完并通过自检，但还没在真实服务器上跑过 ——
-需要一台装了 PostgreSQL 的机器、一个已备案域名和 HTTPS 证书。
+订阅消息的真机联调（需正式模板 ID）。
+调价公告（ndrc）与国际行情两个采集源仍未启用，`oil_windows` 的预测来自汽油价格网。
 
 页面 WXSS 里还有 42 处硬编码色值没走 `styles/tokens.wxss` 的设计令牌（纯样式一致性，不影响功能）。
-
-三个云函数的 `wx-server-sdk` 已升到 4.0.2，依赖 `cloud.init` / `openapi` / 数据库 API 都验过：
-唯一破口是 4.x 底层换成了 `@cloudbase/node-sdk`，`cloud.httpclient` 没了，
-采集器改用 `cloudfunctions/oilCollector/http-client.js`。
-细节见 [docs/deploy.md](docs/deploy.md)。

@@ -29,10 +29,10 @@
 代码位置：
 
 - 小程序端：`data/adjustments.js`（调价时间线）、`data/regions.js`（地区价差）
-- 云函数端：`cloudfunctions/_shared/shared.js`（同一份规则）
+- 服务端：`server/src/shared/shared.js`（生成产物）
 
-两端共用一套规则，靠 `scripts/sync-cloud-shared.js` 同步，因为云函数各自打包上传，
-没法跨目录引用小程序根目录。
+两端共用一套规则，靠 `scripts/sync-shared.js` 从 `data/` 生成，
+并断言生成物与 `data/` 算出的值逐项一致。
 
 ## 走势为什么画成阶梯线
 
@@ -92,12 +92,11 @@ live 模式只断言结构与数值区间。**别把 live 值与 reference 的�
 
 ## 想加一个新数据源
 
-1. 在 `cloudfunctions/oilCollector/sources.js` 加一条配置
-   （`server/src/services/sources.js` 保持逐字节一致）
+1. 在 `server/src/services/sources.js` 加一条配置
 2. 在 `PARSERS` 里写解析器，**解析不出来就返回 null**，不要返回默认值
 3. 在 `collectFromSource` 里按 `kind` 分发到对应的入库函数
 4. 跑一次真实抓取，确认解析结果
 5. 打开 `enabled`
 
-改过 `data/` 下的真源文件之后要跑 `node scripts/sync-cloud-shared.js`
-（`_shared/shared.js` 是生成产物，手改会被覆盖）。
+改过 `data/` 下的真源文件之后要跑 `node scripts/sync-shared.js`
+（`server/src/shared/shared.js` 是生成产物，手改会被覆盖）。

@@ -17,7 +17,7 @@ router.post('/login', function (req, res) {
     return;
   }
   auth.login(code).then(function (result) {
-    // 记一次活跃时间，和云函数 currentUser() 的行为一致
+    // 记一次活跃时间
     return dao.users.touch(result.openid).then(function () { return result; });
   }).then(function (result) {
     res.json({ ok: true, data: { token: result.token, openid: result.openid } });

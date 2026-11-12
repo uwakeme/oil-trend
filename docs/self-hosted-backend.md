@@ -1,6 +1,10 @@
 # 自建后端方案
 
-从微信云开发迁到自己的服务器。这份文档固定契约与流程，代码照着它写。
+> **状态：已完成。** 后端跑在自建服务器上（Node + Express + PostgreSQL），
+> 微信云开发那套已下线、云函数目录已删（见 git 历史）。
+> 这份文档保留下来当契约与设计说明 —— 下面提到的「云函数」都是迁移前的对照。
+
+最初是从微信云开发迁到自己的服务器，本文固定契约与流程。
 
 ## 一、为什么能换
 
@@ -12,14 +16,14 @@
 
 - `utils/api.js` 是唯一取数入口，已经做到「云端优先 + 本地兜底」，
   并给每个返回值打上来源标记（`stampSource`）
-- `utils/cloud.js` 是唯一跟后端打交道的文件，只有它知道用的是云函数还是 HTTP
+- `utils/cloud.js` 是唯一跟后端打交道的文件，只有它知道用的是 HTTP 还是走本地演示数据
 - 五个页面、`data/` 下的数据层、`utils/format.js` 全都不感知后端形态
 
 所以后端换了，前端要动的只有 `utils/cloud.js` 一个文件。
 
 ## 二、接口契约（必须一比一复刻）
 
-服务端要实现下面这些接口，返回结构与现在的云函数**完全一致**。
+服务端要实现下面这些接口，返回结构与页面既有的期望**完全一致**。
 前端 `utils/api.js` 的 `hasExpected` 会检查返回里有没有必需字段，
 结构对不上就会静默回落到演示数据 —— 页面看着正常，实际没走服务端。
 
@@ -46,7 +50,7 @@
 
 ### 统一响应外壳
 
-云函数现在是 `{ ok: true, data: {...} }` 或 `{ ok: false, message, code }`。
+统一外壳是 `{ ok: true, data: {...} }` 或 `{ ok: false, message, code }`。
 服务端**沿用同一个外壳**：
 
 ```js
@@ -58,7 +62,7 @@
 
 ### 现有 action 与新路径的对应
 
-| 云函数 action | 新路径 |
+| 早期云函数 action | 新路径 |
 | --- | --- |
 | `regions` | `GET /api/regions` |
 | `home` | `GET /api/home` |
@@ -71,7 +75,7 @@
 | `history.save` | `POST /api/history` |
 | `openid` | `POST /api/login`（返回值语义不同：前端要的是登录态而不是 openid 本身） |
 
-「同步状态」在云函数里没有独立 action，是 `actionHome` 里顺带返回的。
+「同步状态」早期是 `actionHome` 里顺带返回的。
 拆成独立接口是因为它只被调价页用，不必混进首页响应。
 
 ## 三、认证流程（云开发没有，自建必须补）
@@ -134,7 +138,7 @@ POST https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token=XXX
 ### 共享算法不能重写
 
 `data/` 下的调价时间线（24 条）、地区价差、油品定义、行情生成是**纯 JS**，
-现在靠 `scripts/sync-cloud-shared.js` 同步到云函数并加一致性断言。
+现在靠 `scripts/sync-shared.js` 从 `data/` 生成到 `server/src/shared/` 并加一致性断言。
 
 服务端也要用同一份 —— 同步脚本改成把 `data/` 同步到 `server/shared/`，
 断言逻辑照抄。这样两端数值必然一致，不需要重新实现价格模型。
@@ -143,7 +147,7 @@ POST https://api.weixin.qq.com/cgi-bin/message/subscribe/send?access_token=XXX
 
 云开发用触发器，自建用 crontab 或进程内调度：
 
-| 任务 | 频率 | 云函数对应 |
+| 任务 | 频率 | 对应服务 |
 | --- | --- | --- |
 | 采集 | 每 30 分钟 | `oilCollector` 定时触发器 |
 | 提醒匹配 | 每 10 分钟 | `oilAlert` 定时触发器 |
@@ -184,7 +188,7 @@ server/
 │   │   ├── collector.js      # 采集流程
 │   │   ├── alert.js          # 提醒匹配
 │   │   └── home.js           # 首页聚合
-│   └── shared/               # 由 sync-cloud-shared.js 生成，勿手改
+│   └── shared/               # 由 sync-shared.js 生成，勿手改
 │       └── shared.js
 └── scripts/
     ├── test-fixtures.js      # 测试夹具：灌演示数据到内存库
@@ -196,16 +200,16 @@ server/
 ## 七、迁移步骤
 
 1. 建库建表 + 索引
-2. `scripts/sync-cloud-shared.js` 改成同步到 `server/src/shared/`
+2. `scripts/sync-shared.js` 生成到 `server/src/shared/`
 3. 实现 DAO 层
-4. 实现 services（复用云函数的业务逻辑）
+4. 实现 services
 5. 实现 routes
 6. 起服务，本地 curl 验接口
-7. 改 `utils/cloud.js`：加 HTTP 分支，保留云函数分支做兜底
+7. 改 `utils/cloud.js`：走 HTTP
 8. 改 `app.js`：加 `wx.login` 换 token
 9. 真机联调：配 request 合法域名
 10. 验证链路：跑 `cd server && npm test`（测试跑在内存库上，不碰真实库）
-11. 上线后把云函数停掉（保留作为应急回滚）
+11. 云函数已下线并删除（见 git 历史）
 
 第 7 步之前，小程序端一行都不用改 —— 所以可以先在服务端把接口全部验通，
 再切前端。这是这个方案最舒服的地方。
@@ -219,5 +223,5 @@ server/
 | **AppSecret 安全** | 放环境变量，服务器权限收紧，不进代码库 |
 | **access_token 缓存** | 2 小时有效，多实例各自缓存；要处理刷新失败重试 |
 | **微信接口可达性** | 服务器要能稳定访问 `api.weixin.qq.com`，境内节点更稳 |
-| **云函数保留期** | 切换期间保留云函数作为回滚手段，别急着删 |
+| **回滚** | 云函数已删除；回滚靠自建服务的 PM2 与 git 历史 |
 | **数据迁移** | 云数据库里现有的演示数据不必搬迁，自建后端不灌演示数据 |

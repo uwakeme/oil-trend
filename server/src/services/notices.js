@@ -1,7 +1,7 @@
 /**
  * 调价通知、国际行情、同步状态
  *
- * 与 cloudfunctions/oilApi/index.js 的 actionNotices / actionMarket 一致。
+ * 逻辑与早期云函数实现一致（云函数已下线，见 git 历史）。
  */
 const dao = require('../dao');
 const shared = require('../shared/shared');
@@ -162,7 +162,7 @@ function quoteTimeOf(sliced) {
 
 /**
  * 采集同步状态。
- * 云函数里这个是 actionHome 顺带返回的，拆成独立接口 ——
+ * 早期是 actionHome 顺带返回的，这里拆成独立接口 ——
  * 它只被调价页用，不必混进首页响应。
  */
 function actionSyncStatus() {

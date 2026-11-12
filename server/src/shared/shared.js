@@ -1,13 +1,13 @@
 /**
- * 服务端共享模块 —— 由 scripts/sync-cloud-shared.js 自动生成，请勿手改。
+ * 服务端共享模块 —— 由 scripts/sync-shared.js 自动生成，请勿手改。
  *
  * 数据真源在小程序端 data/ 下：
  *   data/adjustments.js  调价时间线（全国统一幅度）
  *   data/regions.js      地区价差
  *   data/fuels.js        油品定义
  *
- * 改了上面任意一个文件，都要重新跑 scripts/sync-cloud-shared.js。
- * 本文件同时供微信云函数与自建后端使用，两份内容完全一致。
+ * 改了上面任意一个文件，都要重新跑 scripts/sync-shared.js。
+ * 只有这一份副本，供自建后端（server/）使用。
  */
 
 /* ---------- 行情（来自 data/markets.js，两端共用同一份实现） ---------- */
@@ -126,7 +126,7 @@ function pad2(n) {
 /**
  * 某个时刻在 UTC+8 下的日历字段。
  *
- * 小程序端在东八区、云函数可能在 UTC，两端各按本地时间打时间戳会错位，
+ * 小程序端在东八区、服务器可能在 UTC，两端各按本地时间打时间戳会错位，
  * 这里统一按 UTC+8 取字段。
  */
 function utc8Parts(date) {
@@ -144,7 +144,7 @@ function utc8Parts(date) {
 /**
  * 组装一个品种的完整行情载荷。
  *
- * 小程序端和云函数端共用这一份实现（云端副本由 scripts/sync-cloud-shared.js
+ * 小程序端和服务端共用这一份实现（服务端副本由 scripts/sync-shared.js
  * 从本文件内联生成），避免两端再次分叉。
  */
 function buildMarketPayload(symbol, period) {
@@ -901,7 +901,7 @@ function parseUtc(dateStr) {
 
 function localDayNumber(date) {
   // 与小程序端 utils/demo-clock.js 一致：统一按 UTC+8 日历日算，
-  // 否则客户端在东八区、云函数在 UTC 时，凌晨会差一天。
+  // 否则客户端在东八区、服务器在 UTC 时，凌晨会差一天。
   var t = new Date(date.getTime() + 8 * 3600000);
   return Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate());
 }

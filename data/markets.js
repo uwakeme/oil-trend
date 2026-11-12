@@ -112,7 +112,7 @@ function pad2(n) {
 /**
  * 某个时刻在 UTC+8 下的日历字段。
  *
- * 小程序端在东八区、云函数可能在 UTC，两端各按本地时间打时间戳会错位，
+ * 小程序端在东八区、服务器可能在 UTC，两端各按本地时间打时间戳会错位，
  * 这里统一按 UTC+8 取字段。
  */
 function utc8Parts(date) {
@@ -130,7 +130,7 @@ function utc8Parts(date) {
 /**
  * 组装一个品种的完整行情载荷。
  *
- * 小程序端和云函数端共用这一份实现（云端副本由 scripts/sync-cloud-shared.js
+ * 小程序端和服务端共用这一份实现（服务端副本由 scripts/sync-shared.js
  * 从本文件内联生成），避免两端再次分叉。
  */
 function buildMarketPayload(symbol, period) {

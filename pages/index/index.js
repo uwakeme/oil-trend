@@ -180,7 +180,7 @@ Page({
         executeText: fmt.fullDate(executeDate.slice(0, 10)) + ' ' + (executeDate.slice(11, 16) || '') + ' 时执行。以下为本地各油品调整后的零售价格。',
         prices: noticePrices,
         sourceName: (source.name || '未标注来源') + (source.mode === 'demo' ? '（演示数据）' : ''),
-        // 云端通知可能没有发布时间，缺了就不写「发布于 …」，别留个空壳
+        // 后端通知可能没有发布时间，缺了就不写「发布于 …」，别留个空壳
         publishedText: fmt.dateTime(latest.publishedAt),
         sourceLine: (source.name || '未标注来源') + (source.mode === 'demo' ? '（演示数据）' : '') +
           (latest.publishedAt ? (' · 发布于 ' + fmt.dateTime(latest.publishedAt)) : '')

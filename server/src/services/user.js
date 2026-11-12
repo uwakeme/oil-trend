@@ -1,11 +1,9 @@
 /**
  * 用户数据：提醒规则与提醒记录
  *
- * 与 cloudfunctions/oilApi/index.js 的 actionRulesList / actionRulesSave /
- * actionHistoryList / actionHistorySave 一致。
+ * 逻辑与早期云函数实现一致（云函数已下线，见 git 历史）。
  *
- * 云函数用 cloud.getWXContext() 拿 openid，自建改成从 token 里取
- * （中间件已经校验过并挂在 req.user 上）。
+ * openid 从登录 token 里取（中间件已校验并挂在 req.user 上）。
  */
 const dao = require('../dao');
 
@@ -17,7 +15,7 @@ function actionRulesList(userId) {
 
 /**
  * 保存提醒规则。
- * 云函数那边是「先查旧的，找到就 update，找不到就 add」，
+ * 早期实现是「先查旧的，找到就 update，找不到就 add」，
  * 这里靠 (user_id, region_code, fuel_id) 唯一索引直接 upsert，
  * 语义一样但少一次查询，也不会并发写重复。
  */

@@ -1,9 +1,8 @@
 /**
  * 提醒匹配与订阅消息下发
  *
- * 业务逻辑从 cloudfunctions/oilAlert/index.js 原样搬过来，
- * 只把「cloud.openapi.subscribeMessage.send」换成自己的 HTTP 下发，
- * 把「云数据库查询」换成 DAO。
+ * 逻辑与早期云函数实现一致（云函数已下线，见 git 历史），
+ * 订阅消息走微信官方 HTTP 接口，数据访问走 DAO。
  *
  * 匹配优先级（与设计文档一致）：
  *   1. 官方正式降价 —— 可信度最高，默认开启

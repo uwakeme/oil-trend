@@ -34,7 +34,7 @@ var NUMERIC_COLUMNS = {
  * ⚠️ 不转的话会出两个静默错误：
  *   1. dayDiff('2026-11-14', Date对象) → NaN，窗口的 daysLeft / progress 变 null；
  *   2. '2026-11-04' >= '2026-10-14' 之类的字符串比较失效，走势曲线空数组。
- * 页面和云函数那边拿到的都是日期字符串，所以这里必须对齐。
+ * 页面拿到的一律是日期字符串，所以这里必须对齐。
  */
 var DATE_COLUMNS = {
   date: 1, changeat: 1, executeat: 1, cyclestart: 1

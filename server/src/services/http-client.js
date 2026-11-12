@@ -1,31 +1,26 @@
 /**
  * 外部 HTTP 抓取客户端
  *
- * 为什么要自己写：
- *   wx-server-sdk 2.x 底层是 tcb-admin-node，带一个内置的 httpclient；
- *   4.x 换成 @cloudbase/node-sdk 后这个 API 整个没了。
- *   （实测 2.6.3 顶层本来也没有它 —— 那是 tcb-admin-node 的东西，
- *   4.x 换底层后一并消失。所以升级前这行代码其实也是坏的，
- *   只是所有采集源默认关闭，从没被真正执行过。）
+ * 采集器要抓站点的 HTML 页面（汽油价格网的地区页），也要抓 JSON 接口，
+ * 所以统一封一层：超时、响应体上限、状态码自己控。
  *
- * 用什么替代：
- *   云函数里发外部请求没有域名限制，直接用 Node 内置 https/http 即可，
- *   不必再引第三方 HTTP 库。这里用 https 走 TLS，超时和状态码自己控。
- *
- * 返回体统一给字符串：
- *   采集侧的解析器要的是原始文本（ndrcNotice 靠正则匹配公告正文，
- *   genericQuote 自己 JSON.parse），所以这里不做 JSON 解析，
- *   避免把「接口返回了 JSON」和「接口返回了 HTML」这两种情况混在一起。
+ * 返回体统一给**字符串**：解析器要的是原始文本
+ * （qiyoujiageRegion 靠正则切 HTML，genericQuote 自己 JSON.parse），
+ * 这里不做 JSON 解析，避免把「返回了 JSON」和「返回了 HTML」两种情况混在一起。
  */
 const https = require('https');
 const http = require('http');
 const { URL } = require('url');
+
+var MAX_BYTES = 5 * 1024 * 1024;
 
 /**
  * 发起一次 GET 请求
  * @param {string} url 地址
  * @param {object} options { headers, timeout }
  * @returns {Promise<{statusCode:number, body:string}>}
+ *   失败时 reject 的 Error.message 是稳定标识：URL_INVALID / PROTOCOL_UNSUPPORTED
+ *   / TIMEOUT / RESPONSE_TOO_LARGE / 或底层网络错误码
  */
 function get(url, options) {
   var opts = options || {};
@@ -56,8 +51,8 @@ function get(url, options) {
         var tooLarge = false;
         res.on('data', function (chunk) {
           size += chunk.length;
-          // 公告正文不会超过这个量级，超了说明不是预期的响应
-          if (size > 5 * 1024 * 1024) {
+          // 油价页只有几十 KB，超这个量级说明拿到的不是预期响应
+          if (size > MAX_BYTES) {
             tooLarge = true;
             req.destroy();
             reject(new Error('RESPONSE_TOO_LARGE'));

@@ -1,12 +1,11 @@
 /**
  * 查询类业务
  *
- * ⚠️ 返回结构必须与微信云函数的 action 完全一致 ——
+ * ⚠️ 返回结构必须与小程序端的期望完全一致 ——
  * 小程序端 utils/api.js 的 hasExpected() 会检查必需字段，
  * 结构对不上就会静默回落到演示数据，页面看着正常但实际没走服务端。
  *
- * 业务逻辑从 cloudfunctions/oilApi/index.js 原样搬过来，
- * 只把「云数据库查询」换成 DAO 调用，算法部分一行没改。
+ * 查询逻辑与早期云函数实现一致（云函数已下线，见 git 历史），算法部分没改。
  */
 const dao = require('../dao');
 const shared = require('../shared/shared');

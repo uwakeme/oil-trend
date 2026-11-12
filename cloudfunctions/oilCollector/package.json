@@ -1,9 +1,0 @@
-{
-  "name": "oil-collector",
-  "version": "1.0.0",
-  "description": "油势 · 调价公告与国际行情定时采集",
-  "main": "index.js",
-  "dependencies": {
-    "wx-server-sdk": "^4.0.2"
-  }
-}

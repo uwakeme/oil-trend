@@ -1,20 +1,17 @@
 /**
- * 从小程序端的数据源生成共享模块，并做一致性断言。
+ * 从小程序端的数据源生成服务端共享模块，并做一致性断言。
  *
- * 背景：之前 cloudfunctions/_shared/shared.js 是手写的另一份调价时间线
- * （4 条、倒序），和小程序端 data/adjustments.js（24 条、正序）对不上。
- * 部署 seed 之后从演示源切到云端，价格会从 7.36 变成 7.47，涨跌方向也反了。
+ * 背景：云函数时代曾手写过另一份调价时间线（4 条、倒序），
+ * 和小程序端 data/adjustments.js（24 条、正序）对不上 ——
+ * 切到云端后价格从 7.36 变成 7.47、涨跌方向也反了。
  *
- * 现在改成单一真源：云端侧的调价时间线、地区价差、油品定义
+ * 现在单一真源：服务端的调价时间线、地区价差、油品定义、行情生成
  * 全部由 data/ 下的文件生成，禁止再手工维护第二份。
  *
- * 生成两份副本：
- *   cloudfunctions/_shared/shared.js  微信云开发用
- *   server/src/shared/shared.js        自建后端用
- * 两份内容完全一致，所以三端（小程序端 / 云函数 / 自建后端）数值必然相同。
+ * 生成一份副本：server/src/shared/shared.js（自建后端用）
+ * 断言：生成物与 data/ 算出来的值逐项一致，否则 exit 1。
  *
- * 用法：node scripts/sync-cloud-shared.js
- * 不一致时直接 exit 1。
+ * 用法：node scripts/sync-shared.js
  */
 const fs = require('fs');
 const path = require('path');
@@ -27,15 +24,12 @@ const config = require(path.join(ROOT, 'config', 'index.js'));
 
 const ANCHOR = config.demoAnchorDate || '2026-11-10';
 
-// 把 data/markets.js 的源码整份内联进云端副本：
-// 行情载荷的组装逻辑两端共用同一份，避免再次分叉。
+// 把 data/markets.js 的源码整份内联进副本：
+// 行情载荷的组装逻辑只有一份实现，避免再次分叉。
 const marketsSource = fs.readFileSync(path.join(ROOT, 'data', 'markets.js'), 'utf8')
   .replace(/\nmodule\.exports[\s\S]*$/, '\n');
-const SHARED_DIR = path.join(ROOT, 'cloudfunctions', '_shared');
+const SHARED_DIR = path.join(ROOT, 'server', 'src', 'shared');
 const TARGET = path.join(SHARED_DIR, 'shared.js');
-// 自建后端的副本目录（内容与云函数那份完全相同）
-const SERVER_SHARED_DIR = path.join(ROOT, 'server', 'src', 'shared');
-const SERVER_TARGET = path.join(SERVER_SHARED_DIR, 'shared.js');
 
 function j(value) {
   return JSON.stringify(value, null, 2);
@@ -43,15 +37,15 @@ function j(value) {
 
 const template = [
   '/**',
-  ' * 服务端共享模块 —— 由 scripts/sync-cloud-shared.js 自动生成，请勿手改。',
+  ' * 服务端共享模块 —— 由 scripts/sync-shared.js 自动生成，请勿手改。',
   ' *',
   ' * 数据真源在小程序端 data/ 下：',
   ' *   data/adjustments.js  调价时间线（全国统一幅度）',
   ' *   data/regions.js      地区价差',
   ' *   data/fuels.js        油品定义',
   ' *',
-  ' * 改了上面任意一个文件，都要重新跑 scripts/sync-cloud-shared.js。',
-  ' * 本文件同时供微信云函数与自建后端使用，两份内容完全一致。',
+  ' * 改了上面任意一个文件，都要重新跑 scripts/sync-shared.js。',
+  ' * 只有这一份副本，供自建后端（server/）使用。',
   ' */',
   '',
   '/* ---------- 行情（来自 data/markets.js，两端共用同一份实现） ---------- */',
@@ -79,7 +73,7 @@ const template = [
   '',
   'function localDayNumber(date) {',
   '  // 与小程序端 utils/demo-clock.js 一致：统一按 UTC+8 日历日算，',
-  '  // 否则客户端在东八区、云函数在 UTC 时，凌晨会差一天。',
+  '  // 否则客户端在东八区、服务器在 UTC 时，凌晨会差一天。',
   '  var t = new Date(date.getTime() + 8 * 3600000);',
   '  return Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate());',
   '}',
@@ -229,7 +223,7 @@ var shared = require(TARGET);
 var demo = require(path.join(ROOT, 'data', 'demo.js'));
 
 if (shared.ADJUSTMENTS.length !== adjustments.ADJUSTMENTS.length) {
-  fail('调价条数不一致：云端 ' + shared.ADJUSTMENTS.length + ' ≠ 小程序端 ' + adjustments.ADJUSTMENTS.length);
+  fail('调价条数不一致：服务端 ' + shared.ADJUSTMENTS.length + ' ≠ 小程序端 ' + adjustments.ADJUSTMENTS.length);
 }
 if (shared.REGIONS.length !== regions.REGIONS.length) fail('地区数不一致');
 if (shared.FUELS.length !== fuels.FUELS.length) fail('油品数不一致');
@@ -252,7 +246,7 @@ regions.REGIONS.forEach(function (region) {
     if (Math.abs(mini - cloud) > 0.0001) {
       mismatches++;
       console.error('✗ 价格不一致 ' + region.name + ' ' + fuel.name +
-        '：小程序端 ' + mini + ' vs 云端 ' + cloud);
+        '：小程序端 ' + mini + ' vs 服务端 ' + cloud);
     }
   });
 });
@@ -299,39 +293,4 @@ if (process.exitCode) {
   process.exit(1);
 }
 
-/* ---------- 复制到各云函数目录 ---------- */
-
-var functionsDir = path.join(ROOT, 'cloudfunctions');
-var targets = fs.readdirSync(functionsDir).filter(function (name) {
-  var full = path.join(functionsDir, name);
-  return fs.statSync(full).isDirectory() && name !== '_shared';
-});
-
-targets.forEach(function (name) {
-  var dest = path.join(functionsDir, name, 'shared.js');
-  fs.copyFileSync(TARGET, dest);
-  console.log('已同步 → ' + path.relative(ROOT, dest));
-});
-
-/* ---------- 同步到自建后端 ---------- */
-
-// 内容与云函数那份完全相同：同一份模板生成，不存在分叉的可能。
-fs.mkdirSync(SERVER_SHARED_DIR, { recursive: true });
-fs.writeFileSync(SERVER_TARGET, template, 'utf8');
-console.log('已生成 ' + path.relative(ROOT, SERVER_TARGET));
-
-// 断言：两份副本逐字节一致，且都能正常加载
-var serverBytes = fs.readFileSync(SERVER_TARGET);
-var cloudBytes = fs.readFileSync(TARGET);
-if (!serverBytes.equals(cloudBytes)) {
-  fail('自建后端与云函数的共享模块内容不一致');
-}
-delete require.cache[require.resolve(SERVER_TARGET)];
-var serverShared = require(SERVER_TARGET);
-['FUELS', 'REGIONS', 'ADJUSTMENTS', 'NATIONAL_BASE'].forEach(function (key) {
-  if (JSON.stringify(serverShared[key]) !== JSON.stringify(shared[key])) {
-    fail('自建后端共享模块的 ' + key + ' 与云函数不一致');
-  }
-});
-
-console.log('\n一致性断言全部通过，共同步 ' + targets.length + ' 个云函数 + 1 个自建后端。');
+console.log('\n一致性断言全部通过。');

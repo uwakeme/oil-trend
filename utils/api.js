@@ -2,33 +2,26 @@
  * 数据服务层（唯一对外取数入口）
  *
  * 设计原则：**页面只认数据结构，不认数据来源**。
- *   1. config.dataSource === 'auto' 时优先走云函数；
- *   2. 云端不可用 / 调用失败 / 返回为空 → 自动回落本地演示数据源；
- *   3. 每次取数都会回报 dataFrom，页面据此如实展示数据来源。
+ *   1. config.dataSource === 'auto' 时优先走自建后端（见 utils/cloud.js）；
+ *   2. 后端不可用 / 调用失败 / 返回为空 → 自动回落本地演示数据源；
+ *   3. 每次取数都会回报来源，页面据此如实展示。
  *
- * 接入真实接口的两种做法（都不需要改页面）：
- *   A. 在云函数 oilApi 里实现 action，再由本文件的 mapAction 路由过去；
- *   B. 直接替换本文件里的 localFn 为真实 HTTP 请求。
+ * 换数据来源只需要改后端（server/），本文件与页面都不用动。
  */
 const config = require('../config/index');
 const cloud = require('./cloud');
 const demo = require('../data/demo');
 const store = require('./store');
 
-function preferCloud() {
+function preferBackend() {
   return config.dataSource !== 'demo';
 }
 
 /**
  * 给返回值打上来源标记。
- * 「wx.cloud.init 成功」不等于「这次数据来自云端」——
- * 云函数失败回落到演示数据时，必须如实标成演示源。
- */
-/**
- * 给返回值打上来源标记。
  *
- * 「wx.cloud.init 成功」不等于「这次数据来自云端」——
- * 云端失败回落到演示数据时，必须如实标成演示源。
+ * 「后端配好了」不等于「这次数据来自后端」——
+ * 后端失败回落到演示数据时，必须如实标成演示源。
  *
  * mode 说明：
  *   'demo'  演示数据
@@ -50,8 +43,8 @@ function stampSource(data, mode, transport) {
 }
 
 /**
- * 云端返回必须带上业务字段才算成功。
- * 只判断「是不是 object」的话，云端返回 {} 会让页面拿到空数据却显示正常。
+ * 后端返回必须带上业务字段才算成功。
+ * 只判断「是不是 object」的话，后端返回 {} 会让页面拿到空数据却显示正常。
  */
 function hasExpected(data, keys) {
   if (!keys || !keys.length) return true;
@@ -62,14 +55,14 @@ function hasExpected(data, keys) {
 }
 
 /**
- * 云端优先、本地兜底
- * @param {string}   name        云函数名
- * @param {object}   payload     云函数入参
+ * 后端优先、本地兜底
+ * @param {string}   name        接口名（云函数时代的 action 名，现用于路由映射）
+ * @param {object}   payload     业务参数（必须含 action）
  * @param {Function} localFn     本地兜底实现
- * @param {Array}    expectKeys  云端返回必须包含的业务字段
+ * @param {Array}    expectKeys  后端返回必须包含的业务字段
  */
 function fetchWithFallback(name, payload, localFn, expectKeys) {
-  if (preferCloud()) {
+  if (preferBackend()) {
     return cloud.callFunction(name, payload).then(function (data) {
       if (data && typeof data === 'object' && hasExpected(data, expectKeys)) {
         return stampSource(data, 'live', cloud.backendName());
@@ -133,7 +126,7 @@ function getMarket(symbol, period) {
 /* ---------- 提醒规则与记录 ---------- */
 
 function getAlertRules() {
-  if (preferCloud()) {
+  if (preferBackend()) {
     return cloud.callFunction('oilApi', { action: 'rules.list' }).then(function (data) {
       if (data && Array.isArray(data.rules)) return data.rules;
       return store.getRules();
@@ -146,14 +139,14 @@ function getAlertRules() {
 
 function saveAlertRules(rules) {
   store.saveRules(rules);
-  if (!preferCloud()) return Promise.resolve(rules);
+  if (!preferBackend()) return Promise.resolve(rules);
   return cloud.callFunction('oilApi', { action: 'rules.save', rules: rules })
     .then(function () { return rules; })
     .catch(function () { return rules; });
 }
 
 function getAlertHistory() {
-  if (preferCloud()) {
+  if (preferBackend()) {
     return cloud.callFunction('oilApi', { action: 'history.list' }).then(function (data) {
       if (data && Array.isArray(data.history)) return data.history;
       return localHistory();

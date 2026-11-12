@@ -1,8 +1,7 @@
 /**
  * 定时采集
  *
- * 业务逻辑从 cloudfunctions/oilCollector/index.js 原样搬过来，
- * 只把云数据库调用换成 DAO。
+ * 逻辑与早期云函数实现一致（云函数已下线，见 git 历史）。
  *
  * 关键约束不变：
  *   1. 解析失败不猜测，进 needsReview 人工核对队列；
@@ -12,11 +11,10 @@
  * 地区价格源（qiyoujiage）：价格只在调价日变化，默认 6 小时新鲜期，
  * 31 省 3 并发抓取；run({ regionCode, force }) 可单地区强制采集。
  */
-const https = require('https');
-const http = require('http');
 const dao = require('../dao');
 const shared = require('../shared/shared');
 const sources = require('./sources');
+const httpClient = require('./http-client');
 
 function nowIso() {
   return new Date().toISOString();
@@ -32,50 +30,28 @@ function todayStr() {
 
 /* ---------------- 抓取 ---------------- */
 
+/**
+ * 抓一个来源，把失败原因归一成固定的 reason 码。
+ * 网络层交给 http-client，这里只做「响应 → 业务语义」的翻译。
+ */
 function fetchSource(source) {
   if (!source.url) {
     return Promise.resolve({ ok: false, reason: 'NO_URL', message: '来源未配置地址' });
   }
-  return new Promise(function (resolve) {
-    var target;
-    try {
-      target = new URL(source.url);
-    } catch (e) {
-      resolve({ ok: false, reason: 'URL_INVALID', message: '来源地址不合法' });
-      return;
+  return httpClient.get(source.url, {
+    headers: Object.assign({ 'User-Agent': 'oil-trend-collector/1.0' }, source.headers || {}),
+    timeout: 15000
+  }).then(function (res) {
+    if (res.statusCode !== 200) {
+      return { ok: false, reason: 'HTTP_' + res.statusCode, message: '接口返回异常状态码' };
     }
-    var lib = target.protocol === 'https:' ? https : http;
-    var req = lib.request(target.toString(), {
-      method: 'GET',
-      headers: Object.assign({ 'User-Agent': 'oil-trend-collector/1.0' }, source.headers || {})
-    }, function (res) {
-      var chunks = [];
-      var size = 0;
-      res.on('data', function (c) {
-        size += c.length;
-        if (size > 5 * 1024 * 1024) {
-          req.destroy();
-          resolve({ ok: false, reason: 'RESPONSE_TOO_LARGE', message: '响应体过大' });
-          return;
-        }
-        chunks.push(c);
-      });
-      res.on('end', function () {
-        if (res.statusCode !== 200) {
-          resolve({ ok: false, reason: 'HTTP_' + res.statusCode, message: '接口返回异常状态码' });
-          return;
-        }
-        resolve({ ok: true, body: Buffer.concat(chunks).toString('utf8') });
-      });
-    });
-    req.setTimeout(15000, function () {
-      req.destroy();
-      resolve({ ok: false, reason: 'FETCH_TIMEOUT', message: '抓取超时' });
-    });
-    req.on('error', function (err) {
-      resolve({ ok: false, reason: 'FETCH_ERROR', message: err.message || String(err) });
-    });
-    req.end();
+    return { ok: true, body: res.body };
+  }).catch(function (err) {
+    var msg = (err && err.message) || String(err);
+    var reason = msg === 'TIMEOUT' ? 'FETCH_TIMEOUT'
+      : (msg === 'RESPONSE_TOO_LARGE' ? 'RESPONSE_TOO_LARGE'
+      : (msg === 'URL_INVALID' ? 'URL_INVALID' : 'FETCH_ERROR'));
+    return { ok: false, reason: reason, message: msg };
   });
 }
 

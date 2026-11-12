@@ -1,9 +1,0 @@
-{
-  "name": "oil-api",
-  "version": "1.0.0",
-  "description": "油势 · 数据读取与规则存储云函数",
-  "main": "index.js",
-  "dependencies": {
-    "wx-server-sdk": "^4.0.2"
-  }
-}

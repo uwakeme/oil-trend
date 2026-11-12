@@ -74,7 +74,7 @@ node scripts/verify-in-devtools.js
 | 自定义 tabBar 点不动 | switchTab 拿不到 url | `wx:for` 里写 `{{path}}`，应写 `{{item.path}}` |
 | 五个页面同时白屏 | `Page.getData` 报 page destroyed | `utils/api.js` 里删了 `saveAlertHistory` 的函数体却忘了删 `module.exports` 的同名导出项，模块一被 require 就抛 ReferenceError。`node --check` 只查语法查不出来，靠 `scripts/check-modules.js` 兜住 |
 | 走势图盖在弹层上 | 打开「选择油价地区」，绿色曲线浮在弹层内容上方 | canvas 走的是**独立原生渲染层**，不在网页的层叠上下文里 —— 把弹层 z-index 提到 99999、图表压到 0 都不影响。改成弹层打开时用 `trend-chart` 的 `visible` 属性把画布从 DOM 里摘掉 |
-| 云端也是同一个坑 | 部署后才炸 | 云函数原先没有加载期门禁，`scripts/check-modules.js` 现在会 stub 掉 `wx-server-sdk` 再加载三个云函数入口及其本地模块 |
+| 服务端也是同一个坑 | 部署后才炸 | `scripts/check-modules.js` 现在会 stub 掉 express / pg 再加载 `server/src` 全部模块 |
 
 前两个是模拟器才会暴露的问题，静态检查查不出来。
 `scripts/lint-wxml.js` 后来补了「标签必须是 WXML 内置标签或已声明的自定义组件」这条规则，
@@ -107,8 +107,6 @@ node scripts/verify-in-devtools.js
 
 - **预览二维码需要正式 AppID**。测试号（`touristappid`）能跑模拟器，但上传预览包会被平台拒绝：
   `AppID 不合法,invalid appid`
-- **云开发需要正式 AppID**。测试号下 `wx.cloud.init` 报
-  `operateWXData:fail`，代码里已经兜住，回落到本地演示数据
 - **订阅消息需要正式 AppID + 模板 ID**。测试号申请不到模板
 
 ## 出预览二维码时踩到的三件事
@@ -127,7 +125,7 @@ node scripts/verify-in-devtools.js
 
 ## 采集器验证（2026-11-12）
 
-`node scripts/verify-collector.js`：39 个 fixture/构造用例，云函数与自建后端
+`node scripts/verify-collector.js`：39 个 fixture/构造用例，
 两份 `sources.js` 跑同一套，输出必须一致。fixture 是当天真实抓取的
 北京/陕西/云南省页快照（`scripts/fixtures/`），解析价与
 `data/reference-prices.js`（独立来源）124 个值逐值一致。
@@ -142,7 +140,7 @@ force 重抓去重 → 全量 run 31 省 124 条 → 第二次 run 全跳过。
    已写进 `data/regions.js` 并有用例钉住。
 3. **60s 的吨幅正则认不出「上调油价90元/吨」**（`上调` 与数字之间隔着「油价」），
    我们的写法两种都认。
-4. **云函数跑在 UTC**，`todayStr()` 用本地时区会在早上 8 点前差一天，
+4. **服务器可能在 UTC**，`todayStr()` 用本地时区会在早上 8 点前差一天，
    两端采集器都改成显式 UTC+8。
 
 ## 采集器复查（2026-11-12 晚）

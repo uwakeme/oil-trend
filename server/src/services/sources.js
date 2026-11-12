@@ -13,8 +13,7 @@
  * 绝不把猜测值发布成正式结果；预测类信息必须标注非官方。
  *
  * 关闭状态下采集函数会照常跑通「读取配置 → 抓取 → 解析 → 去重 → 入库」流程，
- * 只是把每个来源标记为 skipped，并把演示数据写进库，
- * 以便完整验证云端链路。
+ * 只是把每个来源标记为 skipped —— 采集运行记录里据此显示「真实数据源尚未接入」。
  */
 const SOURCES = [
   {
@@ -224,7 +223,7 @@ function qyjTrend(html, now) {
 
   // 页面只写「X月X日」不写年份。调价周期为 10 个工作日，下一轮窗口
   // 必在两周左右内：解析出的日期比今天早 20 天以上，说明跨年了。
-  // 统一按 UTC+8 日历日算（云函数跑在 UTC，不能直接用本地时区）。
+  // 统一按 UTC+8 日历日算（服务器可能跑在 UTC，不能直接用本地时区）。
   var cn = new Date((typeof now === 'number' ? now : Date.now()) + 8 * 3600000);
   var todayTs = Date.UTC(cn.getUTCFullYear(), cn.getUTCMonth(), cn.getUTCDate());
   var month = Number(dateM[1]);

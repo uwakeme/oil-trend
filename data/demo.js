@@ -1,7 +1,7 @@
 /**
  * 本地演示数据源（默认数据源）
  *
- * 它是「真实数据源适配层」的标准实现形态：对外暴露与云函数完全一致的
+ * 它是「真实数据源适配层」的标准实现形态：对外暴露与后端完全一致的
  * 数据结构。接入真实接口时，只要在 utils/api.js 里换掉取数逻辑，
  * 页面代码一行都不用改。
  *
@@ -327,8 +327,8 @@ function buildPricesFor(region, notice) {
 /**
  * 国际行情。
  *
- * 载荷由 data/markets.js 的 buildMarketPayload 生成 —— 云函数端用的是同一份
- * 实现（由 scripts/sync-cloud-shared.js 从 data/ 内联过去），两端不会再分叉。
+ * 载荷由 data/markets.js 的 buildMarketPayload 生成 —— 服务端用的是同一份
+ * 实现（由 scripts/sync-shared.js 从 data/ 内联过去），两端不会再分叉。
  */
 function getMarket(symbol, period) {
   var payload = buildMarketPayload(symbol, period);

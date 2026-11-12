@@ -6,7 +6,6 @@
  *      （scripts/fixtures/qiyoujiage-*.html）验证解析器，价格与
  *      data/reference-prices.js（独立来源）逐值比对；另有一组构造用例
  *      覆盖下调/搁浅/幅度缺失/跨年/注释干扰等边界。
- *      云函数与自建后端两份 sources.js 跑同一套用例，输出必须一致。
  *   2. 真实抓取（--live）：现抓北京/陕西/云南三省页验证解析仍然成立。
  *      只断言结构与数值区间，不与 reference 比对 —— 调价后挂牌价会变。
  *
@@ -21,7 +20,6 @@ const { REFERENCE_PRICES } = require(path.join(ROOT, 'data', 'reference-prices')
 const { REGIONS } = require(path.join(ROOT, 'data', 'regions'));
 
 const IMPLS = [
-  ['云函数', require(path.join(ROOT, 'cloudfunctions', 'oilCollector', 'sources'))],
   ['自建后端', require(path.join(ROOT, 'server', 'src', 'services', 'sources'))]
 ];
 
@@ -185,28 +183,20 @@ check('31 个地区都有 slug 且唯一（陕西 shanxi-3 / 山西 shanxi）', 
   assert.strictEqual(REGIONS.find(r => r.name === '陕西').slug, 'shanxi-3');
   assert.strictEqual(REGIONS.find(r => r.name === '山西').slug, 'shanxi');
 });
-check('云函数与自建后端的 sources.js 配置一致', () => {
-  assert.deepStrictEqual(IMPLS[0][1].SOURCES, IMPLS[1][1].SOURCES);
-});
+
 
 for (const [label, sources] of IMPLS) {
   console.log('--- ' + label + ' 解析器 ---');
   runSuite(label, sources);
 }
 
-check('两份实现对所有用例输出一致', () => {
-  const html = fs.readFileSync(path.join(ROOT, 'scripts', 'fixtures', 'qiyoujiage-beijing.html'), 'utf8');
-  assert.deepStrictEqual(
-    IMPLS[0][1].PARSERS.qiyoujiageRegion(html, NOW),
-    IMPLS[1][1].PARSERS.qiyoujiageRegion(html, NOW)
-  );
-});
+
 
 /* ---------- 真实抓取（可选） ---------- */
 
 async function live() {
   console.log('--- 真实抓取验证 ---');
-  const httpClient = require(path.join(ROOT, 'cloudfunctions', 'oilCollector', 'http-client'));
+  const httpClient = require(path.join(ROOT, 'server', 'src', 'services', 'http-client'));
   const source = IMPLS[0][1].SOURCES.find(x => x.id === 'qiyoujiage');
   for (const slug of ['beijing', 'shanxi-3', 'yunnan']) {
     const region = REGIONS.find(r => r.slug === slug);

@@ -4,20 +4,16 @@
  * 小程序只认这一个文件 —— utils/api.js 通过它取数，
  * 页面完全不知道后端是云开发还是自建服务器。
  *
- * 两种后端：
- *   1. 自建服务器（config.apiBaseUrl 非空）—— 优先
- *      走 wx.request 调 REST 接口，用 wx.login 换来的 token 认证；
- *   2. 微信云开发（apiBaseUrl 为空）—— 兜底
- *      走 wx.cloud.callFunction。
+ * 后端只有自建服务器（server/）：填了 config.apiBaseUrl 就走 wx.request，
+ * 没填就当作「没有后端」，所有取数回落到本地演示数据。
+ *（微信云开发那套已下线，云函数目录也删了 —— 见 git 历史）
  *
- * 两者返回给上层的数据结构必须完全一致，api.js 才能无缝回落。
- *
- * ⚠️ 云函数按「函数名 + action」调用，REST 按路径调用，
+ * ⚠️ 上层仍按「函数名 + action」调用，REST 按路径调用，
  * 这里做一次映射。映射表改起来只有一个地方。
  */
 const config = require('../config/index');
 
-/** 后端类型：'server' | 'cloud' | 'none' */
+/** 后端类型：'server' | 'none' */
 var backend = 'none';
 var initError = null;
 
@@ -55,23 +51,10 @@ function initCloud(app) {
     ensureLogin();
     return true;
   }
-  if (typeof wx.cloud === 'undefined' || typeof wx.cloud.init !== 'function') {
-    initError = 'WX_CLOUD_UNAVAILABLE';
-    backend = 'none';
-    return false;
-  }
-  try {
-    var options = { traceUser: true };
-    if (config.cloudEnvId) options.env = config.cloudEnvId;
-    wx.cloud.init(options);
-    backend = 'cloud';
-    initError = null;
-    return true;
-  } catch (err) {
-    backend = 'none';
-    initError = (err && err.errMsg) || String(err);
-    return false;
-  }
+  // 没配后端地址就当「没有后端」：取数一律回落本地演示数据
+  backend = 'none';
+  initError = 'NO_API_BASE_URL';
+  return false;
 }
 
 function isReady() {
@@ -96,7 +79,6 @@ function loginReady() {
 /** 当前用的是哪个后端，页面要如实展示数据来源 */
 function backendName() {
   if (backend === 'server') return '自建服务器';
-  if (backend === 'cloud') return '微信云开发';
   return '未配置';
 }
 
@@ -252,48 +234,7 @@ function callFunction(name, data) {
       });
   }
 
-  if (backend === 'cloud') {
-    return callCloudFunction(name, payload);
-  }
-
-  return Promise.reject(new Error(initError || 'CLOUD_NOT_READY'));
-}
-
-/**
- * 微信云开发调用（兜底路径）。
- * 超时上限：wx.cloud.callFunction 自己没有超时，网络挂住时 loading 会永远转下去。
- */
-function callCloudFunction(name, data) {
-  return new Promise(function (resolve, reject) {
-    var settled = false;
-    var timer = setTimeout(function () {
-      if (settled) return;
-      settled = true;
-      reject(new Error('云函数调用超时（' + (HTTP_TIMEOUT / 1000) + 's）'));
-    }, HTTP_TIMEOUT);
-
-    wx.cloud.callFunction({
-      name: name,
-      data: data || {}
-    }).then(function (res) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      var result = res && res.result;
-      if (result && result.ok === false) {
-        var err = new Error(result.message || 'CLOUD_FUNCTION_ERROR');
-        err.code = result.code || 'CLOUD_FUNCTION_ERROR';
-        reject(err);
-        return;
-      }
-      resolve(result && result.data !== undefined ? result.data : result);
-    }).catch(function (err) {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
+  return Promise.reject(new Error(initError || 'NO_BACKEND'));
 }
 
 module.exports = {

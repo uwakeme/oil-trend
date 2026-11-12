@@ -1,6 +1,6 @@
 # 自建后端部署
 
-把油势的后端从微信云开发搬到自己的服务器。设计与契约见
+油势的后端部署在同一台服务器上（Node + Express + PostgreSQL）。设计与契约见
 [self-hosted-backend.md](self-hosted-backend.md)。
 
 ## 一、准备
@@ -77,7 +77,7 @@ curl https://你的域名/health
 
 ```js
 module.exports = {
-  // 后端地址：自建服务器。留空则回落到微信云开发。
+  // 后端地址：自建服务器。留空则一律使用本地演示数据。
   apiBaseUrl: 'https://你的域名',
   subscribeTemplateIds: ['你的模板ID'],
   dataSource: 'auto'
@@ -85,7 +85,7 @@ module.exports = {
 ```
 
 小程序端只有这一个文件要知道后端地址。`utils/cloud.js` 会自动走
-HTTP，不再调用云函数。
+HTTP。
 
 ## 七、配置小程序合法域名
 
@@ -131,8 +131,9 @@ HTTP，不再调用云函数。
 
 ## 十一、回滚
 
-云函数**先别删**。前端把 `config/index.js` 的 `apiBaseUrl` 清空就
-切回云开发，出问题能立刻回退。云函数确认不再用之后再清理。
+后端出问题要临时顶住：把 `config/index.js` 的 `apiBaseUrl` 清空，
+小程序会回落到本地演示数据（页面标「演示数据」），不会白屏。
+服务端本身回滚用 `git revert` 后重跑部署流水线。
 
 ## 十二、安全清单
 
