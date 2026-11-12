@@ -119,12 +119,24 @@
   <!-- 地区选择 -->
   <bottom-sheet visible="{{sheetType === 'city'}}" title="选择油价地区" bind:close="onSheetClose">
     <view class="sheet-body">不同地区零售价可能不同，首版将记住你的选择。</view>
+    <!-- 31 个省，滚动翻找太慢，给个搜索框 -->
+    <view class="city-search">
+      <input class="city-search-input" type="text" value="{{regionKeyword}}"
+        placeholder="搜省份或城市，如 广东 / 广州 / gd"
+        placeholder-class="city-search-placeholder"
+        confirm-type="search" bindinput="onRegionSearch" />
+      <text wx:if="{{regionKeyword}}" class="city-search-clear" bindtap="onClearRegionSearch">✕</text>
+    </view>
     <view wx:for="{{regions}}" wx:key="code" class="city-option {{item.code === region.code ? 'active' : ''}}" data-code="{{item.code}}" bindtap="onSelectRegion">
       <view>
         <text class="city-option-name">{{item.fullName}}</text>
         <text class="city-option-price">92# {{item.priceText}} 元/升</text>
       </view>
       <text wx:if="{{item.code === region.code}}" class="city-option-check">✓</text>
+    </view>
+    <view wx:if="{{regions.length === 0}}" class="city-empty">
+      <text class="city-empty-text">没有找到「{{regionKeyword}}」对应的地区</text>
+      <text class="city-empty-hint">试试省份名（广东）、城市名（广州）或拼音首字母（gd）</text>
     </view>
   </bottom-sheet>
 

@@ -72,8 +72,12 @@ async function main() {
   check('seed 返回成功', !!(seedResult && seedResult.ok));
 
   var dao = require(path.join(ROOT, 'src', 'dao', 'index.js'));
+  var shared = require(path.join(ROOT, 'src', 'shared', 'shared.js'));
   var priceCount = (await dao.prices.listAll()).length;
-  check('当前价已写入（10 地区 × 4 油品 = 40）', priceCount === 40, '实际 ' + priceCount);
+  var regionCount = shared.REGIONS.length;
+  var fuelCount = shared.FUELS.length;
+  check('当前价已写入（地区数 × 油品数 = ' + (regionCount * fuelCount) + '）',
+    priceCount === regionCount * fuelCount, '实际 ' + priceCount);
 
   var historyCount = (await dao.history.listByRegion('440000')).length;
   check('广东历史价已写入', historyCount > 0, '实际 ' + historyCount);
@@ -110,7 +114,8 @@ async function main() {
   var notices = require(path.join(ROOT, 'src', 'services', 'notices.js'));
 
   var regions = await query.actionRegions();
-  check('regions 返回 10 个地区', regions.regions.length === 10, '实际 ' + regions.regions.length);
+  check('regions 数量与地区表一致', regions.regions.length === shared.REGIONS.length,
+    '实际 ' + regions.regions.length + ' vs ' + shared.REGIONS.length);
   check('regions 带 price92', regions.regions[0].price92 !== null && regions.regions[0].price92 !== undefined);
   check('regions 有 fullName', typeof regions.regions[0].fullName === 'string');
 
@@ -192,8 +197,38 @@ async function main() {
   ).length === 0);
 
   console.log('\n--- 三端数值一致性 ---');
-  var shared = require(path.join(ROOT, 'src', 'shared', 'shared.js'));
   var demo = require(path.join(ROOT, '..', 'data', 'demo.js'));
+
+  console.log('\n--- 各省价格 vs 真实挂牌价 ---');
+  // data/reference-prices.js 是各省发改委公布的最高零售价基准。
+  // 算出来的价格必须与它一致 —— 这条守住「地区价差」模型的核心正确性：
+  // offset 写错、基准价没校准、offset 忘了按油品分列，都会被抓出来。
+  var reference = require(path.join(ROOT, '..', 'data', 'reference-prices.js')).REFERENCE_PRICES;
+  var priceMismatch = [];
+  var compared = 0;
+  shared.REGIONS.forEach(function (region) {
+    var ref = reference[region.name];
+    if (!ref) {
+      priceMismatch.push(region.name + ' 没有基准价');
+      return;
+    }
+    shared.FUELS.forEach(function (fuel) {
+      compared++;
+      var calc = demo.currentPrice(region.code, fuel.id);
+      if (Math.abs(calc - ref[fuel.id]) > 0.011) {
+        priceMismatch.push(region.name + ' ' + fuel.id + '# 算 ' + calc.toFixed(2) +
+          ' 基准 ' + ref[fuel.id].toFixed(2));
+      }
+    });
+  });
+  // 基准表里不该有地区表里没有的省份
+  Object.keys(reference).forEach(function (name) {
+    var found = shared.REGIONS.some(function (r) { return r.name === name; });
+    if (!found) priceMismatch.push('基准里有 ' + name + ' 但地区表里没有');
+  });
+  check('各省价格与真实挂牌价一致（' + compared + ' 个值）', priceMismatch.length === 0,
+    priceMismatch.slice(0, 5).join('；'));
+
   var mismatch = 0;
   shared.REGIONS.forEach(function (region) {
     shared.FUELS.forEach(function (fuel) {

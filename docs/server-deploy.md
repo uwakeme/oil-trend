@@ -112,7 +112,7 @@ HTTP，不再调用云函数。
 | 检查 | 怎么验 |
 | --- | --- |
 | 服务活着 | `curl /health` 返回 `{"ok":true,...}` |
-| 接口通 | `curl /api/regions` 返回 10 个地区 |
+| 接口通 | `curl /api/regions` 返回 31 个地区 |
 | 数据对 | `curl /api/home?regionCode=440000` 的价格与小程序演示源一致 |
 | 登录通 | 小程序「提醒」页保存规则后刷新，规则还在（说明 token 生效） |
 | 采集跑 | 服务端日志有「[collector] 运行」；`collector_runs` 表有记录 |

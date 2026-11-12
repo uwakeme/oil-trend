@@ -155,7 +155,10 @@ const template = [
   '',
   'function priceOn(regionCode, fuelId, dateStr) {',
   '  var region = regionByCode(regionCode);',
-  '  return round2(nationalPriceOn(fuelId, dateStr) + region.offset);',
+  '  // 地区价差按油品分别取：各省标号结构不同，共用一套 offset 误差太大',
+
+  '  var offset = (region.offset && region.offset[fuelId] !== undefined) ? region.offset[fuelId] : 0;',
+  '  return round2(nationalPriceOn(fuelId, dateStr) + offset);',
   '}',
   '',
   'function currentPrice(regionCode, fuelId) {',

@@ -95,7 +95,8 @@ async function main() {
     var regions = await request(port, 'GET', '/api/regions');
     check('GET /api/regions 返回 200', regions.status === 200);
     check('regions 外壳正确', regions.body && regions.body.ok === true);
-    check('regions 有 10 个地区', regions.body.data.regions.length === 10);
+    var shared = require(path.join(ROOT, 'src', 'shared', 'shared.js'));
+    check('regions 数量与地区表一致', regions.body.data.regions.length === shared.REGIONS.length);
 
     var home = await request(port, 'GET', '/api/home?regionCode=440000');
     check('GET /api/home 返回 200', home.status === 200);

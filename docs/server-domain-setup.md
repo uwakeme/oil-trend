@@ -200,7 +200,7 @@ curl https://oil-trend.uwakeme.top/health
 # 期望：{"ok":true,"data":{"status":"up",...}}
 
 curl https://oil-trend.uwakeme.top/api/regions
-# 期望：10 个地区
+# 期望：31 个地区
 
 curl https://oil-trend.uwakeme.top/api/home?regionCode=440000
 # 期望：广东当前价，和小程序演示源一致

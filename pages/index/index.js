@@ -23,6 +23,8 @@ Page({
     loadError: '',
     region: { code: '', fullName: '' },
     regions: [],
+    allRegions: [],
+    regionKeyword: '',
     prices: [],
     fuelId: '92',
     hero: {},
@@ -191,13 +193,42 @@ Page({
     wx.showToast({ title: '已切换到 ' + fuelId + '#', icon: 'none', duration: 1400 });
   },
 
+  /* ---------- 地区搜索 ---------- */
+
+  /**
+   * 地区列表有 31 个省，滚动翻找太慢 —— 加个搜索框。
+   * 省份名、城市名、拼音首字母都能匹配。
+   */
+  onRegionSearch(e) {
+    var keyword = String((e && e.detail && e.detail.value) || '').trim();
+    var all = this.data.allRegions || [];
+    var filtered = all;
+    if (keyword) {
+      var kw = keyword.toLowerCase();
+      filtered = all.filter(function (r) {
+        return r.name.indexOf(keyword) >= 0 ||
+          r.city.indexOf(keyword) >= 0 ||
+          (r.pinyin && r.pinyin.indexOf(kw) >= 0);
+      });
+    }
+    this.setData({ regionKeyword: keyword, regions: filtered });
+  },
+
+  onClearRegionSearch() {
+    var all = this.data.allRegions || [];
+    this.setData({ regionKeyword: '', regions: all });
+  },
+
   onPickRegion() {
     var self = this;
     api.getRegions().then(function (regions) {
+      var list = (regions || []).map(function (r) {
+        return Object.assign({}, r, { priceText: fmt.price(r.price92) });
+      });
       self.setData({
-        regions: (regions || []).map(function (r) {
-          return Object.assign({}, r, { priceText: fmt.price(r.price92) });
-        }),
+        allRegions: list,
+        regions: list,
+        regionKeyword: '',
         sheetType: 'city'
       });
     }).catch(function () {

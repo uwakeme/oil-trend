@@ -61,10 +61,16 @@ function regionByCode(code) {
   return REGIONS[0];
 }
 
-/** 某地某油品在某天的零售价 */
+/**
+ * 某地某油品在某天的零售价
+ *
+ * ⚠️ 地区价差按油品分别取：现实中各省的标号结构不同
+ * （98# 相对 92# 的溢价各省差 1.3 元/升），共用一套 offset 误差太大。
+ */
 function priceOn(regionCode, fuelId, dateStr) {
   var region = regionByCode(regionCode);
-  return round2(nationalPriceOn(fuelId, dateStr) + region.offset);
+  var offset = (region.offset && region.offset[fuelId] !== undefined) ? region.offset[fuelId] : 0;
+  return round2(nationalPriceOn(fuelId, dateStr) + offset);
 }
 
 function currentPrice(regionCode, fuelId) {
@@ -136,9 +142,12 @@ function periodLevels(regionCode, fuelId, fromDate) {
   var events = [];
   var points = [];
 
+  // 地区价差按油品分别取（各省标号结构不同，不能共用一套）
+  var offset = (region.offset && region.offset[fuelId] !== undefined) ? region.offset[fuelId] : 0;
+
   // 区间起点时生效的价格
   var basePrice = nationalPriceOn(fuelId, fromDate);
-  points.push({ date: fromDate, value: round2(basePrice + region.offset) });
+  points.push({ date: fromDate, value: round2(basePrice + offset) });
 
   for (var i = 1; i < list.length; i++) {
     var item = list[i];
@@ -149,9 +158,9 @@ function periodLevels(regionCode, fuelId, fromDate) {
       title: item.title,
       amount: item.delta,
       direction: item.delta < 0 ? 'down' : 'up',
-      priceAfter: round2(item.price + region.offset)
+      priceAfter: round2(item.price + offset)
     });
-    points.push({ date: item.date, value: round2(item.price + region.offset) });
+    points.push({ date: item.date, value: round2(item.price + offset) });
   }
   return { points: points, events: events };
 }

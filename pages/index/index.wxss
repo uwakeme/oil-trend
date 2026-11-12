@@ -389,6 +389,53 @@
 }
 
 /* ---------- 弹层内样式 ---------- */
+
+/* 地区搜索：31 个省，滚动翻找太慢，给个搜索框 */
+.city-search {
+  display: flex;
+  align-items: center;
+  background: var(--white);
+  border: 1rpx solid var(--line);
+  border-radius: 22rpx;
+  padding: 0 24rpx;
+  margin-bottom: 20rpx;
+}
+
+.city-search-input {
+  flex: 1;
+  height: 76rpx;
+  font-size: 26rpx;
+  color: var(--ink);
+}
+
+.city-search-placeholder {
+  color: var(--muted);
+}
+
+.city-search-clear {
+  font-size: 30rpx;
+  color: var(--muted);
+  padding: 0 4rpx;
+}
+
+.city-empty {
+  padding: 60rpx 0 40rpx;
+  text-align: center;
+}
+
+.city-empty-text {
+  display: block;
+  font-size: 26rpx;
+  color: var(--ink);
+  margin-bottom: 12rpx;
+}
+
+.city-empty-hint {
+  display: block;
+  font-size: 22rpx;
+  color: var(--muted);
+}
+
 .city-option {
   border: 1rpx solid var(--line);
   background: #fffef9;
