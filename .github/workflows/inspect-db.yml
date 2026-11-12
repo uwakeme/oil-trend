@@ -11,17 +11,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Upload inspect script
+      - name: Write SSH key to file
         run: |
-          mkdir -p /tmp/inspect
-          cp -r server/scripts /tmp/inspect/
-          cp -r server/src /tmp/inspect/
-          cp server/package.json server/package-lock.json /tmp/inspect/
+          echo "${{ secrets.SERVER_SSH_KEY }}" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+      # 脚本必须传到服务器上才能跑 —— SSH 步骤是在服务器执行，不是 runner
+      - name: Copy inspect script to server
+        run: |
+          DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}"
+          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key -P ${{ secrets.SERVER_PORT || 22 }} -r ./server/scripts ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${DEPLOY_DIR}/server/
 
       - name: Run inspect on server
         uses: appleboy/ssh-action@v1.0.3
@@ -35,7 +34,6 @@ jobs:
             set -e
             DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}"
             cd ${DEPLOY_DIR}/server
-            npm install --omit=dev --silent 2>/dev/null || true
             echo "--- 用服务器上的 .env 连库盘点 ---"
             set -a
             . ${DEPLOY_DIR}/server/.env
