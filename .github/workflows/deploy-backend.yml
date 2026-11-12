@@ -86,14 +86,20 @@ jobs:
             node scripts/apply-schema.js
 
             echo "检查是否需要灌演示数据..."
-            # 表建好了但没数据时，接口能通、页面却是空的。
-            # 只在当前价表为空时灌，不覆盖采集器写进来的真实数据。
-            NEED_SEED=$(node scripts/need-seed.js)
-            if [ "$NEED_SEED" = "yes" ]; then
-              echo "  数据库为空，灌入演示数据..."
-              node scripts/seed.js
+            # ⚠️ 默认不灌。
+            # 之前这里是「库空就自动灌」，结果每次部署都会把演示数据
+            # 重新灌回去 —— 手动清理完，下一次部署又白清了。
+            # 现在只有显式设置 SEED_DEMO=true 才灌。
+            if [ "${SEED_DEMO:-false}" = "true" ]; then
+              NEED_SEED=$(node scripts/need-seed.js)
+              if [ "$NEED_SEED" = "yes" ]; then
+                echo "  数据库为空，灌入演示数据..."
+                node scripts/seed.js
+              else
+                echo "  数据库已有数据，跳过（不覆盖真实数据）"
+              fi
             else
-              echo "  数据库已有数据，跳过（不覆盖真实数据）"
+              echo "  跳过（默认不灌演示数据；需要时设 SEED_DEMO=true）"
             fi
 
             echo "用 PM2 启动..."
