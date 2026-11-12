@@ -15,6 +15,7 @@
 node scripts/lint-wxml.js          # 静态检查（有错误时 exit 1），改完必跑
 node scripts/check-modules.js      # 运行时模块 + 云函数入口加载冒烟测试，挡住「删了函数体留着引用」这类 ReferenceError
 node scripts/verify-data.js        # 数据层自检，打印算出的价格/走势/通知/行情
+node scripts/verify-collector.js   # 采集器解析回归（--live 追加真实抓取 + pg-mem 入库链路）
 node scripts/sync-cloud-shared.js  # 把 _shared/shared.js 同步到三个云函数，部署前必跑
 node scripts/build-icons.js        # 重生成 assets/icons/*.png（SVG 精灵内联在脚本里，需本机 Chrome）
 node scripts/preview-qr.js <appid> # 上传预览包并出扫码图（必须正式 AppID）
@@ -88,6 +89,9 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | pg 的参数会把数字序列化成文本 | `LIMIT $1` 传过来是 `'20'`，Postgres 直接报错 | LIMIT/OFFSET 内联整数（先 `Number()` 过一遍）；`server/src/dao/index.js` 里都有注释 |
 | JSONB / NUMERIC 读出来是字符串 | pg 不自动解析，`deltas` 是对象、`price` 是字符串 | `server/src/dao/index.js` 的 `toCamel` 里用列名白名单转数字 —— **不能见数字就转**，`fuelId` 是 `'92'`，转成数字前端判断全失效 |
 | 自建后端没有 `cloud.getWXContext()` | 拿不到 openid | 走 `wx.login()` → code → `code2session` 换 openid，服务端自签 token；`utils/cloud.js` 的 `loginReady()` 保证用户类接口等 token 到位 |
+| cron 解析不支持星号步长 | `nextRun('0 */30 * * * *')` 返回 `null`，`register()` 打一行警告就退出 —— **采集器与提醒器在线上一次都没跑过**，`collector_runs` 一直是空表 | 字段解析要支持 星号 / 步长 / 区间 `a-b` / `a-b/N` / 逗号列表；`server/scripts/scheduler-test.js` 钉住「默认配置必须能解析出下次时间」 |
+| 预测幅度解析不出来被当成 0 | `forecast` 是空对象时前端 `changeMeta(undefined)` → `Number(undefined) \|\| 0` → 显示「与上次持平」，来源明说上调却显示持平，等于替来源猜了幅度 | 方向单独存 `oil_windows.forecast_direction`；前端幅度缺失时显示「预计上调 / 幅度待公布 · 非官方」，不写「元/升」 |
+| 汽油价格网对密集请求回 HTTP 567 | 连发 28 个地区页后开始限流（不是 404，slug 没错） | 采集走 3 并发 + 6 小时新鲜期；`verify-collector.js --live` 加 1.5s 间隔，CI 只跑 fixture 模式 |
 | certbot `--standalone` 在这台机器上校验失败 | 报 `404` + `Invalid response`；日志里是 `Certbot wasn't able to bind to :80 using IPv4` —— certbot 的临时服务器只绑了 IPv6 的 80，Let's Encrypt 走 IPv4 就打不到 | 用 `certbot --nginx`（走 nginx 自己的 80，IPv4/IPv6 都监听）；这台机器是双栈，别用 standalone |
 
 ## 验证要求
@@ -118,7 +122,9 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 
 ## 项目现状（2026-11）
 
-五个页面与三个云函数已写完并逐页验证过，当前跑的是**内置演示数据集**，真实数据源尚未接入。
+五个页面与三个云函数已写完并逐页验证过。采集器已接入**汽油价格网**（qiyoujiage，31 省挂牌价 +
+下次调价预测，本地 fixture / 真实抓取 / pg-mem 入库验证全过，见 `docs/data-sources.md`），
+但尚未部署，当前运行时仍是**内置演示数据集**；ndrc 公告与国际行情两个来源未启用。
 订阅消息链路还没走通到底（需正式 AppID + 模板 ID），未配置时「提醒」页要明说未配置，不假装授权成功。
 
 **后端有两套并存**：微信云开发（`cloudfunctions/`，未部署）与自建后端（`server/`，代码已完成、

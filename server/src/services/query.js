@@ -82,7 +82,10 @@ function buildWindow(windowDoc) {
     progress: Math.min(100, Math.max(0, Math.round(passedDays / totalDays * 100))),
     isOfficial: !!windowDoc.isOfficial,
     basis: windowDoc.basis || '',
-    forecast: windowDoc.forecast || {}
+    forecast: windowDoc.forecast || {},
+    // 幅度可能解析不出来（forecast 为空对象），方向单独给 ——
+    // 前端靠它区分「持平」和「有方向但幅度待公布」
+    forecastDirection: windowDoc.forecastDirection || ''
   };
 }
 

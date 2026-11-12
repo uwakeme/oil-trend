@@ -90,18 +90,18 @@ const prices = {
     var values = [];
     var params = [];
     var tuples = list.map(function (item, i) {
-      var b = i * 7;
-      values.push('($' + (b + 1) + '::text, $' + (b + 2) + '::text, $' + (b + 3) + '::text, $' + (b + 4) + '::text, $' + (b + 5) + '::numeric, $' + (b + 6) + '::numeric, $' + (b + 7) + '::date)');
-      params.push(item.regionCode, item.regionName || null, item.fuelId, item.fuelName || null, item.price, item.changeAmount || 0, item.changeAt || null);
+      var b = i * 8;
+      values.push('($' + (b + 1) + '::text, $' + (b + 2) + '::text, $' + (b + 3) + '::text, $' + (b + 4) + '::text, $' + (b + 5) + '::numeric, $' + (b + 6) + '::numeric, $' + (b + 7) + '::date, $' + (b + 8) + '::text)');
+      params.push(item.regionCode, item.regionName || null, item.fuelId, item.fuelName || null, item.price, item.changeAmount || 0, item.changeAt || null, item.source || null);
       return values[i];
     });
     await db.query(
-      'INSERT INTO oil_prices (region_code, region_name, fuel_id, fuel_name, price, change_amount, change_at) ' +
+      'INSERT INTO oil_prices (region_code, region_name, fuel_id, fuel_name, price, change_amount, change_at, source) ' +
       'VALUES ' + tuples.join(', ') + ' ' +
       'ON CONFLICT (region_code, fuel_id) DO UPDATE SET ' +
       'region_name = EXCLUDED.region_name, fuel_name = EXCLUDED.fuel_name, ' +
       'price = EXCLUDED.price, change_amount = EXCLUDED.change_amount, ' +
-      'change_at = EXCLUDED.change_at, updated_at = NOW()',
+      'change_at = EXCLUDED.change_at, source = EXCLUDED.source, updated_at = NOW()',
       params
     );
   },
@@ -143,14 +143,14 @@ const history = {
     var values = [];
     var params = [];
     var tuples = list.map(function (item, i) {
-      var b = i * 4;
-      values.push('($' + (b + 1) + '::text, $' + (b + 2) + '::text, $' + (b + 3) + '::date, $' + (b + 4) + '::numeric)');
-      params.push(item.regionCode, item.fuelId, item.date, item.price);
+      var b = i * 5;
+      values.push('($' + (b + 1) + '::text, $' + (b + 2) + '::text, $' + (b + 3) + '::date, $' + (b + 4) + '::numeric, $' + (b + 5) + '::text)');
+      params.push(item.regionCode, item.fuelId, item.date, item.price, item.source || null);
       return values[i];
     });
     await db.query(
-      'INSERT INTO oil_price_history (region_code, fuel_id, date, price) VALUES ' + tuples.join(', ') + ' ' +
-      'ON CONFLICT (region_code, fuel_id, date) DO UPDATE SET price = EXCLUDED.price',
+      'INSERT INTO oil_price_history (region_code, fuel_id, date, price, source) VALUES ' + tuples.join(', ') + ' ' +
+      'ON CONFLICT (region_code, fuel_id, date) DO UPDATE SET price = EXCLUDED.price, source = EXCLUDED.source',
       params
     );
   },
@@ -274,10 +274,35 @@ const windows = {
     return toCamel(row);
   },
 
+  async latestBySource(source) {
+    var row = await db.one('SELECT * FROM oil_windows WHERE source = $1 ORDER BY date DESC LIMIT 1', [source]);
+    return toCamel(row);
+  },
+
+  async update(id, doc) {
+    var rows = await db.query(
+      'UPDATE oil_windows SET date = $2, time = $3, cycle_start = $4, is_official = $5, basis = $6, ' +
+      'forecast = $7::jsonb, forecast_direction = $8, source = $9 ' +
+      'WHERE id = $1 RETURNING *',
+      [
+        id,
+        doc.date,
+        doc.time || '24:00',
+        doc.cycleStart || null,
+        !!doc.isOfficial,
+        doc.basis || null,
+        JSON.stringify(doc.forecast || {}),
+        doc.forecastDirection || null,
+        doc.source || null
+      ]
+    );
+    return toCamel(rows[0]);
+  },
+
   async insert(doc) {
     var rows = await db.query(
-      'INSERT INTO oil_windows (date, time, cycle_start, is_official, basis, forecast, source) ' +
-      'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7) RETURNING *',
+      'INSERT INTO oil_windows (date, time, cycle_start, is_official, basis, forecast, forecast_direction, source) ' +
+      'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8) RETURNING *',
       [
         doc.date,
         doc.time || '24:00',
@@ -285,6 +310,7 @@ const windows = {
         !!doc.isOfficial,
         doc.basis || null,
         JSON.stringify(doc.forecast || {}),
+        doc.forecastDirection || null,
         doc.source || null
       ]
     );

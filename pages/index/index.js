@@ -101,7 +101,21 @@ Page({
 
     var windowData = payload.window || {};
     var forecastAmount = (windowData.forecast || {})[fuelId];
-    var forecastMeta = changeMeta(forecastAmount);
+    // 幅度解析不出来时后端给的是空 forecast + 单独的方向字段。
+    // 这时不能套 changeMeta —— 它会把 undefined 当成 0，
+    // 界面就变成「持平」，等于替来源猜了一个幅度。
+    var forecastKnown = forecastAmount !== undefined && forecastAmount !== null;
+    var forecastMeta;
+    if (forecastKnown) {
+      forecastMeta = changeMeta(forecastAmount);
+    } else {
+      var dir = windowData.forecastDirection || '';
+      forecastMeta = {
+        text: dir === 'up' ? '预计上调' : (dir === 'down' ? '预计下调' : '待公布'),
+        direction: dir === 'up' ? 'up' : (dir === 'down' ? 'down' : 'flat'),
+        caption: dir === 'up' ? '幅度待公布 · 非官方' : (dir === 'down' ? '幅度待公布 · 非官方' : '方向未定 · 非官方')
+      };
+    }
 
     var trendRaw = (payload.trend30 || {})[fuelId] || { points: [], labels: [] };
     var points = trendRaw.points || [];
@@ -142,8 +156,12 @@ Page({
         daysLeft: windowData.daysLeft
       },
       forecast: {
-        text: (forecastAmount < 0 ? '↓ ' : forecastAmount > 0 ? '↑ ' : '') + Math.abs(forecastAmount || 0).toFixed(2),
-        direction: forecastMeta.direction
+        text: forecastKnown
+          ? (forecastAmount < 0 ? '↓ ' : forecastAmount > 0 ? '↑ ' : '') + Math.abs(forecastAmount || 0).toFixed(2)
+          : forecastMeta.text,
+        direction: forecastMeta.direction,
+        // 幅度未知时单位不该写「元/升」，改成说明文案
+        caption: forecastMeta.caption || (fuelId + '# · 元/升 · 非官方')
       },
       trend: {
         points: points,

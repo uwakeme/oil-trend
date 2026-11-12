@@ -60,12 +60,44 @@
 这些都是演示值。接真实数据后，`offset` 应该由采集端按各地实际挂牌价算出来，
 而不是写死。
 
+## 已接入的真实来源：汽油价格网（qiyoujiage）
+
+2026-11-12 接入并验证，参考 [aalavender/OilPrice](https://github.com/aalavender/OilPrice)
+与 [vikiboss/60s](https://github.com/vikiboss/60s) 的采集方式。
+
+- **地区挂牌价**：`http://www.qiyoujiage.com/{slug}.shtml`，31 个省级地区页，
+  slug 存在 `data/regions.js`（⚠️ 山西 `shanxi`、陕西 `shanxi-3`，拼音撞名）。
+  解析 `#youjia` 区块的 `dl/dt/dd`，四油品（92/95/98/0#）缺一不可，
+  价格超出 3–20 元/升合理区间整体转人工核对。
+- **下次调价预测**：解析 `#EA5146` 边框提示 div 的「下次油价X月X日X时调整 /
+  预计上调（下调/搁浅）X元/吨（X–X元/升）」。预测写 `oil_windows`，
+  一律 `isOfficial: false`；来源只给整体升幅区间，四个油品共用区间中值，
+  basis 注明非官方、以正式公告为准。页面不写年份，按「早 20 天以上即跨年」推断。
+- **采集节奏**：价格只在调价日变化，默认 6 小时新鲜期（`freshHours`），
+  31 省 3 并发抓取；`regionCode` / `force` 参数可单地区强制重采。
+- **验证**：`node scripts/verify-collector.js`（fixture 回归，价格与
+  `data/reference-prices.js` 独立来源逐值比对）；`--live` 追加真实抓取 +
+  pg-mem 入库链路验证。fixture 快照在 `scripts/fixtures/`。
+- 站点声明价格仅供参考，展示侧保留来源标注；ndrc-notice / market-quote
+  两个来源仍未启用。
+
+### 98# 的口径差异（不是解析 bug）
+
+现抓的 98# 与 `data/reference-prices.js` 在个别省份对不上，例如
+河南 10.75 vs 10.16、海南 12.05 vs 11.63。核对页面原文后确认**解析正确**，
+差异来自不同来源的 98# 数据口径不同 —— 98# 铺货率低，各站数据源不一致。
+
+所以 `verify-collector.js` 只对北京 / 陕西 / 云南三省做「fixture 与 reference 逐值比对」，
+live 模式只断言结构与数值区间。**别把 live 值与 reference 的全量差异当成解析 bug。**
+
 ## 想加一个新数据源
 
 1. 在 `cloudfunctions/oilCollector/sources.js` 加一条配置
+   （`server/src/services/sources.js` 保持逐字节一致）
 2. 在 `PARSERS` 里写解析器，**解析不出来就返回 null**，不要返回默认值
 3. 在 `collectFromSource` 里按 `kind` 分发到对应的入库函数
 4. 跑一次真实抓取，确认解析结果
 5. 打开 `enabled`
 
-改过 `cloudfunctions/_shared/shared.js` 之后要跑一次同步脚本。
+改过 `data/` 下的真源文件之后要跑 `node scripts/sync-cloud-shared.js`
+（`_shared/shared.js` 是生成产物，手改会被覆盖）。

@@ -69,6 +69,9 @@ CREATE TABLE IF NOT EXISTS oil_windows (
   is_official   BOOLEAN NOT NULL DEFAULT FALSE,
   basis         TEXT,
   forecast      JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- 预测方向 up/down/flat。幅度解析不出来时靠它表达方向，
+  -- 不能让前端把「幅度未知」当成「持平 0」
+  forecast_direction TEXT,
   source        TEXT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -138,6 +141,10 @@ CREATE TABLE IF NOT EXISTS collector_runs (
   results       JSONB NOT NULL DEFAULT '[]'::jsonb,
   needs_review  JSONB NOT NULL DEFAULT '[]'::jsonb
 );
+
+-- 老库补列：CREATE TABLE IF NOT EXISTS 不会改动已存在的表，
+-- 部署脚本每次都会跑这个文件，所以补列放这里（重复执行安全）。
+ALTER TABLE oil_windows ADD COLUMN IF NOT EXISTS forecast_direction TEXT;
 
 -- 查询用的索引
 CREATE INDEX IF NOT EXISTS idx_history_region_date ON oil_price_history (region_code, date);

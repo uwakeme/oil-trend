@@ -239,6 +239,7 @@ var REGIONS = [
     "name": "上海",
     "city": "上海",
     "pinyin": "sh",
+    "slug": "shanghai",
     "offset": {
       "0": -0.01,
       "92": -0.09,
@@ -251,6 +252,7 @@ var REGIONS = [
     "name": "云南",
     "city": "昆明",
     "pinyin": "yn",
+    "slug": "yunnan",
     "offset": {
       "0": 0.07,
       "92": 0.1,
@@ -263,6 +265,7 @@ var REGIONS = [
     "name": "内蒙古",
     "city": "呼和浩特",
     "pinyin": "nmg",
+    "slug": "neimenggu",
     "offset": {
       "0": -0.16,
       "92": -0.05,
@@ -275,6 +278,7 @@ var REGIONS = [
     "name": "北京",
     "city": "北京",
     "pinyin": "bj",
+    "slug": "beijing",
     "offset": {
       "0": 0.07,
       "92": -0.05,
@@ -287,6 +291,7 @@ var REGIONS = [
     "name": "吉林",
     "city": "长春",
     "pinyin": "jl",
+    "slug": "jilin",
     "offset": {
       "0": -0.08,
       "92": -0.09,
@@ -299,6 +304,7 @@ var REGIONS = [
     "name": "四川",
     "city": "成都",
     "pinyin": "sc",
+    "slug": "sichuan",
     "offset": {
       "0": 0.04,
       "92": 0.04,
@@ -311,6 +317,7 @@ var REGIONS = [
     "name": "天津",
     "city": "天津",
     "pinyin": "tj",
+    "slug": "tianjin",
     "offset": {
       "0": 0.02,
       "92": -0.06,
@@ -323,6 +330,7 @@ var REGIONS = [
     "name": "宁夏",
     "city": "银川",
     "pinyin": "nx",
+    "slug": "ningxia",
     "offset": {
       "0": -0.12,
       "92": -0.16,
@@ -335,6 +343,7 @@ var REGIONS = [
     "name": "安徽",
     "city": "合肥",
     "pinyin": "ah",
+    "slug": "anhui",
     "offset": {
       "0": 0.05,
       "92": -0.11,
@@ -347,6 +356,7 @@ var REGIONS = [
     "name": "山东",
     "city": "济南",
     "pinyin": "sd",
+    "slug": "shandong",
     "offset": {
       "0": -0.08,
       "92": -0.09,
@@ -359,6 +369,7 @@ var REGIONS = [
     "name": "山西",
     "city": "太原",
     "pinyin": "sx",
+    "slug": "shanxi",
     "offset": {
       "0": 0.09,
       "92": -0.12,
@@ -371,6 +382,7 @@ var REGIONS = [
     "name": "广东",
     "city": "广州",
     "pinyin": "gd",
+    "slug": "guangdong",
     "offset": {
       "0": 0.02,
       "92": -0.03,
@@ -383,6 +395,7 @@ var REGIONS = [
     "name": "广西",
     "city": "南宁",
     "pinyin": "gx",
+    "slug": "guangxi",
     "offset": {
       "0": 0.06,
       "92": 0,
@@ -395,6 +408,7 @@ var REGIONS = [
     "name": "新疆",
     "city": "乌鲁木齐",
     "pinyin": "xj",
+    "slug": "xinjiang",
     "offset": {
       "0": -0.23,
       "92": -0.25,
@@ -407,6 +421,7 @@ var REGIONS = [
     "name": "江苏",
     "city": "南京",
     "pinyin": "js",
+    "slug": "jiangsu",
     "offset": {
       "0": -0.03,
       "92": -0.09,
@@ -419,6 +434,7 @@ var REGIONS = [
     "name": "江西",
     "city": "南昌",
     "pinyin": "jx",
+    "slug": "jiangxi",
     "offset": {
       "0": 0.06,
       "92": -0.1,
@@ -431,6 +447,7 @@ var REGIONS = [
     "name": "河北",
     "city": "石家庄",
     "pinyin": "hb",
+    "slug": "hebei",
     "offset": {
       "0": 0.02,
       "92": -0.06,
@@ -443,6 +460,7 @@ var REGIONS = [
     "name": "河南",
     "city": "郑州",
     "pinyin": "hn",
+    "slug": "henan",
     "offset": {
       "0": 0,
       "92": -0.04,
@@ -455,6 +473,7 @@ var REGIONS = [
     "name": "浙江",
     "city": "杭州",
     "pinyin": "zj",
+    "slug": "zhejiang",
     "offset": {
       "0": -0.01,
       "92": -0.09,
@@ -467,6 +486,7 @@ var REGIONS = [
     "name": "海南",
     "city": "海口",
     "pinyin": "hi",
+    "slug": "hainan",
     "offset": {
       "0": 0.1,
       "92": 1.06,
@@ -479,6 +499,7 @@ var REGIONS = [
     "name": "湖北",
     "city": "武汉",
     "pinyin": "hb",
+    "slug": "hubei",
     "offset": {
       "0": 0,
       "92": -0.04,
@@ -491,6 +512,7 @@ var REGIONS = [
     "name": "湖南",
     "city": "长沙",
     "pinyin": "hn",
+    "slug": "hunan",
     "offset": {
       "0": 0.08,
       "92": -0.11,
@@ -503,6 +525,7 @@ var REGIONS = [
     "name": "甘肃",
     "city": "兰州",
     "pinyin": "gs",
+    "slug": "gansu",
     "offset": {
       "0": -0.1,
       "92": -0.05,
@@ -515,6 +538,7 @@ var REGIONS = [
     "name": "福建",
     "city": "福州",
     "pinyin": "fj",
+    "slug": "fujian",
     "offset": {
       "0": 0,
       "92": -0.1,
@@ -527,6 +551,7 @@ var REGIONS = [
     "name": "西藏",
     "city": "拉萨",
     "pinyin": "xz",
+    "slug": "xizang",
     "offset": {
       "0": 0.53,
       "92": 0.81,
@@ -539,6 +564,7 @@ var REGIONS = [
     "name": "贵州",
     "city": "贵阳",
     "pinyin": "gz",
+    "slug": "guizhou",
     "offset": {
       "0": 0.11,
       "92": 0.08,
@@ -551,6 +577,7 @@ var REGIONS = [
     "name": "辽宁",
     "city": "沈阳",
     "pinyin": "ln",
+    "slug": "liaoning",
     "offset": {
       "0": -0.1,
       "92": 0.02,
@@ -563,6 +590,7 @@ var REGIONS = [
     "name": "重庆",
     "city": "重庆",
     "pinyin": "cq",
+    "slug": "chongqing",
     "offset": {
       "0": 0.06,
       "92": 0,
@@ -575,6 +603,7 @@ var REGIONS = [
     "name": "陕西",
     "city": "西安",
     "pinyin": "sn",
+    "slug": "shanxi-3",
     "offset": {
       "0": -0.11,
       "92": -0.18,
@@ -587,6 +616,7 @@ var REGIONS = [
     "name": "青海",
     "city": "西宁",
     "pinyin": "qh",
+    "slug": "qinghai",
     "offset": {
       "0": -0.08,
       "92": -0.09,
@@ -599,6 +629,7 @@ var REGIONS = [
     "name": "黑龙江",
     "city": "哈尔滨",
     "pinyin": "hlj",
+    "slug": "heilongjiang",
     "offset": {
       "0": -0.22,
       "92": -0.09,

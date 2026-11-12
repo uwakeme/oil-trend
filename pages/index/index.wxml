@@ -76,7 +76,7 @@
         </view>
         <view class="forecast">
           <text class="forecast-value num {{forecast.direction}}">{{forecast.text}}</text>
-          <text class="forecast-caption">{{fuelId}}# · 元/升 · 非官方</text>
+          <text class="forecast-caption">{{forecast.caption}}</text>
         </view>
       </view>
     </view>

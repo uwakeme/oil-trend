@@ -13,7 +13,11 @@
  * 触发方式：
  *   - 定时触发器（默认每 30 分钟）
  *   - 手动调用 event.action = 'collect' 立即采集
+ *     （可带 regionCode 只采一个地区、force: true 忽略新鲜期）
  *   - 手动调用 event.action = 'seed'   写入演示数据（用于打通云端链路）
+ *
+ * 地区价格源（qiyoujiage）：价格只在调价日变化，默认 6 小时新鲜期，
+ * 31 省 3 并发抓取；首次全量采集耗时较长，config.json 超时设为 60s。
  */
 const cloud = require('wx-server-sdk');
 const shared = require('./shared');
@@ -38,10 +42,11 @@ function nowIso() {
 }
 
 function todayStr() {
-  var d = new Date();
-  var m = d.getMonth() + 1;
-  var day = d.getDate();
-  return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
+  // 统一按 UTC+8 日历日算：云函数跑在 UTC，直接用本地时区会在早上 8 点前差一天
+  var d = new Date(Date.now() + 8 * 3600000);
+  var m = d.getUTCMonth() + 1;
+  var day = d.getUTCDate();
+  return d.getUTCFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
 }
 
 /* ---------------- 抓取与解析 ---------------- */
@@ -66,9 +71,13 @@ async function fetchSource(source) {
   }
 }
 
-async function collectFromSource(source) {
+async function collectFromSource(source, options) {
   if (!source.enabled) {
     return { sourceId: source.id, status: 'skipped', reason: 'SOURCE_DISABLED', message: '来源未启用' };
+  }
+  // 地区价格源按地区逐个抓取，不走单 URL 流程
+  if (source.kind === 'price') {
+    return collectPriceSource(source, options);
   }
   var fetched = await fetchSource(source);
   if (!fetched.ok) {
@@ -160,6 +169,208 @@ async function saveMarket(source, parsed) {
   } else {
     await db.collection(C.markets).add({ data: doc });
   }
+}
+
+/* ---------------- 地区油价采集（kind = price） ---------------- */
+
+/** 读全部当前价，按 地区 → 油品 分组（新鲜度判断与涨跌计算都用它） */
+async function loadPricesByRegion() {
+  var res = await db.collection(C.prices).limit(1000).get();
+  var map = {};
+  (res.data || []).forEach(function (p) {
+    if (!map[p.regionCode]) map[p.regionCode] = {};
+    map[p.regionCode][p.fuelId] = p;
+  });
+  return map;
+}
+
+/**
+ * 该地区是否在新鲜期内。
+ * 只认同来源的真实采集时间 —— seed 演示数据的 updatedAt 不算，
+ * 否则演示库会让真实采集永远跳过。
+ */
+function regionFresh(docs, sourceId, freshHours) {
+  if (!docs) return false;
+  var latest = 0;
+  Object.keys(docs).forEach(function (fuelId) {
+    var p = docs[fuelId];
+    if (p.source !== sourceId) return;
+    var t = Date.parse(p.updatedAt || '');
+    if (isFinite(t) && t > latest) latest = t;
+  });
+  return latest > 0 && (Date.now() - latest) < freshHours * 3600000;
+}
+
+/**
+ * 逐地区抓取价格页。
+ * options.regionCode 只采一个地区（手动触发/联调用）；options.force 忽略新鲜期。
+ * 价格只在调价日变化，默认 freshHours 内抓过的地区跳过。
+ */
+async function collectPriceSource(source, options) {
+  var opts = options || {};
+  var regions = shared.REGIONS.filter(function (r) { return r.slug; });
+  if (opts.regionCode) {
+    regions = regions.filter(function (r) { return r.code === opts.regionCode; });
+    if (!regions.length) {
+      return { sourceId: source.id, status: 'failed', reason: 'UNKNOWN_REGION', message: '地区代码不存在：' + opts.regionCode };
+    }
+  }
+
+  var existing = await loadPricesByRegion();
+  var freshHours = source.freshHours || 6;
+  var stale = regions.filter(function (r) {
+    return opts.force || !regionFresh(existing[r.code], source.id, freshHours);
+  });
+  if (!stale.length) {
+    // 数据仍是真实且新鲜的，报 ok 而不是 idle —— idle 的文案是「真实数据源尚未接入」
+    return { sourceId: source.id, status: 'ok', saved: 0, fresh: regions.length, message: '全部地区价格仍在新鲜期内' };
+  }
+
+  var saved = 0;
+  var failures = [];
+  var trend = null;
+  // 3 个并发 worker：31 个省页一次全开对对方站点不友好
+  var queue = stale.slice();
+  async function worker() {
+    while (queue.length) {
+      var region = queue.shift();
+      var fetched = await fetchSource({ url: source.url + region.slug + '.shtml', headers: source.headers });
+      if (!fetched.ok) {
+        failures.push({ regionCode: region.code, regionName: region.name, reason: fetched.reason, message: fetched.message });
+        continue;
+      }
+      var parsed = null;
+      try {
+        parsed = sources.PARSERS[source.parser](fetched.body);
+      } catch (err) {
+        parsed = null;
+      }
+      if (!parsed) {
+        failures.push({ regionCode: region.code, regionName: region.name, reason: 'PARSE_FAILED', message: '页面抓取成功但解析不出四油品价格，转人工核对' });
+        continue;
+      }
+      await saveRegionPrices(source, region, parsed);
+      saved++;
+      // 各省页面的预测是全国统一的，取第一个解析成功的即可
+      if (!trend && parsed.trend) trend = parsed.trend;
+    }
+  }
+  await Promise.all([worker(), worker(), worker()]);
+
+  var windowSaved = null;
+  if (trend) windowSaved = await saveWindow(source, trend);
+
+  var result = {
+    sourceId: source.id,
+    status: failures.length ? 'needsReview' : 'ok',
+    saved: saved,
+    fresh: regions.length - stale.length,
+    failed: failures,
+    window: windowSaved
+  };
+  if (failures.length) {
+    result.reason = 'REGION_FAILED';
+    result.message = failures.length + ' 个地区采集失败，已转人工核对';
+  }
+  return result;
+}
+
+/**
+ * 入库一个地区的四油品价格。
+ * 涨跌只跟同来源旧价比：seed 演示价不是真实旧价，差值没有意义。
+ * 首次真实采集 changeAmount 记 0、changeAt 留空（不知道上次调价日），
+ * 但会写一条今日历史价作为走势起点。
+ */
+async function saveRegionPrices(source, region, parsed) {
+  var today = todayStr();
+  for (var i = 0; i < shared.FUELS.length; i++) {
+    var fuel = shared.FUELS[i];
+    var price = parsed.prices[fuel.id];
+    if (price === undefined) continue;
+    var exist = await db.collection(C.prices).where({ regionCode: region.code, fuelId: fuel.id }).get();
+    var old = exist.data && exist.data[0];
+    var oldReal = old && old.source === source.id ? old : null;
+    var changed = !oldReal || oldReal.price !== price;
+    var doc = {
+      regionCode: region.code,
+      regionName: region.name + ' · ' + region.city,
+      fuelId: fuel.id,
+      fuelName: fuel.name,
+      price: price,
+      changeAmount: oldReal && changed ? shared.round2(price - oldReal.price) : (oldReal ? oldReal.changeAmount : 0),
+      changeAt: oldReal && changed ? today : (oldReal ? oldReal.changeAt : ''),
+      source: source.id,
+      updatedAt: nowIso()
+    };
+    if (old) {
+      await db.collection(C.prices).doc(old._id).update({ data: doc });
+    } else {
+      await db.collection(C.prices).add({ data: doc });
+    }
+
+    if (changed) {
+      // 历史价按 (地区, 油品, 日期) 去重：同一天重复抓只更新价格
+      var h = await db.collection(C.history).where({ regionCode: region.code, fuelId: fuel.id, date: today }).get();
+      if (h.data && h.data.length) {
+        await db.collection(C.history).doc(h.data[0]._id).update({ data: { price: price, source: source.id } });
+      } else {
+        await db.collection(C.history).add({
+          data: { regionCode: region.code, fuelId: fuel.id, date: today, price: price, source: source.id }
+        });
+      }
+    }
+  }
+}
+
+/**
+ * 把解析出的下次调价预测写成调价窗口。
+ * 预测一律 isOfficial = false；来源只给整体幅度区间（元/升），没有分油品
+ * 幅度，四个油品都用区间中值 —— 这是预测口径，basis 里写明以正式公告为准。
+ * 同一窗口日期预测没变就不重复写。
+ */
+async function saveWindow(source, trend) {
+  var forecast = {};
+  var basis;
+  var dirText = trend.direction === 'up' ? '上调' : trend.direction === 'down' ? '下调' : '搁浅';
+  if (trend.direction === 'flat') {
+    shared.FUELS.forEach(function (f) { forecast[f.id] = 0; });
+    basis = source.name + '预测（非官方）：本轮预计搁浅不作调整，以正式公告为准。';
+  } else if (trend.literMin !== null && trend.literMax !== null) {
+    var sign = trend.direction === 'down' ? -1 : 1;
+    var mid = shared.round2((trend.literMin + trend.literMax) / 2) * sign;
+    shared.FUELS.forEach(function (f) { forecast[f.id] = mid; });
+    basis = source.name + '预测（非官方）：预计' + dirText +
+      (trend.changeTon !== null ? ' ' + Math.abs(trend.changeTon) + ' 元/吨' : '') +
+      '，约 ' + trend.literMin + '–' + trend.literMax + ' 元/升；各油品幅度以正式公告为准。';
+  } else {
+    // 方向已知但幅度没解析出来：不猜幅度，forecast 留空
+    basis = source.name + '预测（非官方）：预计' + dirText + '，幅度待公布，以正式公告为准。';
+  }
+
+  var doc = {
+    date: trend.date,
+    time: trend.time || '24:00',
+    cycleStart: '',
+    forecast: forecast,
+    // 幅度解析不出来时 forecast 是空对象，方向单独存 ——
+    // 前端据此显示「预计上调 · 幅度待公布」，而不是把未知当成持平 0
+    forecastDirection: trend.direction,
+    isOfficial: false,
+    basis: basis,
+    source: source.id,
+    updatedAt: nowIso()
+  };
+  var exist = await db.collection(C.windows).where({ source: source.id, date: trend.date }).get();
+  if (exist.data && exist.data.length) {
+    var old = exist.data[0];
+    if (JSON.stringify(old.forecast) === JSON.stringify(forecast) && old.basis === basis) {
+      return { deduped: true, date: trend.date };
+    }
+    await db.collection(C.windows).doc(old._id).update({ data: doc });
+  } else {
+    await db.collection(C.windows).add({ data: doc });
+  }
+  return { deduped: false, date: trend.date };
 }
 
 /* ---------------- 演示数据写入（打通云端链路用） ---------------- */
@@ -290,13 +501,13 @@ async function seed(event) {
 
 /* ---------------- 主流程 ---------------- */
 
-async function collect() {
+async function collect(options) {
   var startedAt = nowIso();
   var results = [];
   var needsReview = [];
 
   for (var i = 0; i < sources.SOURCES.length; i++) {
-    var result = await collectFromSource(sources.SOURCES[i]);
+    var result = await collectFromSource(sources.SOURCES[i], options);
     results.push(result);
     if (result.status === 'needsReview' || result.status === 'failed') {
       needsReview.push({
@@ -331,7 +542,7 @@ exports.main = async (event) => {
       var seedResult = await seed(event);
       return { ok: true, data: seedResult.data };
     }
-    var result = await collect();
+    var result = await collect(event);
     return { ok: true, data: result.data };
   } catch (err) {
     console.error('[oilCollector] failed', err);

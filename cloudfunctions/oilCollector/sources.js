@@ -1,22 +1,38 @@
 /**
  * 采集源配置
  *
- * ⚠️ 重要：以下真实来源默认全部关闭。
+ * 来源启用状态：
+ *   - qiyoujiage（汽油价格网）：已启用。2026-11-12 完成真实抓取验证 ——
+ *     省级地区页结构一致（北京/陕西/云南抽查），解析出的挂牌价与
+ *     data/reference-prices.js（独立来源）逐值核对一致；页面 utf-8，
+ *     无需 Referer/Cookie。站点声明价格仅供参考，展示侧必须保留来源标注。
+ *   - ndrc-notice / market-quote：仍默认关闭。启用前需单独验证
+ *     可访问性、字段稳定性、更新频率和授权条款。
  *
- * 设计文档明确要求：「正式开发前需要单独验证来源可访问性、字段稳定性、
- * 更新频率和授权条款；无法自动解析时进入人工核对队列，
- * 不能把猜测值发布为正式结果。」
- *
- * 启用某个来源前请完成：
- *   1. 确认该地址可以稳定访问（是否需要 Referer / Cookie / 频率限制）
- *   2. 确认抓取与展示不违反对方的使用条款
- *   3. 写好 parser，并跑一次真实抓取验证解析结果
+ * 硬约束（所有来源一致）：解析不出结构化字段就进人工核对队列，
+ * 绝不把猜测值发布成正式结果；预测类信息必须标注非官方。
  *
  * 关闭状态下采集函数会照常跑通「读取配置 → 抓取 → 解析 → 去重 → 入库」流程，
  * 只是把每个来源标记为 skipped，并把演示数据写进库，
  * 以便完整验证云端链路。
  */
 const SOURCES = [
+  {
+    id: 'qiyoujiage',
+    name: '汽油价格网',
+    kind: 'price',
+    enabled: true,
+    url: 'http://www.qiyoujiage.com/',
+    headers: {
+      // 站点按 UA 做移动版跳转，用桌面浏览器 UA 拿 PC 页（参考 60s / OilPrice 的做法）
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+    },
+    parser: 'qiyoujiageRegion',
+    // 地区页 = url + 地区 slug + '.shtml'，slug 真源在 data/regions.js
+    // 价格只在调价日变化：freshHours 内抓过的地区跳过，不每 30 分钟打一遍全站
+    freshHours: 6,
+    note: '各省挂牌价 + 下次调价预测（非官方）。地区页为 utf-8 HTML'
+  },
   {
     id: 'ndrc-notice',
     name: '国家发展改革委价格监测中心',
@@ -45,6 +61,49 @@ const SOURCES = [
  * 绝不用默认值或猜测值填充正式结果。
  */
 const PARSERS = {
+  /**
+   * 解析汽油价格网地区页（如 /beijing.shtml）。
+   *
+   * 页面结构（2026-11-12 实测，北京/陕西/云南三省一致）：
+   *   <div id="youjia">
+   *     <dl><dt>北京92#汽油</dt><dd>8.89</dd></dl> × 4 个油品
+   *   </div>
+   *   <div style="border:solid 1px #EA5146; ...">下次油价X月X日X时调整 ... 预计...</div>
+   *
+   * 返回 { prices: {92,95,98,0}, trend: {...}|null }。
+   * 四个油品价格缺一不可、数值必须在合理区间，否则整体返回 null 转人工；
+   * 预测区块解析不出时 trend 为 null，不影响价格入库。
+   *
+   * @param {string} raw 页面 HTML
+   * @param {number} [now] 当前时间戳（测试可注入；缺省 Date.now()）
+   */
+  qiyoujiageRegion(raw, now) {
+    // 先去掉 HTML 注释：页尾有一段被注释掉的旧预测 div，也带 #EA5146，
+    // 不剥掉会被当成现行预测解析出 2017 年的日期。
+    var html = String(raw || '').replace(/<!--[\s\S]*?-->/g, '');
+    var block = html.match(/<div id="youjia">([\s\S]*?)<\/div>/);
+    if (!block) return null;
+
+    var prices = {};
+    var dlRe = /<dl>\s*<dt>([\s\S]*?)<\/dt>\s*<dd>([\s\S]*?)<\/dd>\s*<\/dl>/g;
+    var m;
+    while ((m = dlRe.exec(block[1])) !== null) {
+      var name = stripTags(m[1]);
+      var num = name.match(/(\d+)\s*[#号]/);
+      if (!num) continue;
+      var fuelId = { '92': '92', '95': '95', '98': '98', '0': '0' }[num[1]];
+      // 90# 等本项目不展示的油品直接跳过（不能按子串匹配，"90#" 里含 "0#"）
+      if (!fuelId) continue;
+      var price = Number(stripTags(m[2]));
+      // 挂牌价的合理区间：超出说明页面结构变了或解析错位，整体转人工
+      if (!isFinite(price) || price < 3 || price > 20) return null;
+      prices[fuelId] = price;
+    }
+    if (!prices['92'] || !prices['95'] || !prices['98'] || !prices['0']) return null;
+
+    return { prices: prices, trend: qyjTrend(html, now) };
+  },
+
   /**
    * 解析调价公告：从正文里找「每升调整 X 元」这类明确表述。
    * 找不到就返回 null。
@@ -121,6 +180,75 @@ const PARSERS = {
     };
   }
 };
+
+/**
+ * 解析地区页里的下次调价预测（#EA5146 边框的提示 div）。
+ *
+ * 返回 { date, time, direction, changeTon, literMin, literMax, text }：
+ *   direction: 'up' | 'down' | 'flat'
+ *   changeTon: 元/吨，带符号；literMin/literMax: 元/升区间，无符号幅度
+ *   幅度解析不出时为 null —— 方向与日期是页面明说的，幅度不猜。
+ * 整个区块缺失或日期/方向解析不出时返回 null。
+ */
+function qyjTrend(html, now) {
+  var m = html.match(/<div[^>]*style=["'][^"']*#EA5146[^"']*["'][^>]*>([\s\S]*?)<\/div>/i);
+  if (!m) return null;
+  // 区块里有 document.writeln 的 script，先剥掉再去标签
+  var text = stripTags(m[1].replace(/<script[\s\S]*?<\/script>/gi, ''));
+
+  var dateM = text.match(/下次油价(\d{1,2})月(\d{1,2})日(\d{1,2})时调整/);
+  var dirM = text.match(/预计(?:将)?(上调|下调|搁浅|不作调整)/);
+  // 只有日期没有方向（或反过来）都不算可发布的预测，不猜
+  if (!dateM || !dirM) return null;
+
+  var direction = dirM[1] === '上调' ? 'up' : dirM[1] === '下调' ? 'down' : 'flat';
+  var sign = direction === 'down' ? -1 : 1;
+
+  var changeTon = null;
+  // 「上调90元/吨」与「上调油价90元/吨」两种写法都要认
+  var tonM = text.match(/(?:上调|下调)(?:油价)?(\d+(?:\.\d+)?)元\/吨/);
+  if (tonM) changeTon = sign * Number(tonM[1]);
+
+  var literMin = null;
+  var literMax = null;
+  var literM = text.match(/(\d+(?:\.\d+)?)元\/升[-~～—](\d+(?:\.\d+)?)元\/升/);
+  if (literM) {
+    literMin = Number(literM[1]);
+    literMax = Number(literM[2]);
+  }
+  if (direction === 'flat') {
+    changeTon = 0;
+    literMin = 0;
+    literMax = 0;
+  }
+
+  // 页面只写「X月X日」不写年份。调价周期为 10 个工作日，下一轮窗口
+  // 必在两周左右内：解析出的日期比今天早 20 天以上，说明跨年了。
+  // 统一按 UTC+8 日历日算（云函数跑在 UTC，不能直接用本地时区）。
+  var cn = new Date((typeof now === 'number' ? now : Date.now()) + 8 * 3600000);
+  var todayTs = Date.UTC(cn.getUTCFullYear(), cn.getUTCMonth(), cn.getUTCDate());
+  var month = Number(dateM[1]);
+  var day = Number(dateM[2]);
+  var dateTs = Date.UTC(cn.getUTCFullYear(), month - 1, day);
+  if (dateTs < todayTs - 20 * 86400000) {
+    dateTs = Date.UTC(cn.getUTCFullYear() + 1, month - 1, day);
+  }
+
+  return {
+    date: new Date(dateTs).toISOString().slice(0, 10),
+    time: pad(dateM[3]) + ':00',
+    direction: direction,
+    changeTon: changeTon,
+    literMin: literMin,
+    literMax: literMax,
+    text: text.slice(0, 200)
+  };
+}
+
+/** 去标签、去空白（含全角空格） */
+function stripTags(s) {
+  return String(s || '').replace(/<[^>]+>/g, '').replace(/[\s　]+/g, '');
+}
 
 function pad(n) {
   n = String(n);
