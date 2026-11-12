@@ -1219,6 +1219,15 @@
                 "type": "number",
                 "example": 0.82
               },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "description": "涨跌方向，前端 trend-chart 组件的配色依据",
+                "example": "up"
+              },
               "open": {
                 "type": "number",
                 "example": 77.81

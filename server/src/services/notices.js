@@ -108,6 +108,7 @@ function actionMarket(payload) {
         price: fallback.price,
         changeAmount: fallback.changeAmount,
         changePercent: fallback.changePercent,
+        direction: fallback.direction,
         open: fallback.open,
         prevClose: fallback.prevClose,
         high: fallback.high,
@@ -135,6 +136,9 @@ function actionMarket(payload) {
       price: doc.price,
       changeAmount: doc.changeAmount || 0,
       changePercent: doc.changePercent || 0,
+      // direction 是前端 trend-chart 的必传属性（String），
+      // 演示源 data/markets.js 也有，这里必须补上，否则前端拿到 null。
+      direction: (doc.changeAmount || 0) < 0 ? 'down' : 'up',
       open: doc.open,
       prevClose: doc.prevClose,
       high: doc.high,

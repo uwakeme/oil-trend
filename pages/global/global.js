@@ -76,12 +76,15 @@ Page({
         label: item.symbol === 'brent' ? '布伦特' : '纽约',
         priceText: fmt.price(item.price),
         changeText: fmt.percent(item.changePercent),
-        direction: item.direction
+        // 同上：direction 不能是 null
+        direction: item.direction || (Number(item.changeAmount) < 0 ? 'down' : 'up')
       };
     }
     // 演示数据（服务端还没采集到真实行情）不能标「实时」——
     // 那会把演示曲线说成真实行情，与「如实展示来源」冲突。
     var isDemo = !!(main.source && main.source.mode === 'demo');
+    // direction 必须有值：trend-chart 声明它是 String 属性，传 null 会报类型警告
+    var marketDirection = main.direction || (Number(main.changeAmount) < 0 ? 'down' : 'up');
     var delayText = isDemo
       ? '演示数据'
       : (main.delayed ? ('延时 ' + main.delayMinutes + ' 分钟') : '实时');
@@ -95,7 +98,9 @@ Page({
         code: main.code,
         priceText: fmt.price(main.price),
         changeText: fmt.signed(main.changeAmount) + '  ' + fmt.percent(main.changePercent),
-        direction: main.direction,
+        // trend-chart 的 direction 是 String 属性，传 null 会报类型不兼容警告。
+        // 国际行情的涨跌方向要从涨跌幅算，不能直接用 main.direction（那里没有这个字段）。
+        direction: marketDirection,
         openText: fmt.price(main.open),
         prevText: fmt.price(main.prevClose),
         highText: fmt.price(main.high),

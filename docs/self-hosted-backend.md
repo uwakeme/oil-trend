@@ -31,7 +31,7 @@
 | `GET /api/home` | `regionCode` | `{ prices[], window, trend30, changes, notice, publishedAt, source }` | 首页 |
 | `GET /api/trend` | `regionCode, fuelId, period` | `{ points[], labels[], events[], period }` | 走势页 |
 | `GET /api/notices` | `regionCode, filter, fuelId, skip` | `{ notices[], total }` | 调价页 |
-| `GET /api/market` | `symbol, period` | `{ price, changeAmount, changePercent, open, prevClose, high, low, points[], labels[], delayed, quoteTime }` | 国际页 |
+| `GET /api/market` | `symbol, period` | `{ price, changeAmount, changePercent, direction, open, prevClose, high, low, points[], labels[], delayed, quoteTime }` | 国际页 |
 | `GET /api/sync-status` | — | `{ status, sourceName, startedAt, finishedAt, needsReview[] }` | 调价页顶部状态行 |
 
 ### 用户类（需要登录态）
