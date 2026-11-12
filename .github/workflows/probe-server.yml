@@ -1,0 +1,27 @@
+name: probe-server
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            echo '=== 监听端口 ==='
+            ss -tlnp 2>/dev/null | grep -E '3002|443|80' || netstat -tlnp 2>/dev/null | grep -E '3002|443|80' || true
+            echo '=== nginx 站点 server_name ==='
+            sudo grep -rhE 'server_name|proxy_pass' /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | sort -u || echo '读不到'
+            echo '=== 证书 ==='
+            sudo ls /etc/letsencrypt/live/ 2>/dev/null || echo '没有 letsencrypt 证书'
+            echo '=== 部署目录 ==='
+            ls -la /var/www/ 2>/dev/null || true
+            echo '=== pm2 ==='
+            pm2 list 2>/dev/null || true
