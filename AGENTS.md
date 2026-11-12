@@ -16,6 +16,7 @@ node scripts/lint-wxml.js          # 静态检查（有错误时 exit 1），改
 node scripts/check-modules.js      # 运行时模块 + 服务端模块加载冒烟测试，挡住「删了函数体留着引用」这类 ReferenceError
 node scripts/verify-data.js        # 数据层自检，打印算出的价格/走势/通知/行情
 node scripts/verify-collector.js   # 采集器解析回归（--live 追加真实抓取 + pg-mem 入库链路）
+node scripts/gen-province-geo.js  # 重新生成服务端省界数据（server/src/data/provinces.json）
 node scripts/sync-shared.js        # 由 data/ 生成服务端共享模块并做一致性断言，部署前必跑
 node scripts/build-icons.js        # 重生成 assets/icons/*.png（SVG 精灵内联在脚本里，需本机 Chrome）
 node scripts/preview-qr.js <appid> # 上传预览包并出扫码图（必须正式 AppID）
@@ -37,6 +38,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - `data/` — 演示数据集、调价时间线、地区价差
 - `styles/` — `tokens.wxss`（设计令牌）+ `components.wxss`（通用类）
 - `server/` — **后端**（Node + Express + PostgreSQL），填 `config.apiBaseUrl` 才启用；留空则只用演示数据
+  - `server/src/data/provinces.json` 是**生成产物**（省界数据，脚本产出），手改会被覆盖
 - `scripts/` — 检查与构建脚本
 - `design/` — 产品设计稿与高保真原型
 - `docs/` — 部署指南、数据源说明、验证记录、截图
@@ -63,6 +65,9 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - **走势图画阶梯线**，不画折线 —— 国内油价只在调价日变化，横段按真实日期比例分配，不伪造连续成交价
 - **调价预测与正式结果分开呈现**，预测必须标注「非官方」
 - **采集侧解析不出结构化字段时进人工核对队列**，绝不把猜测值发布成正式结果
+- **地区定位在服务端做**：经纬度 → 省份靠 `server/src/data/provinces.json` 的省界多边形判断
+  （由 `scripts/gen-province-geo.js` 从 DataV 生成），前端只负责拿经纬度，不往小程序包里塞地理数据
+  —— 坐标系全程 **GCJ-02**，与 `wx.getLocation` 的 `type:'gcj02'` 对齐
 - **演示数据日期整体平移**（`utils/demo-clock.js`，锚点 `config.demoAnchorDate`），保证长期打开数据仍然新鲜
 - **真源在 `data/`，`server/src/shared/shared.js` 是生成产物**（`scripts/sync-shared.js` 生成 + 一致性断言）。改完 `data/` 必须重跑同步脚本；**手改生成文件会被下次覆盖**
 
@@ -91,6 +96,11 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 预测幅度解析不出来被当成 0 | `forecast` 是空对象时前端 `changeMeta(undefined)` → `Number(undefined) \|\| 0` → 显示「与上次持平」，来源明说上调却显示持平，等于替来源猜了幅度 | 方向单独存 `oil_windows.forecast_direction`；前端幅度缺失时显示「预计上调 / 幅度待公布 · 非官方」，不写「元/升」 |
 | 汽油价格网对密集请求回 HTTP 567 | 连发 28 个地区页后开始限流（不是 404，slug 没错） | 采集走 3 并发 + 6 小时新鲜期；`verify-collector.js --live` 加 1.5s 间隔，CI 只跑 fixture 模式 |
 | certbot `--standalone` 在这台机器上校验失败 | 报 `404` + `Invalid response`；日志里是 `Certbot wasn't able to bind to :80 using IPv4` —— certbot 的临时服务器只绑了 IPv6 的 80，Let's Encrypt 走 IPv4 就打不到 | 用 `certbot --nginx`（走 nginx 自己的 80，IPv4/IPv6 都监听）；这台机器是双栈，别用 standalone |
+| `wx.getLocation` 没开通接口权限 | 微信后台「开发管理 → 接口设置」里没申请就直接 fail，参数传得再对也没用 | 静默降级到默认地区，不弹错误提示；权限批下来后自动生效，不用改代码 |
+| `app.json` 少写 `requiredPrivateInfos` | 位置类接口被平台直接拦掉，报错跟权限没关系 | 必须声明 `["getLocation"]`，同时在 `permission` 里写清用途文案 |
+| 位置隐私协议没弹 | `wx.getLocation` 报隐私未授权 | 先调 `wx.requirePrivacyAuthorize()`，用户同意后再取位置 |
+| `wx.getLocation` 拿 wgs84 坐标 | 与省界数据差 300~600 米，江苏/河北这种贴着的省会判错 | 固定传 `type: 'gcj02'`，服务端省界数据也是 GCJ-02，两边不换算 |
+| 定位失败弹错误提示 | 用户被反复打扰，而且定位本来就是可选增强 | 失败一律静默返回 null，只在用户明确拒绝过权限时给一个「开启定位」入口 |
 
 ## 验证要求
 
@@ -126,6 +136,10 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 ndrc 公告与国际行情两个来源仍未启用。
 
 订阅消息链路还没走通到底（需正式 AppID + 模板 ID），未配置时「提醒」页要明说未配置，不假装授权成功。
+
+小程序端已接 `wx.getLocation`：首页启动时读一次位置，反查省份后自动切到当地油价；
+用户手动选过地区就不再自动覆盖，只提示「检测到你在 XX，点此切换」。
+接口权限需在公众平台「开发管理 → 接口设置」申请 `wx.getLocation`，未开通时静默降级到默认地区。
 
 微信云开发那套已下线（云函数目录已删，见 git 历史）；`config/index.js` 的
 `apiBaseUrl` 留空则一律使用演示数据。

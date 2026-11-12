@@ -32,6 +32,7 @@
 | 路径 | 入参 | 返回 | 页面用在 |
 | --- | --- | --- | --- |
 | `GET /api/regions` | — | `{ regions: [{ code, name, city, fullName, price92 }] }` | 地区选择弹层 |
+| `GET /api/locate` | `lat, lng` | `{ regionCode, regionName, city, match, distanceKm }` | 首页自动定位所在省 |
 | `GET /api/home` | `regionCode` | `{ prices[], window, trend30, changes, notice, publishedAt, source }` | 首页 |
 | `GET /api/trend` | `regionCode, fuelId, period` | `{ points[], labels[], events[], period }` | 走势页 |
 | `GET /api/notices` | `regionCode, filter, fuelId, skip` | `{ notices[], total }` | 调价页 |
@@ -65,6 +66,7 @@
 | 早期云函数 action | 新路径 |
 | --- | --- |
 | `regions` | `GET /api/regions` |
+| `locate` | `GET /api/locate` |
 | `home` | `GET /api/home` |
 | `trend` | `GET /api/trend` |
 | `notices` | `GET /api/notices` |

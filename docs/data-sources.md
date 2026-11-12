@@ -72,6 +72,32 @@
 **注意 offset 只影响演示数据**：真实采集写的是各地挂牌价的绝对值，
 不经过 offset 计算。
 
+## 地区定位用的省界数据
+
+小程序启动时会读一次用户位置，判断在哪个省，好自动切到当地油价。
+「经纬度 → 省份」这一步放在服务端做，用的是内置的省界多边形：
+
+| 项 | 值 |
+| --- | --- |
+| 数据来源 | 阿里云 DataV.GeoAtlas 省级行政区边界 `https://geo.datav.aliyun.com/areas_v3/bound/100000_full.json` |
+| 坐标系 | GCJ-02（火星坐标），与 `wx.getLocation` 的 `type: 'gcj02'` 一致 |
+| 生成脚本 | `scripts/gen-province-geo.js` → `server/src/data/provinces.json`（生成产物） |
+| 覆盖范围 | 31 个省级行政区，不含港澳台 |
+| 判定方式 | 射线法判断点落在哪个省的多边形里；界外 25 公里内按就近归属（`match: 'nearest'`） |
+
+没有接现成的逆地理编码 API：多一个 key 就多一份密钥管理和配额风险，
+而省界是静态数据，随服务一起部署也就 380KB。
+
+抽稀用 Douglas-Peucker（容差 0.01° ≈ 1.1km），抽稀后逐省校验面积误差，
+超 0.5% 就自动放宽容差重试。31 个省会坐标逐个比对，零误判，
+回归写在 `server/scripts/selftest.js` 的「省界反查」一节。
+
+⚠️ 两边坐标系必须一致：用 `wgs84` 会有 300~600 米偏移，
+江苏、河北这种贴着的省会就会判错。
+
+⚠️ 省界是行政区划，不等于油价表：香港、澳门不在支持列表里，
+坐标落在那儿会就近归到广东。
+
 ## 已接入的真实来源：汽油价格网（qiyoujiage）
 
 2026-11-12 接入并验证，参考 [aalavender/OilPrice](https://github.com/aalavender/OilPrice)

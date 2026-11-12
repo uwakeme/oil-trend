@@ -81,6 +81,7 @@
 - 调价页把正式公告和市场预测分成两栏，不只靠颜色区分，预测一律标「非官方」
 - 国际页固定写明单位是美元/桶，行情延时多少分钟也照实标出来
 - 提醒页可以写「官方降价就提醒我」，也能设目标价和单次降幅门槛，预测提醒默认关掉
+- 首次打开会请求一次位置权限，识别到所在省份就自动切到当地油价；手动选过地区的用户不会被自动覆盖
 - 采集解析不出结构化字段时进人工核对队列，不会把猜测值发布成正式结果
 
 ## 快速开始
@@ -176,6 +177,7 @@ module.exports = {
 | 方法 | 路径 | 入参 | 返回 |
 | --- | --- | --- | --- |
 | GET | `/api/regions` | 无 | `{ regions }` |
+| GET | `/api/locate` | `lat, lng` | `{ regionCode, regionName, city, match, distanceKm }` |
 | GET | `/api/home` | `regionCode` | `{ region, prices, window, trend30, changes, notice, publishedAt, source }` |
 | GET | `/api/trend` | `regionCode, fuelId, period` | `{ region, fuel, price, deltaPercent, direction, axis, points, events, source }` |
 | GET | `/api/notices` | `regionCode, filter, fuelId, skip` | `{ region, window, sync, notices, source }` |
@@ -189,6 +191,8 @@ module.exports = {
 | POST | `/api/login` | `wx.login()` 的 code 换 token |
 | GET / POST | `/api/rules` | 读取与保存提醒规则 |
 | GET / POST | `/api/history` | 读取与保存提醒历史 |
+
+经纬度换省份走 `/api/locate`。省界数据内置在服务端（`server/src/data/provinces.json`），不依赖第三方逆地理编码服务，也没有配额限制。坐标系统一 GCJ-02，与 `wx.getLocation` 的 `type: 'gcj02'` 对齐。
 
 响应外壳统一：成功是 `{ ok: true, data }`，失败是 `{ ok: false, message, code }`。完整契约见 [自建后端方案](./docs/self-hosted-backend.md)。
 
