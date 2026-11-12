@@ -7,28 +7,48 @@
 
 ## 一、需要配置的 Secrets
 
-Secrets 按仓库存，`lyric_lab` 那套**不会自动出现在本仓库**，要在
-`oil_trend` 仓库里重新配一遍（GitHub 不允许读取已有 secret 的明文，只能手动复制）。
+### ⚠️ Environment secrets 必须配在 workflow 声明过的 environment 里
 
-```bash
-gh secret set SERVER_HOST   --repo uwakeme/oil-trend
-gh secret set SERVER_USER   --repo uwakeme/oil-trend
-gh secret set SERVER_PORT   --repo uwakeme/oil-trend
-gh secret set SERVER_SSH_KEY --repo uwakeme/oil-trend
-gh secret set DATABASE_URL  --repo uwakeme/oil-trend
-gh secret set DEPLOY_DIR    --repo uwakeme/oil-trend
-gh secret set OIL_API_BASE_URL --repo uwakeme/oil-trend
+工作流里有一行：
+
+```yaml
+jobs:
+  deploy:
+    environment: 腾讯云
 ```
 
-| Secret | 说明 |
-| --- | --- |
-| `SERVER_HOST` | 服务器 IP 或域名 |
-| `SERVER_USER` | SSH 用户（参考项目用 `ubuntu`） |
-| `SERVER_PORT` | SSH 端口，默认 22 |
-| `SERVER_SSH_KEY` | **服务器私钥全文**，含 `-----BEGIN OPENSSH PRIVATE KEY-----` 头尾 |
-| `DATABASE_URL` | PostgreSQL 连接串。**注意库名要换**：参考项目是 `lyric_lab`，油势要用独立的库（如 `oil_trend`） |
-| `DEPLOY_DIR` | 部署目录，默认 `/var/www/oil-trend` |
-| `OIL_API_BASE_URL` | 后端对外地址，健康检查用，如 `https://api.example.com` |
+**没有这一行，Environment secrets 不会被注入 job** —— `${{ secrets.SERVER_HOST }}`
+会展开成空字符串，报出来的错长这样：
+
+```
+ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key -p 22 @ "mkdir -p ..."
+usage: ssh [-46AaCfGgKkMNnqsTtVvXxYy] ...
+```
+
+看着像 ssh 用法写错了，其实是 host 和 user 都是空的。
+
+### Secret 清单
+
+本项目把这些配在 **Environment secrets**（environment 名：`腾讯云`），
+`DATABASE_URL` 配在 Repository secrets —— 两种都能用，声明了 environment 后
+Repository secrets 依然可见。
+
+| Secret | 放哪 | 说明 |
+| --- | --- | --- |
+| `SERVER_HOST` | Environment | 服务器 IP 或域名 |
+| `SERVER_USER` | Environment | SSH 用户（参考项目用 `ubuntu`） |
+| `SERVER_PORT` | Environment | SSH 端口，默认 22 |
+| `SERVER_SSH_KEY` | Environment | **服务器私钥全文**，含 `-----BEGIN OPENSSH PRIVATE KEY-----` 头尾 |
+| `DEPLOY_DIR` | Environment | 部署目录，默认 `/var/www/oil-trend` |
+| `DATABASE_URL` | Repository | PostgreSQL 连接串。**注意库名要换**：参考项目是 `lyric_lab`，油势要用独立的库（如 `oil_trend`） |
+| `OIL_API_BASE_URL` | Environment（可选） | 后端对外地址，健康检查用。没配就退回查服务器本地端口 `127.0.0.1:3002` |
+
+命令行配 Environment secret：
+
+```bash
+gh secret set SERVER_HOST --repo uwakeme/oil-trend --env 腾讯云
+gh secret set SERVER_SSH_KEY --repo uwakeme/oil-trend --env 腾讯云
+```
 
 `SERVER_SSH_KEY` 的内容是服务器上那把私钥（如 `~/.ssh/id_ed25519`）的全文。
 拿法：`cat ~/.ssh/id_ed25519`（在服务器上执行，**注意这等于把私钥交出去**）。
@@ -115,6 +135,9 @@ module.exports = {
 gh workflow run deploy-backend.yml --repo uwakeme/oil-trend
 ```
 
+**注意：改 secret 不会触发流水线**（触发条件只看代码路径），
+所以配完 secret 后一定要手动触发一次。
+
 看日志：
 
 ```bash
@@ -139,6 +162,7 @@ PM2 配置在 `server/oil-trend-pm2.json`，改端口改这个文件。
 
 | 现象 | 多半是 |
 | --- | --- |
+| `ssh ... @ "mkdir -p ..."` + usage 报错 | **Environment secrets 没被注入** —— workflow 里少了 `environment: 腾讯云` 这行 |
 | 流水线卡在自检 | 代码改坏了，先本地 `cd server && npm test` |
 | 健康检查 404 | Nginx 没配好，或 `OIL_API_BASE_URL` 写错 |
 | 小程序一直显示演示数据 | request 合法域名没配，或 `apiBaseUrl` 没填 |

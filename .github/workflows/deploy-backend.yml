@@ -12,6 +12,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
 
+    # ⚠️ 必须声明 environment，Environment secrets 才会注入到 job 里。
+    # 不写这一行的话，${{ secrets.SERVER_HOST }} 之类会展开成空字符串，
+    # 表现为「ssh ... @ host」这种看着莫名其妙的用法错误。
+    environment: 腾讯云
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -96,13 +101,21 @@ jobs:
         run: |
           echo "等待服务启动..."
           sleep 8
+          # 优先打对外域名；没配 OIL_API_BASE_URL 就退回服务器本地端口，
+          # 至少能确认进程起来了、路由通了。
+          BASE="${{ secrets.OIL_API_BASE_URL }}"
+          if [ -z "$BASE" ]; then
+            BASE="http://127.0.0.1:3002"
+            echo ">> 未配置 OIL_API_BASE_URL，改查本地端口"
+          fi
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             --connect-timeout 5 --max-time 15 \
-            "${{ secrets.OIL_API_BASE_URL }}/health" || echo "000")
+            "$BASE/health" || echo "000")
           if [ "$HTTP_CODE" = "200" ]; then
-            echo "✓ 健康检查通过"
+            echo "✓ 健康检查通过 ($BASE)"
           else
-            echo "✗ 健康检查失败 (HTTP $HTTP_CODE)"
+            echo "✗ 健康检查失败 (HTTP $HTTP_CODE) —— $BASE"
+            echo "排查：pm2 logs oil-trend-server；.env 里的 DATABASE_URL 是否正确"
             exit 1
           fi
 
