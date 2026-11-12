@@ -5,6 +5,10 @@
  * 默认配置的「每 30 分钟」那种带步长的表达式返回 null，
  * 采集器和提醒器在线上一次都没跑过，而没有任何测试覆盖到。
  *
+ * ⚠️ 断言必须与运行时区无关：cron 按服务器本地时区解释，
+ * 开发机是 UTC+8、CI 是 UTC —— 直接断言 getHours() === 10 会在 CI 挂。
+ * 所以这里只断言「语义」：落点满足 cron 约束、间隔不超过周期、严格在 from 之后。
+ *
  * 用法：node scripts/scheduler-test.js
  */
 const path = require('path');
@@ -26,83 +30,120 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg || '断言失败');
 }
 
-/** 从某个时刻算出下次触发，返回 Date */
-function next(cron, fromIso) {
-  const ts = scheduler.nextRun(cron, new Date(fromIso));
+const MIN = 60 * 1000;
+
+/** 从某个时刻算下次触发，返回 Date（null 表示解析不出） */
+function next(cron, from) {
+  const ts = scheduler.nextRun(cron, new Date(from.getTime()));
   return ts === null ? null : new Date(ts);
+}
+
+/** 断言下次触发在 from 之后、且不超过 maxGapMs */
+function assertGap(t, from, maxGapMs, label) {
+  const gap = t.getTime() - from.getTime();
+  assert(gap > 0, label + ' 应严格晚于 from，实际间隔 ' + gap + 'ms');
+  assert(gap <= maxGapMs, label + ' 间隔超期：' + Math.round(gap / MIN) + ' 分钟');
 }
 
 /* ---------- 默认配置必须能跑 ---------- */
 
 check('采集 cron 能解析出下次时间', () => {
-  const t = next(config.collectCron, '2026-11-12T10:05:00+08:00');
+  const from = new Date();
+  const t = next(config.collectCron, from);
   assert(t, '返回 null（采集器会停摆）：' + config.collectCron);
-  assert(t > new Date('2026-11-12T10:05:00+08:00'), '下次时间必须在未来');
+  assertGap(t, from, 31 * MIN, '采集');
 });
 
 check('提醒 cron 能解析出下次时间', () => {
-  const t = next(config.alertCron, '2026-11-12T10:05:00+08:00');
+  const from = new Date();
+  const t = next(config.alertCron, from);
   assert(t, '返回 null（提醒器会停摆）：' + config.alertCron);
+  assertGap(t, from, 11 * MIN, '提醒');
 });
 
 /* ---------- 步长语义 ---------- */
 
-check('每 30 分钟：10:05 → 10:30', () => {
-  const t = next('0 */30 * * * *', '2026-11-12T10:05:00+08:00');
-  assert(t && t.getMinutes() === 30 && t.getHours() === 10, '实际 ' + (t && t.toISOString()));
+check('每 30 分钟：落在 :00/:30，间隔不超过 30 分', () => {
+  const from = new Date(Date.UTC(2026, 10, 12, 2, 5));
+  const t = next('0 */30 * * * *', from);
+  assert(t, '返回 null');
+  assert(t.getMinutes() % 30 === 0 && t.getSeconds() === 0, '不在整/半点：' + t.toString());
+  assertGap(t, from, 30 * MIN, '每30分');
 });
 
-check('每 30 分钟：10:30 → 11:00（跨小时）', () => {
-  const t = next('0 */30 * * * *', '2026-11-12T10:30:00+08:00');
-  assert(t && t.getMinutes() === 0 && t.getHours() === 11, '实际 ' + (t && t.toISOString()));
+check('每 30 分钟：刚好在边界上时顺延到下一个', () => {
+  // 取一个 :00 整点作为 from，结果必须严格晚于它、且仍落在整半点
+  const from = new Date(Date.UTC(2026, 10, 12, 3, 0, 0));
+  const t = next('0 */30 * * * *', from);
+  assert(t, '返回 null');
+  assert(t.getMinutes() % 30 === 0, '不在整/半点');
+  assertGap(t, from, 30 * MIN, '边界');
 });
 
-check('每 30 分钟：10:31 → 11:00（当前分钟已过秒数也算下一次）', () => {
-  const t = next('0 */30 * * * *', '2026-11-12T10:31:00+08:00');
-  assert(t && t.getMinutes() === 0 && t.getHours() === 11, '实际 ' + (t && t.toISOString()));
+check('每 10 分钟：落在 10 的倍数，间隔不超过 10 分', () => {
+  const from = new Date(Date.UTC(2026, 10, 12, 2, 31));
+  const t = next('0 */10 * * * *', from);
+  assert(t, '返回 null');
+  assert(t.getMinutes() % 10 === 0, '不是 10 的倍数：' + t.toString());
+  assertGap(t, from, 10 * MIN, '每10分');
 });
 
-check('每 10 分钟：10:31 → 10:40', () => {
-  const t = next('0 */10 * * * *', '2026-11-12T10:31:00+08:00');
-  assert(t && t.getMinutes() === 40, '实际 ' + (t && t.toISOString()));
+check('每小时整点：分钟为 0，间隔不超过 60 分', () => {
+  const from = new Date(Date.UTC(2026, 10, 12, 2, 31));
+  const t = next('0 0 * * * *', from);
+  assert(t, '返回 null');
+  assert(t.getMinutes() === 0 && t.getSeconds() === 0, '不是整点：' + t.toString());
+  assertGap(t, from, 60 * MIN, '每小时');
 });
 
-check('每小时整点：10:31 → 11:00', () => {
-  const t = next('0 0 * * * *', '2026-11-12T10:31:00+08:00');
-  assert(t && t.getMinutes() === 0 && t.getHours() === 11, '实际 ' + (t && t.toISOString()));
+check('每天 3:00：本地 3 点，间隔不超过 24 小时', () => {
+  const from = new Date(Date.UTC(2026, 10, 12, 2, 31));
+  const t = next('0 0 3 * * *', from);
+  assert(t, '返回 null');
+  assert(t.getHours() === 3 && t.getMinutes() === 0, '不在本地 3:00：' + t.toString());
+  assertGap(t, from, 24 * 60 * MIN, '每天3点');
 });
 
-check('每天 3:00：当天已过则顺延到明天', () => {
-  const t = next('0 0 3 * * *', '2026-11-12T10:31:00+08:00');
-  assert(t && t.getHours() === 3 && t.getDate() === 13, '实际 ' + (t && t.toISOString()));
+check('逗号列表：分钟只能是 5 或 35', () => {
+  const from = new Date(Date.UTC(2026, 10, 12, 2, 10));
+  const t = next('0 5,35 * * * *', from);
+  assert(t, '返回 null');
+  assert([5, 35].indexOf(t.getMinutes()) >= 0, '分钟不在列表里：' + t.toString());
+  assertGap(t, from, 25 * MIN, '列表');
 });
 
-check('逗号列表 5,35 分', () => {
-  const t = next('0 5,35 * * * *', '2026-11-12T10:10:00+08:00');
-  assert(t && t.getMinutes() === 35, '实际 ' + (t && t.toISOString()));
+check('区间 9-18 点：落点小时在 9..18', () => {
+  const from = new Date(Date.UTC(2026, 10, 12, 2, 0));
+  const t = next('0 * 9-18 * * *', from);
+  assert(t, '返回 null');
+  assert(t.getHours() >= 9 && t.getHours() <= 18, '小时越界：' + t.toString());
+  assertGap(t, from, 24 * 60 * MIN, '区间');
 });
 
-check('区间 办公时段 9-18 点每分钟', () => {
-  const t = next('0 * 9-18 * * *', '2026-11-12T20:00:00+08:00');
-  assert(t && t.getHours() === 9 && t.getDate() === 13, '实际 ' + (t && t.toISOString()));
-});
-
-check('区间步长 8-18/5 点', () => {
-  const t = next('0 0 8-18/5 * * *', '2026-11-12T09:00:00+08:00');
-  assert(t && t.getHours() === 13, '实际 ' + (t && t.toISOString()));
+check('区间步长 8-18/5：小时只能是 8 / 13 / 18', () => {
+  const from = new Date(Date.UTC(2026, 10, 12, 0, 0));
+  const t = next('0 0 8-18/5 * * *', from);
+  assert(t, '返回 null');
+  assert([8, 13, 18].indexOf(t.getHours()) >= 0, '小时不在步长集合：' + t.toString());
+  assertGap(t, from, 24 * 60 * MIN, '区间步长');
 });
 
 check('周字段：7 与 0 都表示周日', () => {
-  // 2026-11-12 是周四，下一个周日是 11-15
-  const a = next('0 0 3 * * 0', '2026-11-12T10:00:00+08:00');
-  const b = next('0 0 3 * * 7', '2026-11-12T10:00:00+08:00');
-  assert(a && a.getDay() === 0, 'cron 0 没落到周日：' + (a && a.toISOString()));
-  assert(b && b.getTime() === a.getTime(), '0 与 7 应等价');
+  const from = new Date(Date.UTC(2026, 10, 12, 10, 0));
+  const a = next('0 0 3 * * 0', from);
+  const b = next('0 0 3 * * 7', from);
+  assert(a && b, '返回 null');
+  assert(a.getDay() === 0, 'cron 0 没落到周日：' + a.toString());
+  assert(a.getTime() === b.getTime(), '0 与 7 应等价');
+  assertGap(a, from, 7 * 24 * 60 * MIN, '周日');
 });
 
-check('秒字段：指定 30 秒', () => {
-  const t = next('30 * * * * *', '2026-11-12T10:00:10+08:00');
-  assert(t && t.getSeconds() === 30, '实际 ' + (t && t.toISOString()));
+check('秒字段：指定 30 秒时落点秒数为 30', () => {
+  const from = new Date(Date.UTC(2026, 10, 12, 2, 0, 10));
+  const t = next('30 * * * * *', from);
+  assert(t, '返回 null');
+  assert(t.getSeconds() === 30, '秒数不是 30：' + t.toString());
+  assertGap(t, from, 60 * 1000, '秒字段');
 });
 
 /* ---------- 非法表达式必须返回 null（不能静默跑错） ---------- */
