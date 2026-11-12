@@ -1,0 +1,52 @@
+name: verify-nginx-conf
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    environment: 腾讯云
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Test nginx config on server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            # 把仓库里的 nginx 配置传到服务器，用 nginx -t 验证语法
+            # （只是验证，不启用，验证完删掉）
+            cat > /tmp/oil-trend-test.conf <<'CONF'
+            server {
+                listen 80;
+                listen [::]:80;
+                server_name oil-trend.uwakeme.top;
+                location /.well-known/acme-challenge/ {
+                    root /var/www/html;
+                }
+                location / {
+                    proxy_pass http://127.0.0.1:3002;
+                    proxy_http_version 1.1;
+                    proxy_set_header Host $host;
+                    proxy_set_header X-Real-IP $remote_addr;
+                    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                    proxy_set_header X-Forwarded-Proto $scheme;
+                }
+            }
+            CONF
+            echo '=== 临时配置语法检查 ==='
+            sudo cp /tmp/oil-trend-test.conf /etc/nginx/sites-available/oil-trend-test
+            sudo ln -sf /etc/nginx/sites-available/oil-trend-test /etc/nginx/sites-enabled/oil-trend-test
+            if sudo nginx -t 2>&1; then
+              echo '✓ nginx 配置语法正确'
+            else
+              echo '✗ nginx 配置有语法错误'
+            fi
+            sudo rm -f /etc/nginx/sites-enabled/oil-trend-test /etc/nginx/sites-available/oil-trend-test
+            sudo nginx -t 2>&1 | tail -2
+            rm -f /tmp/oil-trend-test.conf
