@@ -126,12 +126,24 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 涨跌额 0 分不清「持平」和「不知道」 | 首次真实采集没有基线，后端把 `changeAmount` 记 0、`changeAt` 留空 —— 这时 0 是「还不知道」不是「持平」，写成「与上次持平」等于替来源猜了结论 | 前端按 `changeAt` 判断有没有基线：没有就显示「暂无调价对比」；有基线且幅度为 0 才是真的持平 |
 | 历史价只在价格变化时写，走势图只剩一个点 | 国内油价 30 天不调价，`oil_price_history` 就只剩起点的 1 行，canvas 单点只画出一个圆点，没有横线 | 每轮采集都写当天生效的挂牌价，按 `(地区, 油品, 日期)` 唯一索引幂等覆盖 —— 阶梯线的横段本来就该是平的 |
 | 调价窗口过期还写「下一次…距窗口 -1 天」 | 来源还没公布下一轮时，库里留的是上一轮的窗口，`daysLeft` 是负数，挂在下面的预测早就失效了 | 首页按 `daysLeft < 0` 判过期：标题改「上一轮调价窗口」、倒计时写「已过 N 天 · 等待下一轮公布」，并且不展示失效的预测 |
+| 微信订阅消息的 `data` 每字段必须是 `{"value":"…"}` 对象 | 扁平字符串被平台以 47003 拒收，日志只写「参数无效」，看不出是哪一项 | 传输层统一包装（`subscribe-templates.js` 的 `toWeChatData`），校验时解包；**格式与校验必须一起改** —— 只改一边会立刻报 `TOO_LONG/[object Object]` |
+| 后端在 nginx 后面不开 `trust proxy` | `req.ip` 恒为 127.0.0.1，限流退化成**全站共用一个桶**：一个人打满全站 429 | `app.set('trust proxy', 1)`（nginx → node 正好一跳，XFF 最右一项才是真实客户端 IP） |
+| `/api/*` 的错误一律 200 返回 | 监控与 CI 按状态码看不出服务端挂了，报警与重试策略失效 | 业务错误 4xx、内部错误 5xx（`errors.statusOf(err)`）；**外壳 `{ok,message,code}` 不变**，前端行为不受影响 |
+| 公告正文「92号汽油、95号汽油每升下调0.10元」是几个油品**共用**一个幅度 | 按「标号 + 每升X元」配对，正则一匹配就吃掉整段，只认得下最后一个油品，却仍判「逐项解析成功」 | 按位置抓标号，再看每个金额短语**前面那一串**标号（中间只隔着分隔符才算一组） |
+| 方向词「调整」看不出上调还是下调 | 旧解析非「下调」一律取正 —— 「调整0.10元」被当成**上涨**发布 | 只认「上调/下调」；「调整」判存疑，进人工核对队列 |
+| 执行日期要认「…24时起」的生效语义 | 不限语境直接取第一个匹配，「上次调价自11月1日24时起」会被当成本轮生效日 | 日期必须带「24时/24:00」，并剔除被「上次/上轮/此前/前次」修饰的那一个 |
+| 机器判定 `approved` 的门槛定太低 = 人工关卡被取消 | 只解析出 1~2 个油品也判 approved，等于替公告补了缺失的幅度 | 门槛：**四油品齐全 + 方向明确 + 执行日期明确 + 无自相矛盾**；否则 pending 进 `needsReview` 队列，`listPublic` 只发 approved |
+| 发送失败永久占住 `dedupKey` | 占位行插了不删，下一轮 `reserve()` 唯一键冲突恒失败 —— 网络抖动这类**可重试**失败被永久跳过 | 可重试失败**释放占位行**（不消费用户额度），不可重试失败保留记录并消费额度；`listByUser` 过滤「sent=FALSE 且 fail_reason IS NULL」的僵尸行 |
+| 契约测试 stub `utils/api.js` 的 `module.exports` = 没测传输层 | `fetchWithFallback` / `hasExpected` / `stampSource` 一次都没跑，页面吃的是后端原始响应 —— 字段漂了也照样全绿 | 在 **`wx.request` 层**打本地测试服务，让 `utils/cloud.js` 与 `utils/api.js` 一行不改地真跑；通知用夹具正文驱动 `collectFromSource` 产出，**禁止手插 approved 夹具** |
+| 「合法为空」与「后端没给成」要分开 | 回落演示源会让用户看到假价格，还以为服务挂了 | 后端在合法为空时返回顶层 `empty:true`，前端 `hasExpected` 见到它就不回落演示源 |
+| `scroll-view` 光有 `max-height` 滚不动 | 项目自己的 AGENTS.md 就记着这条，但代码里只给了 `max-height` + `flex:1 1 auto` | 父容器给**确定高度**，滚动区 `flex: 1 1 0; min-height: 0`（basis 0 + min-height 0 才有确定高度） |
 
 ## 验证要求
 
 - 改完页面/WXML/组件，**必须**跑 `node scripts/lint-wxml.js`（0 错误 0 警告才算过）和 `node scripts/check-modules.js`（模块加载期异常静态检查查不出来）
 - 改数据层或算法，跑 `node scripts/verify-data.js` 对照输出值
-- **改了前后端之间的字段**，跑 `node scripts/verify-contract.js` —— 它把后端真实响应喂给五页的 `applyXxx()`，字段漂移、空值冒充 0.00、来源标错都靠它挡
+- **改了前后端之间的字段**，跑 `node scripts/verify-contract.js` —— 它在 `wx.request` 层打本地测试服务，让前端**真走** `fetchWithFallback`（不是 stub api 层），字段漂移、空值冒充 0.00、来源标错、回落与竞态都靠它挡
+- **改了服务端的解析器或可信度判定**，跑 `node scripts/verify-collector.js`（解析回归）与 `verify-contract.js`（采集链路 → 入库 `review_status` → 对外可见性）
 - 改渲染结果，在开发者工具模拟器里逐页核对，别只信静态检查 —— 上面那批 bug 静态检查查不出来
 - 截图类产物落在 `docs/screenshots/`，临时导出的 canvas 代码不要留在仓库里
 

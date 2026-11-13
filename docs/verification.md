@@ -222,3 +222,74 @@ force 重抓去重 → 全量 run 31 省 124 条 → 第二次 run 全跳过。
 
 三条都补进了 `scripts/verify-contract.js` 与 `server/scripts/selftest.js` 的断言里，
 以后再回退会被测试挡住。
+
+---
+
+## 第二轮复审整改的端到端验证（2026-11-13 晚）
+
+第二轮复审报告 `docs/recheck-2026-11-13.md` 的 R0（2 条）+ R1（5 条）全修，
+R2 取零风险项全修。逐条结论见那份报告的第 7 章。
+
+### 契约测试重写了（这一条最要紧）
+
+上一版 `scripts/verify-contract.js` 用 `stubApi()` 覆盖 `utils/api.js` 的 `module.exports`，
+`fetchWithFallback` / `hasExpected` / `stampSource` **一次都没执行过** ——
+页面吃的是后端原始响应体，测出来的「契约一致」是假的一致。
+
+现在改成：`wx.request` 桩**把请求转发到本地测试服务**（只换 origin），
+`utils/cloud.js` 与 `utils/api.js` 一行不改地真跑；
+正式通知由**采集链路**产出（夹具正文 → `collectFromSource` → 入库 `review_status` → 对外可见性），
+不再手插 `approved` 夹具。
+
+唯一在传输层被替换掉的是 `/api/login` 的 code 兑换 ——
+那要真调微信 `code2session`（需要正式 AppID + AppSecret），契约自检没有这些凭据。
+换成服务端本地签发的 token 后，Authorization 头、`requireAuth` 中间件、真实用户数据全是真的。
+
+### 测试规模
+
+| 脚本 | 复审时 | 现在 | 备注 |
+| --- | --- | --- | --- |
+| `scripts/lint-wxml.js` | 0 错 0 警 | 0 错 0 警 | — |
+| `scripts/check-modules.js` | 运行时 24 + 服务端 22 | 同 | — |
+| `scripts/verify-contract.js` | 50（绕过传输层） | **93** | 真走 `fetchWithFallback` |
+| `scripts/verify-data.js` | — | — | 输出对照无变化 |
+| `scripts/verify-collector.js` | 24 | **29** | 新增 5 条公告判定用例 |
+| `scripts/sync-shared.js` | 一致性断言通过 | 同 | 改 `data/markets.js` 后重跑 |
+| `server/scripts/selftest.js` | 134 | **155** | 新增订阅消息 `{value}` 与公告可信度两段 |
+| `server/scripts/http-test.js` | 33 | **37** | 新增错误状态码与反代限流两段 |
+| `server/scripts/check-openapi.js` | 68 | **68** | — |
+| `server/scripts/scheduler-test.js` | 13 | 13 | — |
+
+### 反向验证：新断言不是摆设
+
+改完之后逐条**临时拆掉保护**，确认对应用例会红（再还原）。这一步是这轮最花时间、
+但也最有价值 —— 上一轮的问题正是「测试全绿但测的不是那条链路」。
+
+| 拆掉的保护 | 变红的断言 |
+| --- | --- |
+| 首页 `_reqSeq` 竞态守卫 | 「慢的旧请求后到也不能盖掉新结果」 |
+| `stampSource` 的 `server → live` 归一 | 6 条来源断言（页面退化成「数据来源待确认」） |
+| 解析器的 `reviewStatus` 判定 | 2 条解析 + 2 条入库 + 1 条摘要 + 2 条可见性断言 |
+| 采集器的 `NOTICE_PENDING` 映射 | 2 条队列 + 2 条运行记录 + 1 条前端同步状态断言 |
+
+### 模拟器逐页复核（IDE 2.02，端口 9432）
+
+`scripts/verify-in-devtools.js` 逐页截图 + 捕获运行时异常：**5 页全部无异常、无空图**。
+
+截图里核对到的：
+
+- 首页来源条显示「真实数据 · 服务端定时采集」（`stampSource` 归一生效），
+  国际页显示「演示数据 · 非实时行情」（后端行情源还没启用，**没有伪装成实时行情**）
+- 首页窗口卡写「上一轮调价窗口 / 已过 1 天 · 等待下一轮公布」，**没有**「距窗口 -1 天」
+- 首页「最新调价通知」在无正式公告时显示「暂无正式调价通知 / 正式公告来源接入后自动同步」，
+  不再是日期 `--` + 空标题的半吊子卡片（截图 `01-price-home-scroll-1900.png`）
+- 调价页空列表写「还没有正式调价公告 / 正式公告发布后会自动同步到这里」
+- 走势图是**阶梯线**（水平段 + 末端跳变），不是折线
+
+### 弹层滚动区（R2-6）
+
+给 `.sheet-scroll` 临时加了个诊断底色截图，量了像素坐标确认：
+面板拿到 `84vh` 的确定高度后，滚动区从标题下方**连续**占满到面板底部
+（截图 y=258~655 整段都是诊断底色），31 个省的列表在框内滚动，不再是「只露 4 个省 + 下面一大片空白」。
+临时改动已全部还原。
+
