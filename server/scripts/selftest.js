@@ -447,6 +447,60 @@ async function main() {
     geoData.provinces.length === shared.REGIONS.length,
     geoData.provinces.length + ' 个');
 
+  console.log('\n--- 机器判定的可信度 ---');
+  // review_status 是机器判定的可信度标记，不是人工审核结论。
+  // 这里钉住三件事：存疑的通知不装猜的幅度、存疑的不对外发布、
+  // 存疑的能被更可信的解析结果覆盖（否则解析器修好了重跑也进不来）。
+  var collector = require(path.join(ROOT, 'src', 'services', 'collector.js'));
+  var ndrcSource = { id: 'ndrc-notice', name: '国家发展改革委价格监测中心', url: 'https://example.invalid/' };
+  var ndrcParsed = {
+    kind: 'official',
+    title: '国内成品油价格按机制下调',
+    executeAt: '2026-11-24',
+    delta: -0.08,
+    deltas: {},
+    perFuel: false,
+    reviewStatus: 'pending',
+    raw: '自2026年11月24日24时起，每升下调0.08元。'
+  };
+  var ndrcKey = shared.dedupKey(ndrcSource.id, ndrcParsed.title, ndrcParsed.executeAt);
+
+  await collector.saveNotice(ndrcSource, ndrcParsed);
+  var pendingNotice = await dao.notices.findByDedupKey(ndrcKey);
+  check('存疑的通知能入库', !!pendingNotice && !!pendingNotice.id);
+  check('存疑的通知 reviewStatus 是 pending', pendingNotice && pendingNotice.reviewStatus === 'pending',
+    pendingNotice && pendingNotice.reviewStatus);
+  check('存疑的通知里没有猜出来的幅度',
+    pendingNotice && Object.keys(pendingNotice.changes || {}).length === 0,
+    pendingNotice ? JSON.stringify(pendingNotice.changes) : '无');
+  var publicAfterPending = await dao.notices.listPublic('official', 50, 0);
+  check('存疑的通知不对外发布',
+    !publicAfterPending.some(function (n) { return n.dedupKey === ndrcKey; }));
+
+  // 解析器修好后重跑采集：同一条去重键要被更可信的结果覆盖
+  await collector.saveNotice(ndrcSource, Object.assign({}, ndrcParsed, {
+    deltas: { '92': -0.08, '95': -0.08, '98': -0.1, '0': -0.08 },
+    perFuel: true,
+    reviewStatus: 'approved'
+  }));
+  var upgraded = await dao.notices.findByDedupKey(ndrcKey);
+  check('存疑的通知被更可信的解析覆盖（不新增一条）', !!upgraded && upgraded.id === pendingNotice.id,
+    upgraded ? String(upgraded.id) : '无');
+  check('覆盖后 reviewStatus 变 approved', upgraded && upgraded.reviewStatus === 'approved',
+    upgraded && upgraded.reviewStatus);
+  check('覆盖后幅度是逐项的', upgraded && upgraded.changes['98'] === -0.1,
+    upgraded ? JSON.stringify(upgraded.changes) : '无');
+  var publicAfterUpgrade = await dao.notices.listPublic('official', 50, 0);
+  check('覆盖后这条对外可见',
+    publicAfterUpgrade.some(function (n) { return n.dedupKey === ndrcKey; }));
+
+  // 机器判定可信的前提：approved 的通知必须带执行日期，
+  // 否则既没法倒计时也没法触发提醒。
+  var approvedRows = await dao.notices.listPublic('official', 50, 0);
+  var noDate = approvedRows.filter(function (n) { return !n.executeAt; });
+  check('对外可见的通知都带执行日期', noDate.length === 0,
+    noDate.map(function (n) { return n.title; }).join('、'));
+
   console.log('\n--- 汇总 ---');
   console.log('检查 ' + checks + ' 项，失败 ' + failures.length + ' 项');
   if (failures.length) {

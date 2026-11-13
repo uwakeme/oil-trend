@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS oil_notices (
   summary       TEXT,
   prices        JSONB NOT NULL DEFAULT '{}'::jsonb,
   source        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- 机器判定的可信度标记（不是人工审核结论）：
+  --   approved —— 逐项幅度明确且执行日期明确，可对外发布；
+  --   pending  —— 正文写法与预期不符，存疑不发布，等人工核对。
   review_status TEXT NOT NULL DEFAULT 'pending',
   raw           TEXT,
   created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()

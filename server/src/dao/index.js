@@ -209,6 +209,12 @@ const events = {
 const notices = {
   /**
    * 只有 review_status = 'approved' 的才对外可见。
+   *
+   * review_status 是**机器判定**的可信度标记，不是人工审核结论：
+   *   approved —— 逐项幅度明确且执行日期明确，可对外发布；
+   *   pending  —— 正文写法与预期不符（只解析出总幅度 / 没抓到执行日期），
+   *               存疑不发布，等人工核对。
+   *
    * 「未复核的解析结果不能当正式结论发布」是硬约束，必须在查询层就挡住。
    */
   async listPublic(filter, limit, offset) {
@@ -274,6 +280,31 @@ const notices = {
       ]
     );
     return toCamel(rows[0]);
+  },
+
+  /**
+   * 覆盖一条通知。
+   *
+   * 用途：一条「存疑」的通知，等解析器修好、能解析出可信结果后，
+   * 用更可信的结果覆盖它（否则去重键一样，重跑也进不来）。
+   */
+  async update(id, doc) {
+    var rows = await db.query(
+      'UPDATE oil_notices SET title = $2, published_at = $3, execute_at = $4, changes = $5::jsonb, ' +
+      'summary = $6, source = $7::jsonb, review_status = $8, raw = $9 WHERE id = $1 RETURNING *',
+      [
+        id,
+        doc.title || null,
+        doc.publishedAt || null,
+        doc.executeAt || null,
+        JSON.stringify(doc.changes || {}),
+        doc.summary || null,
+        JSON.stringify(doc.source || {}),
+        doc.reviewStatus || 'pending',
+        doc.raw || null
+      ]
+    );
+    return rows.length ? toCamel(rows[0]) : null;
   },
 
   async removeBySourceId(sourceId) {

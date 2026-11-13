@@ -90,6 +90,6 @@ cd server && npm test
 - **`fuelId` 是字符串**：`"92"` 不是 `92`。转成数字前端判断会全失效。
 - **日期是 `YYYY-MM-DD` 字符串**，不是时间戳。时间戳字段是 `publishedAt` / `updatedAt` / `time`。
 - **`market.axis` 是字符串**，但 `trend.axis` 是数组 —— 两个接口不一样。
-- **`/api/notices` 只返回 `reviewStatus = approved` 的通知**，
+- **`/api/notices` 只返回 `reviewStatus = approved` 的通知**（机器判定的可信结果；存疑的不发布），
   未复核的采集结果不对外发布，这是硬约束。
 - **查询类接口不需要登录**，只有 `/api/rules` 和 `/api/history` 需要。

@@ -266,7 +266,7 @@ node scripts/verify-in-devtools.js
 ## 已知限制
 
 - 订阅消息的模板已对齐（模板 ID `OaHgjTXlhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg`，5 个字段），但线上还要补服务端 `.env` 的 `OIL_SUBSCRIBE_TEMPLATE_ID`；而且微信的订阅消息是**一次性**授权，用户每次同意只够收一条，用完要重新授权
-- 国家发改委公告与国际行情两个采集源还没启用，调价窗口的预测目前来自汽油价格网
+- 国家发改委公告与国际行情两个采集源还没启用（公告的解析器与「机器判定可信度」规则已就绪，启用前还要验证可访问性与使用条款），调价窗口的预测目前来自汽油价格网
 - 页面 WXSS 里还有 42 处硬编码色值（26 处 hex + 16 处 rgba 阴影/边框）没走 `styles/tokens.wxss` 的设计令牌，纯样式一致性问题，不影响功能
 - 小程序主包有 2MB 上限，`project.config.json` 的 `packOptions.ignore` 已经排除了 `docs`、`design`、`scripts`、`server` 这些非运行文件
 - 换过 AppID 之后预览二维码要重出，预览包是按 AppID 上传的，旧码会指向已经不存在的账号

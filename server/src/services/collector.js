@@ -57,30 +57,64 @@ function fetchSource(source) {
 
 /* ---------------- 入库 ---------------- */
 
-/** 去重入库：同一来源 + 执行日期 + 标题 只保留一条 */
+/**
+ * 通知摘要：说清楚这条是怎么来的、还缺什么。
+ *
+ * 对外可见的只有 approved，文案里不能出现「待复核」这种自相矛盾的说法。
+ */
+function noticeSummary(parsed) {
+  if (parsed.reviewStatus === 'approved') {
+    return '来源公告逐项列明各油品调整幅度，已按原文发布。';
+  }
+  if (!parsed.perFuel) {
+    return '来源公告只解析出总幅度（每升 ' + parsed.delta + ' 元/升），各油品幅度待人工核对。';
+  }
+  return '来源公告未解析出执行日期，待人工核对后发布。';
+}
+
+/**
+ * 通知入库（去重：同一来源 + 执行日期 + 标题 只保留一条）。
+ *
+ * ⚠️ review_status 现在是**机器判定**的可信度标记，不是人工审核结论：
+ *   approved —— 逐项幅度明确且执行日期明确，可对外发布；
+ *   pending  —— 正文写法与预期不符（只解析出总幅度 / 没抓到执行日期），
+ *               存疑不发布，等人工核对。
+ *
+ * ⚠️ 已经存过的「存疑」通知，遇到更可信的解析结果要**覆盖更新**：
+ * 否则第一次解析没抓出标号，通知就永远停在存疑状态 ——
+ * 解析器修好了重跑也进不来（去重键一样）。
+ */
 function saveNotice(source, parsed) {
   var key = shared.dedupKey(source.id, parsed.title, parsed.executeAt);
+  var doc = {
+    kind: parsed.kind,
+    title: parsed.title,
+    publishedAt: nowIso(),
+    executeAt: parsed.executeAt || '',
+    // 只放逐项解析出来的幅度。没有就是没有，
+    // 不能拿总幅度复制给四个油品 —— 那是猜的，不能进正式结果。
+    changes: parsed.deltas || {},
+    reviewStatus: parsed.reviewStatus || 'pending',
+    summary: noticeSummary(parsed),
+    prices: {},
+    source: { sourceId: source.id, name: source.name, url: source.url, publishedAt: nowIso() },
+    raw: parsed.raw || ''
+  };
+
   return dao.notices.findByDedupKey(key).then(function (exist) {
-    if (exist) return { deduped: true, id: exist.id };
-    return dao.notices.insert({
-      dedupKey: key,
-      kind: parsed.kind,
-      title: parsed.title,
-      publishedAt: nowIso(),
-      executeAt: parsed.executeAt || '',
-      // 各油品幅度本来就不同，不能把同一个值复制给四个油品
-      changes: parsed.deltas || { '92': parsed.delta, '95': parsed.delta, '98': parsed.delta, '0': parsed.delta },
-      // 采集结果默认待复核，复核通过才对外可见
-      reviewStatus: parsed.reviewStatus || 'pending',
-      summary: parsed.perFuel
-        ? '来源正文解析结果，待人工复核后对外发布。'
-        : '来源正文只解析出总幅度，各油品幅度待人工核对。',
-      prices: {},
-      source: { sourceId: source.id, name: source.name, url: source.url, publishedAt: nowIso() },
-      raw: parsed.raw || ''
-    }).then(function (doc) {
-      return { deduped: false, id: doc.id };
-    });
+    if (!exist) {
+      return dao.notices.insert(Object.assign({ dedupKey: key }, doc)).then(function (inserted) {
+        return { deduped: false, id: inserted.id };
+      });
+    }
+    // 存疑的遇到可信的 → 用更可信的结果覆盖
+    if (exist.reviewStatus !== 'approved' && doc.reviewStatus === 'approved') {
+      return dao.notices.update(exist.id, Object.assign({}, doc, { publishedAt: exist.publishedAt }))
+        .then(function () {
+          return { deduped: false, upgraded: true, id: exist.id };
+        });
+    }
+    return { deduped: true, id: exist.id };
   });
 }
 
@@ -380,4 +414,4 @@ function run(options) {
   });
 }
 
-module.exports = { run: run, collectFromSource: collectFromSource };
+module.exports = { run: run, collectFromSource: collectFromSource, saveNotice: saveNotice };

@@ -170,6 +170,54 @@ function runSuite(label, sources) {
     const down = sources.PARSERS.ndrcNotice('每升下调0.08元');
     assert.strictEqual(down.delta, -0.08);
   });
+
+  // ⚠️ 下面这组用例钉的是「机器判定可信」的前提：
+  // 标号要从正文里明确抓到数字，泛称不猜；日期要认「24时」。
+  // 解析错标号的后果是 98# 的幅度被记到 92# 头上，
+  // 而 perFuel 还判定成「解析成功」—— 错的幅度会被当成可信结果发布出去。
+  check(label + ' ndrcNotice 逐项写法：四个油品各归各的', () => {
+    const r = sources.PARSERS.ndrcNotice(
+      '国家发展改革委宣布国内成品油价格按机制下调。从2026年11月24日24时起，全国平均来看：' +
+      '92号汽油每升下调0.08元，95号汽油每升下调0.08元，98号汽油每升下调0.10元，0号柴油每升下调0.08元。'
+    );
+    assert.deepStrictEqual(r.deltas, { '92': -0.08, '95': -0.08, '98': -0.1, '0': -0.08 });
+    assert.strictEqual(r.perFuel, true);
+    assert.strictEqual(r.executeAt, '2026-11-24');
+    assert.strictEqual(r.reviewStatus, 'approved');
+  });
+
+  check(label + ' ndrcNotice 顿号串号：98# 的幅度不会记到 92# 头上', () => {
+    const r = sources.PARSERS.ndrcNotice(
+      '自2026年11月24日24时起，92号汽油、98号汽油每升下调0.10元。'
+    );
+    assert.strictEqual(r.deltas['98'], -0.1);
+    assert.strictEqual(r.deltas['92'], undefined, '92# 没被明确写出，不该拿到 98# 的幅度');
+  });
+
+  check(label + ' ndrcNotice 只有总幅度：不复制给四个油品，判存疑', () => {
+    const r = sources.PARSERS.ndrcNotice('自2026年11月24日24时起，每升下调0.08元。');
+    assert.deepStrictEqual(r.deltas, {}, '总幅度不能复制给四个油品');
+    assert.strictEqual(r.perFuel, false);
+    assert.strictEqual(r.reviewStatus, 'pending');
+  });
+
+  check(label + ' ndrcNotice 泛称「汽油」：猜不出标号，不填', () => {
+    const r = sources.PARSERS.ndrcNotice('自2026年11月24日24时起，汽油每升下调0.08元。');
+    assert.deepStrictEqual(r.deltas, {}, '汽油有 92/95/98 三个标号，猜不出来');
+    assert.strictEqual(r.reviewStatus, 'pending');
+  });
+
+  check(label + ' ndrcNotice 有幅度没日期：正文格式不符，判存疑', () => {
+    const r = sources.PARSERS.ndrcNotice('92号汽油每升下调0.08元，98号汽油每升下调0.10元。');
+    assert.strictEqual(r.perFuel, true);
+    assert.strictEqual(r.executeAt, null);
+    assert.strictEqual(r.reviewStatus, 'pending');
+  });
+
+  check(label + ' ndrcNotice 日期认「24时」', () => {
+    const r = sources.PARSERS.ndrcNotice('自2026年11月24日24时起，每升下调0.08元。');
+    assert.strictEqual(r.executeAt, '2026-11-24');
+  });
 }
 
 /* ---------- 主流程 ---------- */

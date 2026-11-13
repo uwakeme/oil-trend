@@ -106,6 +106,11 @@ const PARSERS = {
   /**
    * 解析调价公告：从正文里找「每升调整 X 元」这类明确表述。
    * 找不到就返回 null。
+   *
+   * ⚠️ reviewStatus 在这里是**机器判定**的可信度标记，不是人工审核结论：
+   *   approved —— 逐项幅度明确且执行日期明确，可对外发布；
+   *   pending  —— 正文写法与预期不符（只解析出总幅度 / 没抓到执行日期），
+   *               存疑不发布，等人工核对。
    */
   ndrcNotice(raw) {
     var text = String(raw || '').replace(/\s+/g, '');
@@ -119,7 +124,9 @@ const PARSERS = {
     var totalDelta = m[1] === '下调' ? -magnitude : magnitude;
 
     var executeAt = null;
-    var m2 = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日24:00/);
+    // 公告写的是「24时起」，不是「24:00」—— 只认 24:00 会把日期整个丢掉，
+    // 而没有日期的通知既没法倒计时也没法触发提醒。
+    var m2 = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日(?:24时|24:00)/);
     if (m2) {
       executeAt = m2[1] + '-' + pad(m2[2]) + '-' + pad(m2[3]);
     }
@@ -127,32 +134,36 @@ const PARSERS = {
     // 各油品幅度本来就不同，正文里通常逐个油品写。
     // 能分别解析就分别解析，解析不出来就整体进人工核对。
     var deltas = {};
-    var fuelRe = /(92#|95#|98#|0#|柴油|汽油)[^。；;]{0,16}?每升(?:价格)?(上调|下调|调整)([\d.]+)元/g;
+    // ⚠️ 油品标号必须从正文里明确抓到数字（92号 / 95# / 98号 / 0号），
+    // 不能靠「汽油」这种泛称去猜标号 ——
+    // 发改委公告正文写的是「98号汽油每升下调0.10元」，
+    // 按泛称匹配会把 98# 的幅度记到 92# 头上（后一段覆盖前一段）。
+    // 中间的间隔也不允许出现数字、逗号、顿号，
+    // 否则「92号汽油、98号汽油每升下调0.10元」同样会串号。
+    var fuelRe = /((?:\d{1,3}[#号])?(?:汽油|柴油))[^。；;，,、0-9]{0,8}?每升(?:价格)?(上调|下调|调整)([\d.]+)元/g;
     var hit;
     while ((hit = fuelRe.exec(text)) !== null) {
       var fuelKey = fuelKeyOf(hit[1]);
-      if (!fuelKey) continue;
+      if (!fuelKey) continue;   // 泛称「汽油」猜不出标号，不填
       var value = Number(hit[3]);
       if (!isFinite(value)) continue;
       deltas[fuelKey] = hit[2] === '下调' ? -value : value;
     }
+    // 逐项解析出来了才算可信；一个都没解析出来就只剩总幅度，那是猜的
     var perFuel = Object.keys(deltas).length > 0;
-    if (!perFuel) {
-      // 只有一个总数：先按同一幅度填，但标记为待复核
-      deltas = { '92': totalDelta, '95': totalDelta, '98': totalDelta, '0': totalDelta };
-    }
 
-    var titleMatch = text.match(/(国内成品油价格按机制(?:上调|下调))/);
+    var titleMatch = text.match(/(?:国内)?成品油价格按机制(?:上调|下调)/);
 
     return {
       kind: 'official',
-      title: titleMatch ? titleMatch[1] : '国内成品油价格调整',
+      title: titleMatch ? titleMatch[0] : '国内成品油价格调整',
       executeAt: executeAt,
       delta: totalDelta,
       deltas: deltas,
       perFuel: perFuel,
-      // 采集解析出来的结果一律待复核，复核通过才对外可见
-      reviewStatus: 'pending',
+      // 机器判定可信：逐项幅度明确 **且** 执行日期明确。
+      // 两者缺一都说明正文写法跟预期不符，整条存疑，不对外发布。
+      reviewStatus: (perFuel && executeAt) ? 'approved' : 'pending',
       raw: raw && raw.length > 4000 ? raw.slice(0, 4000) : raw
     };
   },
@@ -254,10 +265,24 @@ function pad(n) {
   return n.length < 2 ? '0' + n : n;
 }
 
-/** 正文里的油品叫法 → 内部油品 id */
+/**
+ * 正文里的油品叫法 → 内部油品 id
+ *
+ * ⚠️ 标号必须从文本里明确抓到数字（92号 / 95# / 98号 / 0号）。
+ * 泛称「汽油」有 92 / 95 / 98 三个标号，猜不出来 → 返回 null，不填；
+ * 「柴油」国内只有 0# 一种标号，能确定。
+ *
+ * 之前把「汽油」一律映射成 92，结果 98 号汽油的幅度被记到 92# 头上 ——
+ * 而且 perFuel 判定照样是「解析成功」，错的幅度就这样被当成可信结果。
+ */
 function fuelKeyOf(text) {
-  var map = { '92#': '92', '95#': '95', '98#': '98', '0#': '0', '柴油': '0', '汽油': '92' };
-  return map[text] || null;
+  var s = String(text || '');
+  var num = s.match(/(\d{1,3})[#号]/);
+  if (num) {
+    return { '92': '92', '95': '95', '98': '98', '0': '0' }[num[1]] || null;
+  }
+  if (s.indexOf('柴油') !== -1) return '0';
+  return null;
 }
 
 module.exports = { SOURCES: SOURCES, PARSERS: PARSERS };

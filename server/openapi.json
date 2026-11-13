@@ -303,7 +303,7 @@
           "油价数据"
         ],
         "summary": "调价通知列表",
-        "description": "只返回 `reviewStatus = approved` 的通知 —— 未复核的采集结果不对外发布。\n同时带上下一次调价窗口与采集同步状态。",
+        "description": "只返回 `reviewStatus = approved` 的通知 —— 采集解析出来的可信结果才对外发布，存疑的不发布。\n同时带上下一次调价窗口与采集同步状态。",
         "parameters": [
           {
             "name": "regionCode",
