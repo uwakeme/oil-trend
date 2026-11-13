@@ -1,6 +1,6 @@
 {
   "enablePullDownRefresh": true,
-  "navigationBarTitleText": "国际油价",
+  "navigationBarTitleText": "油价势",
   "usingComponents": {
     "trend-chart": "/components/trend-chart/index"
   }

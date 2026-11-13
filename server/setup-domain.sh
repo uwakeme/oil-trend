@@ -1,5 +1,5 @@
 #!/bin/bash
-# 油势后端域名配置 —— 一次执行完
+# 油价势后端域名配置 —— 一次执行完
 #
 # 用法：
 #   curl -sO https://raw.githubusercontent.com/uwakeme/oil-trend/main/server/setup-domain.sh

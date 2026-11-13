@@ -1,6 +1,6 @@
 # 自建后端部署
 
-油势的后端部署在同一台服务器上（Node + Express + PostgreSQL）。设计与契约见
+油价势的后端部署在同一台服务器上（Node + Express + PostgreSQL）。设计与契约见
 [self-hosted-backend.md](self-hosted-backend.md)。
 
 ## 一、准备

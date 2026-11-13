@@ -40,7 +40,7 @@ Repository secrets 依然可见。
 | `SERVER_PORT` | Environment | SSH 端口，默认 22 |
 | `SERVER_SSH_KEY` | Environment | **服务器私钥全文**，含 `-----BEGIN OPENSSH PRIVATE KEY-----` 头尾 |
 | `DEPLOY_DIR` | Environment | 部署目录，默认 `/home/ubuntu/deploy/oil_trend` |
-| `DATABASE_URL` | Repository | PostgreSQL 连接串。**注意库名要换**：参考项目是 `lyric_lab`，油势要用独立的库（如 `oil_trend`） |
+| `DATABASE_URL` | Repository | PostgreSQL 连接串。**注意库名要换**：参考项目是 `lyric_lab`，油价势要用独立的库（如 `oil_trend`） |
 | `OIL_API_BASE_URL` | Environment（可选） | 后端对外地址。**实际上从服务器 `.env` 读**，不依赖这个 secret |
 
 命令行配 Environment secret：
@@ -57,7 +57,7 @@ gh secret set SERVER_SSH_KEY --repo uwakeme/oil-trend --env 腾讯云
 
 ### 1. 数据库
 
-油势用独立的库，不要和 `lyric_lab` 混：
+油价势用独立的库，不要和 `lyric_lab` 混：
 
 ```bash
 sudo -u postgres psql -c "CREATE DATABASE oil_trend;"
@@ -151,7 +151,7 @@ gh run watch --repo uwakeme/oil-trend
 
 ## 七、端口
 
-油势用 **3002**，避开 `lyric_lab` 的 3001，两套在同一台机器上互不干扰。
+油价势用 **3002**，避开 `lyric_lab` 的 3001，两套在同一台机器上互不干扰。
 PM2 配置在 `server/oil-trend-pm2.json`，改端口改这个文件。
 
 ## 八、出问题先看这里

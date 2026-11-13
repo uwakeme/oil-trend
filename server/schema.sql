@@ -1,4 +1,4 @@
--- 油势 · 自建后端数据库结构
+-- 油价势 · 自建后端数据库结构
 --
 -- PostgreSQL。集合与表的对应见 docs/self-hosted-backend.md。
 --

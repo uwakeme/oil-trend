@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 320" width="1280" height="320" role="img" aria-labelledby="bt bd">
-  <title id="bt">油势 — 微信油价与调价提醒小程序</title>
+  <title id="bt">油价势 — 微信油价与调价提醒小程序</title>
   <desc id="bd">暖灰纸面配深墨绿的能源行情风格封面，右侧是一条琥珀色阶梯线走势图，呼应国内油价只在调价日跳变的特点。</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="320" gradientUnits="userSpaceOnUse">
@@ -9,7 +9,7 @@
   </defs>
   <rect x="0" y="0" width="1280" height="320" fill="url(#bg)"/>
   <rect x="0" y="0" width="1280" height="6" fill="#e9a928"/>
-  <text x="80" y="146" fill="#f5f2e9" font-size="78" font-weight="700" font-family="'STSong','Songti SC','PingFang SC',serif">油势</text>
+  <text x="80" y="146" fill="#f5f2e9" font-size="78" font-weight="700" font-family="'STSong','Songti SC','PingFang SC',serif">油价势</text>
   <text x="84" y="188" fill="#8fa99c" font-size="19" font-weight="500" letter-spacing="7" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif">OIL TREND</text>
   <text x="84" y="236" fill="#a8c0b3" font-size="16" font-weight="500" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif">微信小程序 · Canvas 2D · Node + Express + PostgreSQL</text>
   <path d="M880 212 L960 212 L960 178 L1040 178 L1040 198 L1120 198 L1120 146 L1200 146 L1200 236 L880 236 Z" fill="#e9a928" fill-opacity="0.16"/>
