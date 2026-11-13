@@ -187,3 +187,38 @@ force 重抓去重 → 全量 run 31 省 124 条 → 第二次 run 全跳过。
 例如 河南 10.75 vs 10.16、海南 12.05 vs 11.63。核对页面原文后确认解析正确，
 差异来自不同来源的 98# 口径不同（98# 铺货少，各站数据源不一致）。
 **别把 live 值与 reference 的全量差异当成解析 bug。**
+
+## 审查报告整改的端到端验证（2026-11-13）
+
+审查报告 `docs/review-2026-11-13.md` 的 P0 + P1 共 25 条全部处理完，另外补了 11 条 P2。
+新增 `scripts/verify-contract.js` 作为跨端契约防线：pg-mem 起真库真服务、真发 HTTP，
+把 `/api/home`、`/api/trend`、`/api/notices`、`/api/market` 的响应体喂给五个页面的
+`applyXxx()`，断言渲染结果非空、无 undefined/NaN、来源标识与 `source.mode` 一致、空值不冒充 0.00。
+
+本轮测试规模：
+
+| 脚本 | 项数 | 说明 |
+| --- | --- | --- |
+| `scripts/lint-wxml.js` | 0 错误 0 警告 | WXML 标签与属性 |
+| `scripts/check-modules.js` | 运行时 24 + 服务端 22 | 模块加载期异常 |
+| `scripts/verify-contract.js` | 50 | 跨端契约（本轮新增） |
+| `scripts/verify-data.js` / `scripts/verify-collector.js` | — / 25 | 数据层与解析回归 |
+| `server/scripts/selftest.js` | 134 | 服务端自检 |
+| `server/scripts/http-test.js` | 33 | HTTP 层 |
+| `server/scripts/check-openapi.js` | 68 | 文档与实现一致 |
+
+### 截图复核时抓出来的三处显示缺陷
+
+静态检查全绿，但模拟器截图里看出来的：
+
+1. **「与上次持平」其实是无从比较** —— 首次真实采集没有基线，后端 `changeAmount` 记 0、
+   `changeAt` 留空，前端把 0 当成持平。改法：按 `changeAt` 判断有没有基线，
+   没有就显示「暂无调价对比」。
+2. **「近 30 天走势」只有一个点** —— 历史价只在价格变化时写，30 天不调价就只剩起点的 1 行，
+   canvas 单点只画出一个圆点。改法：每轮采集都幂等写当天生效的挂牌价。
+3. **调价窗口过期还写「下一次调价窗口 · 距窗口 -1 天」** —— 来源还没公布下一轮时，
+   库里留的是上一轮的窗口，挂在下面的预测早就失效了。改法：按 `daysLeft < 0` 判过期，
+   标题改「上一轮调价窗口」，不展示失效的预测。
+
+三条都补进了 `scripts/verify-contract.js` 与 `server/scripts/selftest.js` 的断言里，
+以后再回退会被测试挡住。

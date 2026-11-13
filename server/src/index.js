@@ -9,6 +9,22 @@ const { createApp } = require('./app');
 const scheduler = require('./scheduler');
 
 function start() {
+  // ⚠️ 启动前必须体检配置。
+  // 以前这里什么都不查：空密钥的服务照常启动、照常签发 token，
+  // 等于把「随便伪造任意用户身份」的能力开放出去。
+  var check = config.validate();
+  check.warnings.forEach(function (w) {
+    console.warn('[server] ⚠ ' + w);
+  });
+  if (check.errors.length) {
+    console.error('[server] 配置不完整，拒绝启动：');
+    check.errors.forEach(function (e) {
+      console.error('[server]   - ' + e);
+    });
+    process.exit(1);
+    return;
+  }
+
   var app = createApp();
   var server = app.listen(config.port, function () {
     console.log('[server] 已启动，监听 ' + config.port);

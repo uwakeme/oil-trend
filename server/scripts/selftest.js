@@ -501,6 +501,158 @@ async function main() {
   check('对外可见的通知都带执行日期', noDate.length === 0,
     noDate.map(function (n) { return n.title; }).join('、'));
 
+  console.log('\n--- 启动期配置校验 ---');
+  // P0-3：以前 start() 不校验任何配置，空密钥服务照常启动、照常签发 token。
+  var configPath = require.resolve(path.join(ROOT, 'src', 'config.js'));
+  function loadConfig(env) {
+    Object.keys(env).forEach(function (k) {
+      if (env[k] === null) delete process.env[k];
+      else process.env[k] = env[k];
+    });
+    delete require.cache[configPath];
+    return require(configPath);
+  }
+  var noSecret = loadConfig({ OIL_TOKEN_SECRET: '', DATABASE_URL: '' }).validate();
+  check('缺 OIL_TOKEN_SECRET 时启动校验报错',
+    noSecret.errors.some(function (e) { return e.indexOf('OIL_TOKEN_SECRET') >= 0; }),
+    JSON.stringify(noSecret.errors));
+  check('缺 DATABASE_URL 时启动校验报错',
+    noSecret.errors.some(function (e) { return e.indexOf('DATABASE_URL') >= 0; }));
+  var shortSecret = loadConfig({ OIL_TOKEN_SECRET: 'short', DATABASE_URL: 'postgres://x/y' }).validate();
+  check('密钥太短时启动校验报错',
+    shortSecret.errors.some(function (e) { return e.indexOf('OIL_TOKEN_SECRET') >= 0; }));
+  var fullConfig = loadConfig({
+    OIL_TOKEN_SECRET: 'a'.repeat(40),
+    DATABASE_URL: 'postgres://x/y'
+  });
+  var fullCheck = fullConfig.validate();
+  check('配置齐全时启动校验通过', fullCheck.errors.length === 0, JSON.stringify(fullCheck.errors));
+  check('缺微信凭据只警告不阻断（登录不可用，但服务能起）',
+    fullCheck.warnings.length > 0 && fullCheck.errors.length === 0);
+  // 还原环境
+  loadConfig({ OIL_TOKEN_SECRET: null, DATABASE_URL: null });
+
+  console.log('\n--- 非法地区代码 ---');
+  var queryService = require(path.join(ROOT, 'src', 'services', 'query.js'));
+  var regionErr = null;
+  try {
+    queryService.resolveRegion('999999');
+  } catch (e) {
+    regionErr = e;
+  }
+  check('非法 regionCode 报 INVALID_REGION（不再静默回退上海）',
+    !!regionErr && regionErr.code === 'INVALID_REGION');
+  check('合法 regionCode 能查到地区', queryService.resolveRegion('440000').code === '440000');
+  check('不传 regionCode 用默认地区', queryService.resolveRegion('').code === shared.DEFAULT_REGION_CODE);
+
+  console.log('\n--- 写接口入参校验 ---');
+  var userService = require(path.join(ROOT, 'src', 'services', 'user.js'));
+  function expectCode(fn, code) {
+    var err = null;
+    try {
+      fn();
+    } catch (e) {
+      err = e;
+    }
+    return !!err && err.code === code;
+  }
+  var manyRules = [];
+  for (var ri = 0; ri < 60; ri++) manyRules.push({ regionCode: '440000', fuelId: '92' });
+  check('规则条数超限被拒', expectCode(function () {
+    userService.actionRulesSave('u-limit', manyRules);
+  }, 'TOO_MANY_RULES'));
+  check('非法地区代码的规则被拒', expectCode(function () {
+    userService.actionRulesSave('u-region', [{ regionCode: '999999', fuelId: '92' }]);
+  }, 'INVALID_REGION'));
+  check('非法油品标号被拒', expectCode(function () {
+    userService.actionRulesSave('u-fuel', [{ regionCode: '440000', fuelId: '95a' }]);
+  }, 'INVALID_FUEL'));
+  check('非法目标价被拒', expectCode(function () {
+    userService.actionRulesSave('u-target', [{ regionCode: '440000', fuelId: '92', targetPrice: 'abc' }]);
+  }, 'INVALID_TARGET_PRICE'));
+
+  console.log('\n--- 去重键与发送去重 ---');
+  await userService.actionHistorySave('u-prefix', [{ dedupKey: 'fake::key', sent: true }]);
+  var prefixLogs = await dao.logs.listByUser('u-prefix', 50);
+  check('客户端提交的去重键被强制加 local: 前缀（不能预占系统去重键）',
+    prefixLogs.length > 0 && prefixLogs.every(function (l) {
+      return l.dedupKey.indexOf('local:u-prefix:') === 0;
+    }),
+    prefixLogs.map(function (l) { return l.dedupKey; }).join('、'));
+
+  var reserved = await dao.logs.reserve({ userId: 'u-dup', dedupKey: 'dup::key', payload: { type: 'test' } });
+  check('占位成功返回记录', !!reserved && !!reserved.id);
+  var reservedAgain = await dao.logs.reserve({ userId: 'u-dup', dedupKey: 'dup::key', payload: { type: 'test' } });
+  check('同一个去重键第二次占不到（去重发生在副作用之前）', !reservedAgain);
+  await dao.logs.markResult(reserved.id, true, null);
+  var marked = await dao.logs.listByUser('u-dup', 50);
+  check('占位后能回填发送结果', marked.length === 1 && marked[0].sent === true);
+
+  console.log('\n--- 采集可信公告要补写调价节点 ---');
+  var eventsAfterNotice = await dao.events.listAll();
+  check('可信公告会同步补一条调价节点（走势页才有调价节点可显示）',
+    eventsAfterNotice.some(function (e) { return e.date === '2026-11-24'; }),
+    '现有日期：' + eventsAfterNotice.map(function (e) { return e.date; }).slice(-3).join('、'));
+
+  console.log('\n--- 预测只存区间，不猜分油品幅度 ---');
+  await collector.saveWindow(
+    { id: 'test-window-src', name: '测试源' },
+    { date: '2026-11-30', time: '24:00', direction: 'down', changeTon: null, literMin: 0.08, literMax: 0.1 }
+  );
+  var testWindow = await dao.windows.latestBySource('test-window-src');
+  check('预测窗口存的是区间结构',
+    !!testWindow.forecast && testWindow.forecast.literMin === 0.08 &&
+    testWindow.forecast.literMax === 0.1 && testWindow.forecast.estimated === true,
+    testWindow.forecast ? JSON.stringify(testWindow.forecast) : '无');
+  check('预测窗口没有按油品复制的中值',
+    testWindow.forecast && !testWindow.forecast['92'],
+    testWindow.forecast ? JSON.stringify(testWindow.forecast) : '无');
+  check('预测方向单独存着', testWindow.forecastDirection === 'down');
+
+  console.log('\n--- 历史价：价格没变也要记当天挂牌价 ---');
+  // 以前只在价格变化时写历史价，30 天没调价走势图就只剩起点的 1 个点，
+  // 连一条横线都画不出来。现在每轮都写当天生效的挂牌价（按日期幂等覆盖）。
+  var histRegion = { code: '990001', name: '测试省', city: '测试市' };
+  var histSource = { id: 'test-hist-src', name: '测试源' };
+  var histFuel = '92';
+  var histPrice = 7.55;
+  await dao.prices.upsertMany([{
+    regionCode: histRegion.code,
+    regionName: histRegion.name + ' · ' + histRegion.city,
+    fuelId: histFuel,
+    fuelName: '92号汽油',
+    price: histPrice,
+    changeAmount: 0.3,
+    changeAt: '2026-11-01',
+    source: histSource.id
+  }]);
+  var histExisting = {};
+  histExisting[histRegion.code] = {};
+  histExisting[histRegion.code][histFuel] = {
+    regionCode: histRegion.code,
+    fuelId: histFuel,
+    price: histPrice,
+    changeAmount: 0.3,
+    changeAt: '2026-11-01',
+    source: histSource.id
+  };
+  await collector.saveRegionPrices(histSource, histRegion, { prices: { '92': histPrice } }, histExisting);
+  var histRows = await dao.history.listByRegionFuel(histRegion.code, histFuel, null);
+  check('价格没变也记了当天挂牌价（走势线的横段靠它）', histRows.length === 1,
+    '实际 ' + histRows.length + ' 行');
+  var histPriceRow = (await dao.prices.listByRegion(histRegion.code))[0];
+  check('价格没变就不改调价日', histPriceRow.changeAt === '2026-11-01', String(histPriceRow.changeAt));
+  check('价格没变就不改调价幅度', histPriceRow.changeAmount === 0.3, String(histPriceRow.changeAmount));
+
+  console.log('\n--- 错误信息不对外透传内部细节 ---');
+  var errorsModule = require(path.join(ROOT, 'src', 'errors.js'));
+  var internal = errorsModule.publicError({ code: 'PG_ERROR', message: 'relation "oil_prices" does not exist' });
+  check('内部错误不把 SQL 原文返回给客户端',
+    internal.message.indexOf('oil_prices') < 0, internal.message);
+  check('内部错误给稳定 code', internal.code === 'INTERNAL_ERROR');
+  var known = errorsModule.publicError({ code: 'INVALID_REGION', message: 'whatever' });
+  check('白名单里的业务错误透出友好文案', known.message === '地区代码不存在' && known.code === 'INVALID_REGION');
+
   console.log('\n--- 汇总 ---');
   console.log('检查 ' + checks + ' 项，失败 ' + failures.length + ' 项');
   if (failures.length) {

@@ -60,7 +60,12 @@ function request(port, method, path, body, headers) {
 
 async function main() {
   process.env.OIL_ALLOW_NO_DATABASE = '1';
-  process.env.OIL_TOKEN_SECRET = 'test-secret';
+  // ⚠️ 密钥要够长（≥32 位）：服务端启动前会强校验，
+  // 太短会被判成配置不完整 —— /ready 就一直返回 503。
+  process.env.OIL_TOKEN_SECRET = 'http-test-secret-0123456789abcdefgh';
+  // /ready 会检查「数据库连得上」：这里用 pg-mem 顶替，
+  // 但配置体检也要过，所以给一个连不上的串（真实查询走注入的 pg-mem 池）。
+  process.env.DATABASE_URL = 'postgres://selftest/selftest';
 
   // 内存库
   var db = newDb();
@@ -143,6 +148,32 @@ async function main() {
     var withAuth = await request(port, 'GET', '/api/rules', null, { Authorization: 'Bearer ' + token });
     check('带合法 token 返回 200', withAuth.status === 200);
     check('rules 返回数组', Array.isArray(withAuth.body.data.rules));
+
+    console.log('\n--- 就绪检查 ---');
+    // /health 只说明进程活着，/ready 才真的连库 ——
+    // 部署流水线的健康检查探的是 /ready（以前探 /health，数据库指错库也照样 200）。
+    var ready = await request(port, 'GET', '/ready');
+    check('/ready 返回 200', ready.status === 200);
+    check('/ready 用统一外壳', ready.body && ready.body.ok === true);
+    check('/ready 报的状态是 ready', ready.body && ready.body.data && ready.body.data.status === 'ready');
+
+    console.log('\n--- 限流 ---');
+    // /api/locate 不用登录、没有次数上限时，一个脚本就能把 31 个省的
+    // 多边形全量重算打满 CPU。这里要确认限流真的生效。
+    var limited = false;
+    for (var i = 0; i < 40; i++) {
+      var loc = await request(port, 'GET', '/api/locate?lat=23.1&lng=113.2');
+      if (loc.status === 429) { limited = true; break; }
+    }
+    check('/api/locate 连续请求会被限流（429）', limited);
+    check('限流响应带稳定 code', limited && (await request(port, 'GET', '/api/locate?lat=23.1&lng=113.2')).body.code === 'RATE_LIMITED');
+
+    console.log('\n--- 非法入参 ---');
+    var badRegion = await request(port, 'GET', '/api/home?regionCode=999999');
+    check('非法 regionCode 返回明确错误码', badRegion.body && badRegion.body.code === 'INVALID_REGION',
+      JSON.stringify(badRegion.body));
+    check('非法 regionCode 不泄露内部信息',
+      badRegion.body && String(badRegion.body.message).indexOf('oil_prices') < 0);
 
     console.log('\n--- 汇总 ---');
     console.log('检查 ' + checks + ' 项，失败 ' + failures.length + ' 项');

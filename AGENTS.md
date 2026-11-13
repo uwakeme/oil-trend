@@ -15,6 +15,7 @@
 node scripts/lint-wxml.js          # 静态检查（有错误时 exit 1），改完必跑
 node scripts/check-modules.js      # 运行时模块 + 服务端模块加载冒烟测试，挡住「删了函数体留着引用」这类 ReferenceError
 node scripts/verify-data.js        # 数据层自检，打印算出的价格/走势/通知/行情
+node scripts/verify-contract.js    # 端到端契约自检：后端真实响应 → 前端页面渲染结果
 node scripts/verify-collector.js   # 采集器解析回归（--live 追加真实抓取 + pg-mem 入库链路）
 node scripts/gen-province-geo.js  # 重新生成服务端省界数据（server/src/data/provinces.json）
 node scripts/sync-shared.js        # 由 data/ 生成服务端共享模块并做一致性断言，部署前必跑
@@ -89,7 +90,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 开发者工具 CLI 上传失败时**退出码仍是 0** | `preview-qr.js` 报「成功」但二维码是旧 AppID 的 | 上传前先删掉旧的二维码文本，跑完没有新文件就当失败；端口不对时 CLI 会回「IDE 已启动并在监听 http://127.0.0.1:XXXXX」，按它说的端口重试 |
 | canvas 是**独立原生渲染层**，z-index 压不住 | 走势图浮在底部弹层上面，把弹层内容盖住 | 把弹层 z-index 提到 99999 也没用。唯一可靠的办法是弹层打开时把画布从 DOM 里摘掉（`trend-chart` 的 `visible` 属性用 `wx:if` 控制） |
 | 换 AppID 后预览二维码要重新出 | 预览包按 AppID 上传，旧码指向已注销的账号 | 换完 AppID 跑 `node scripts/preview-qr.js`；AppID 只写 `project.private.config.json` |
-| pg 的参数会把数字序列化成文本 | `LIMIT $1` 传过来是 `'20'`，Postgres 直接报错 | LIMIT/OFFSET 内联整数（先 `Number()` 过一遍）；`server/src/dao/index.js` 里都有注释 |
+| pg 的 LIMIT/OFFSET 用占位符 | `LIMIT $1` 传过来是 `'20'`。⚠️ 更正：pg 实际会按 bigint 推断，`LIMIT $2` **通常能正常执行**（原记录的说法不准确，别再拿它当线上故障的依据）；但参数化 LIMIT 的类型推断依赖服务端推断，换驱动/换版本容易出幺蛾子 | 一律内联整数（先 `Number()` + 取整净化），`server/src/dao/index.js` 里五处写法一致 |
 | JSONB / NUMERIC 读出来是字符串 | pg 不自动解析，`deltas` 是对象、`price` 是字符串 | `server/src/dao/index.js` 的 `toCamel` 里用列名白名单转数字 —— **不能见数字就转**，`fuelId` 是 `'92'`，转成数字前端判断全失效 |
 | 自建后端没有 `cloud.getWXContext()` | 拿不到 openid | 走 `wx.login()` → code → `code2session` 换 openid，服务端自签 token；`utils/cloud.js` 的 `loginReady()` 保证用户类接口等 token 到位 |
 | cron 解析不支持星号步长 | `nextRun('0 */30 * * * *')` 返回 `null`，`register()` 打一行警告就退出 —— **采集器与提醒器在线上一次都没跑过**，`collector_runs` 一直是空表 | 字段解析要支持 星号 / 步长 / 区间 `a-b` / `a-b/N` / 逗号列表；`server/scripts/scheduler-test.js` 钉住「默认配置必须能解析出下次时间」 |
@@ -110,11 +111,27 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | `wx.getLocation` 拿 wgs84 坐标 | 与省界数据差 300~600 米，江苏/河北这种贴着的省会判错 | 固定传 `type: 'gcj02'`，服务端省界数据也是 GCJ-02，两边不换算 |
 | 定位失败弹错误提示 | 用户被反复打扰，而且定位本来就是可选增强 | 失败一律静默返回 null，只在用户明确拒绝过权限时给一个「开启定位」入口 |
 | `<button>` 在 flex 容器里被撑成宽条 | 小程序 button 的 UA 默认样式带 `margin: auto`，放进 flex 行里就被自动外边距顶开 | 钉死 `flex: 0 0 <宽>` 和 `margin: 0`，别只写 `width` |
+| 前端读 `latestNotice`、后端只给 `notice` | 字段契约漂一个名字，首页通知在真实后端下整块失真（标题空白、金额 0.00、日期 `--`），而 `expectKeys` 不含通知字段所以照样判 live | 两个名字都给（`notice` 与 `latestNotice` 同源），前端读 `payload.latestNotice \|\| payload.notice`；`scripts/verify-contract.js` 把后端真实响应喂给页面的 `applyXxx()` 钉住 |
+| `Number(null) === 0`，空价格会显示成 `0.00` | 后端没给价格时，前端渲染「92# 0.00 元/升」—— 0.00 是真实价格，`--` 才是没有数据 | `fmt.price(null/undefined/'')` 统一返回 `'--'`；要继续算数的用 `fmt.priceValue()`（返回 null，区别于 0） |
+| 「空数据」不能整包回落演示源 | 通知列表为空是合法的（后端确实还没有正式公告），回落演示会凭空造出假通知；而行情曲线为空是真的没数据 | `utils/api.js` 分开「字段存在」与「字段有值」两套校验：通知只查存在，行情/价格要查非空 |
+| 去重发生在副作用之后就晚了 | 「查有没有发过 → 发消息 → 落库」两个实例同时跑会各发一遍，用户收到两条 | 先占位再发送：`dao.logs.reserve()` 插入占位行（唯一键冲突就说明别人抢到了），拿到行的人才有资格发 |
+| pg-mem 的 `ON CONFLICT DO NOTHING RETURNING` 会把冲突行也返回 | 真库冲突时返回 0 行，pg-mem 却返回已有行 —— 自检分不清「抢到了」还是「撞上了」 | 用「直接插入 + 捕获 23505 唯一键冲突」，两种引擎行为一致（`dao.logs.reserve`） |
+| 部署时 `pm2 delete` 之后失败 = 线上直接没了 | `delete → npm install → apply-schema → start` 是串行的，中间任一步失败就留下「旧进程已删、新进程没起」 | 结构与配置检查放在**动进程之前**（`apply-schema` + `config.validate()`），失败时旧进程还活着；健康检查探 `/ready`（真连库），不探只查进程存活的 `/health` |
+| 服务端空密钥 = 谁能自签任意 openid | 签名算法开源，空串作 HMAC key 不报错，`issueToken` 照常签发 | 启动前强校验 `OIL_TOKEN_SECRET`（≥32 位）与 `DATABASE_URL`，缺一即 `exit 1`；CI 在 `.env` 缺这个键时自动补一个（只追加，不覆盖用户维护的值） |
+| 汽油价格网没有 HTTPS | 证书是腾讯 CDN 的通用证书，altnames 里没有该域名，https 握手直接失败（2026-11-13 实测） | 只能走 HTTP → 抓取层必须加固：重定向只跟白名单主机、总时限（`req.setTimeout` 只是空闲超时）、入库前与上次真实价比（落差 >1 元不入门）与各省基准价比（偏差 >1.5 元只告警） |
+| `setTimeout` 上限 2^31-1 ms | 月/年级 cron 一次要等那么久，超了溢出成 1ms —— 任务立刻触发又立刻排下一次，进程变忙循环 | `scheduler.js` 里把等待截到上限，到点重新算下一次（**没到点不能执行任务**） |
+| 弹层里的长列表用 `overflow-y:auto` 滚不动 | 普通 `<view>` + `catchtouchmove` 会吞掉滚动，31 个省的地区列表远超 84vh | 内容改用 `<scroll-view scroll-y>`（**必须给高度约束**，`max-height` 对 scroll-view 不生效），`catchtouchmove` 只留遮罩；弹层样式单一真源在 `styles/components.wxss` |
+| 切 tab 后弹层状态残留 | 五个 tab 页 `switchTab` 只触发 `onHide` 不触发 `onUnload`，`data` 常驻；弹层还开着，迷你走势 canvas 也一直被摘掉 | 各页 `onHide()` 复位弹层状态，但**不要**清 `_reqSeq` / `_loadedAt` / 用户已选的地区油品 |
+| 四页 `load()` 没有并发竞态保护 | 快速连切周期/筛选，慢请求后到会盖掉新数据，页面停在旧周期 | 照首页的 `_reqSeq` 模式：请求开头取序号，`.then/.catch` 开头判 `if (seq !== self._reqSeq) return;`；`wx.stopPullDownRefresh()` 要无条件执行 |
+| 涨跌额 0 分不清「持平」和「不知道」 | 首次真实采集没有基线，后端把 `changeAmount` 记 0、`changeAt` 留空 —— 这时 0 是「还不知道」不是「持平」，写成「与上次持平」等于替来源猜了结论 | 前端按 `changeAt` 判断有没有基线：没有就显示「暂无调价对比」；有基线且幅度为 0 才是真的持平 |
+| 历史价只在价格变化时写，走势图只剩一个点 | 国内油价 30 天不调价，`oil_price_history` 就只剩起点的 1 行，canvas 单点只画出一个圆点，没有横线 | 每轮采集都写当天生效的挂牌价，按 `(地区, 油品, 日期)` 唯一索引幂等覆盖 —— 阶梯线的横段本来就该是平的 |
+| 调价窗口过期还写「下一次…距窗口 -1 天」 | 来源还没公布下一轮时，库里留的是上一轮的窗口，`daysLeft` 是负数，挂在下面的预测早就失效了 | 首页按 `daysLeft < 0` 判过期：标题改「上一轮调价窗口」、倒计时写「已过 N 天 · 等待下一轮公布」，并且不展示失效的预测 |
 
 ## 验证要求
 
 - 改完页面/WXML/组件，**必须**跑 `node scripts/lint-wxml.js`（0 错误 0 警告才算过）和 `node scripts/check-modules.js`（模块加载期异常静态检查查不出来）
 - 改数据层或算法，跑 `node scripts/verify-data.js` 对照输出值
+- **改了前后端之间的字段**，跑 `node scripts/verify-contract.js` —— 它把后端真实响应喂给五页的 `applyXxx()`，字段漂移、空值冒充 0.00、来源标错都靠它挡
 - 改渲染结果，在开发者工具模拟器里逐页核对，别只信静态检查 —— 上面那批 bug 静态检查查不出来
 - 截图类产物落在 `docs/screenshots/`，临时导出的 canvas 代码不要留在仓库里
 

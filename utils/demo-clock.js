@@ -75,7 +75,14 @@ function monthsAgo(n, from) {
   var base = parseUtc(from || today());
   if (base === null) base = parseUtc(today());
   var d = new Date(base);
+  var day = d.getUTCDate();
+  // ⚠️ setUTCMonth 会溢出：3 月 31 日往前推 1 个月是「2 月 31 日」，
+  // JS 直接顺延到 3 月 3 日 —— 走势区间起点和轴标签会整体偏掉几天。
+  // 先归一到当月 1 日再减月份，再把日钳到目标月的最后一天。
+  d.setUTCDate(1);
   d.setUTCMonth(d.getUTCMonth() - n);
+  var lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, lastDay));
   return d.toISOString().slice(0, 10);
 }
 

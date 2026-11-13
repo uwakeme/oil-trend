@@ -27,6 +27,25 @@ function dayDiff(fromDate, toDate) {
 
 /* ---------------- 公共读取 ---------------- */
 
+/**
+ * 解析地区代码。
+ *
+ * ⚠️ 不能直接用 shared.regionByCode —— 它找不到时会静默回退上海（REGIONS[0]），
+ * 传 ?regionCode=999999 会返回「上海 · 上海」但价格、走势都是空的，
+ * 用户拿到的是自相矛盾的数据，而且没有任何错误码。
+ * 传错了要明确报错（「没传」才用默认地区）。
+ */
+function resolveRegion(regionCode) {
+  var code = regionCode || shared.DEFAULT_REGION_CODE;
+  var region = shared.findRegion ? shared.findRegion(code) : null;
+  if (!region) {
+    var err = new Error('地区代码不存在：' + code);
+    err.code = 'INVALID_REGION';
+    throw err;
+  }
+  return region;
+}
+
 function getPrices(regionCode) {
   return dao.prices.listByRegion(regionCode);
 }
@@ -115,7 +134,7 @@ function actionRegions() {
 
 function actionHome(payload) {
   var regionCode = payload.regionCode || shared.DEFAULT_REGION_CODE;
-  var region = shared.regionByCode(regionCode);
+  var region = resolveRegion(regionCode);
 
   return Promise.all([
     getPrices(regionCode),
@@ -141,6 +160,13 @@ function actionHome(payload) {
     priceList.sort(function (a, b) {
       return shared.FUELS.findIndex(function (f) { return f.id === a.id; }) -
         shared.FUELS.findIndex(function (f) { return f.id === b.id; });
+    });
+
+    // 最后采集时间：取本地区价格里最新的 updatedAt。
+    // ⚠️ 后端原来不返回这个字段，前端拼出来的是「 更新」（空日期 + 更新两个字）。
+    var updatedAt = '';
+    prices.forEach(function (p) {
+      if (p.updatedAt && (!updatedAt || p.updatedAt > updatedAt)) updatedAt = p.updatedAt;
     });
 
     var today = todayStr();
@@ -170,23 +196,30 @@ function actionHome(payload) {
         shared.FUELS.forEach(function (f) { changes[f.id] = notice.changes[f.id]; });
       }
 
+      var noticePayload = notice ? {
+        id: notice.id,
+        kind: notice.kind,
+        title: notice.title,
+        publishedAt: notice.publishedAt,
+        executeAt: notice.executeAt,
+        changes: notice.changes || {},
+        summary: notice.summary || '',
+        source: notice.source || {}
+      } : null;
+
       return {
         region: { code: region.code, fullName: region.name + ' · ' + region.city },
         prices: priceList,
         window: buildWindow(win),
         trend30: trend30,
         changes: changes,
-        notice: notice ? {
-          id: notice.id,
-          kind: notice.kind,
-          title: notice.title,
-          publishedAt: notice.publishedAt,
-          executeAt: notice.executeAt,
-          changes: notice.changes || {},
-          summary: notice.summary || '',
-          source: notice.source || {}
-        } : null,
+        notice: noticePayload,
+        // ⚠️ 小程序端读的是 latestNotice，后端原来只给 notice ——
+        // 字段漂移的根源，首页通知在真实后端下整块失真。
+        // 两个名字都给，前端读哪个都不会空。
+        latestNotice: noticePayload,
         publishedAt: notice ? notice.publishedAt : '',
+        updatedAt: updatedAt,
         source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
       };
     });
@@ -200,7 +233,7 @@ function actionTrend(payload) {
   var fuelId = payload.fuelId || '92';
   var period = payload.period || '3m';
   var months = { '3m': 3, '6m': 6, '1y': 12 }[period] || 3;
-  var region = shared.regionByCode(regionCode);
+  var region = resolveRegion(regionCode);
 
   var today = todayStr();
   var fromDate = new Date(new Date(today + 'T00:00:00Z').getTime() - months * 30 * 86400000).toISOString().slice(0, 10);
@@ -254,11 +287,15 @@ function actionTrend(payload) {
       ],
       points: points,
       events: events.map(function (e) {
+        var delta = (e.deltas || {})[fuelId];
+        if (typeof delta !== 'number') delta = 0;
         return {
           date: e.date,
           title: e.title,
-          amount: (e.deltas || {})[fuelId] || 0,
-          direction: ((e.deltas || {})[fuelId] || 0) < 0 ? 'down' : 'up',
+          amount: delta,
+          // 三态：幅度为 0 是「持平」，不是「上涨」。
+          // 原来写成 < 0 ? 'down' : 'up'，持平的节点会被染成上涨色。
+          direction: delta < 0 ? 'down' : (delta > 0 ? 'up' : 'flat'),
           priceAfter: priceByDate[e.date] !== undefined ? priceByDate[e.date] : priceMap[fuelId]
         };
       }),
@@ -271,6 +308,7 @@ module.exports = {
   actionRegions: actionRegions,
   actionHome: actionHome,
   actionTrend: actionTrend,
+  resolveRegion: resolveRegion,
   getPrices: getPrices,
   getWindow: getWindow,
   getLatestNotice: getLatestNotice,

@@ -945,6 +945,20 @@ function regionByCode(code) {
   return REGIONS[0];
 }
 
+/**
+ * 查地区，查不到返回 null。
+ *
+ * ⚠️ regionByCode 找不到会静默回退上海（REGIONS[0]），
+ * 传 ?regionCode=999999 时页面显示「上海 · 上海」但查不到价格，
+ * 返回的是自相矛盾的数据。需要区分「没传」和「传错了」的地方一律用这个。
+ */
+function findRegion(code) {
+  for (var i = 0; i < REGIONS.length; i++) {
+    if (REGIONS[i].code === code) return REGIONS[i];
+  }
+  return null;
+}
+
 var LEVEL_CACHE = {};
 
 function levels(fuelId) {
@@ -1018,6 +1032,7 @@ module.exports = {
   NATIONAL_BASE: NATIONAL_BASE,
   round2: round2,
   regionByCode: regionByCode,
+  findRegion: findRegion,
   levels: levels,
   nationalPriceOn: nationalPriceOn,
   priceOn: priceOn,

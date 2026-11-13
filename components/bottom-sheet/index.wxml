@@ -1,11 +1,19 @@
-<view wx:if="{{visible}}" class="sheet-mask" catchtap="onMaskTap"></view>
-<view wx:if="{{visible}}" class="sheet-panel" catchtouchmove="noop">
+<view wx:if="{{visible}}" class="sheet-mask" catchtap="onMaskTap" catchtouchmove="noop"></view>
+<view wx:if="{{visible}}" class="sheet-panel">
   <view class="sheet-handle"></view>
   <view class="sheet-head">
     <text class="sheet-head-title">{{title}}</text>
     <button class="sheet-close" bindtap="onClose" aria-label="关闭">✕</button>
   </view>
-  <view class="sheet-content">
-    <slot></slot>
-  </view>
+  <!--
+    长列表（地区 31 个省）必须用 scroll-view：
+    普通 view + overflow-y 在真机上滚不动，
+    而面板上的 catchtouchmove 会把滚动手势一起吃掉。
+    catchtouchmove 只留在遮罩上，遮罩负责挡住背景页面跟着滚。
+  -->
+  <scroll-view class="sheet-scroll" scroll-y="{{true}}">
+    <view class="sheet-content">
+      <slot></slot>
+    </view>
+  </scroll-view>
 </view>

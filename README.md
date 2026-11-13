@@ -251,7 +251,7 @@ node scripts/verify-in-devtools.js
 | `DATABASE_URL` | PostgreSQL 连接串 | 必填 |
 | `WX_APP_ID` | 小程序 AppID，与 `project.private.config.json` 同一个 | 必填 |
 | `WX_APP_SECRET` | 小程序 AppSecret，只在服务器上 | 必填 |
-| `OIL_TOKEN_SECRET` | 自签 token 的密钥，一串足够长的随机字符 | 必填 |
+| `OIL_TOKEN_SECRET` | 自签 token 的密钥，**至少 32 位**的随机字符 | 必填，缺了服务端拒绝启动 |
 | `OIL_SUBSCRIBE_TEMPLATE_ID` | 订阅消息模板 ID | 可选，默认取契约表里的主模板 |
 | `OIL_MINIPROGRAM_STATE` | 订阅消息跳转的版本：`formal` / `developer` / `trial` | `formal` |
 | `OIL_API_BASE_URL` | 后端对外地址，流水线用它做健康检查 | 无 |
@@ -267,8 +267,10 @@ node scripts/verify-in-devtools.js
 
 - 订阅消息的模板已对齐（模板 ID `OaHgjTXlhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg`，5 个字段），但线上还要补服务端 `.env` 的 `OIL_SUBSCRIBE_TEMPLATE_ID`；而且微信的订阅消息是**一次性**授权，用户每次同意只够收一条，用完要重新授权
 - 国家发改委公告与国际行情两个采集源还没启用（公告的解析器与「机器判定可信度」规则已就绪，启用前还要验证可访问性与使用条款），调价窗口的预测目前来自汽油价格网
+- **汽油价格网没有 HTTPS**（证书是 CDN 通用证书，不含该域名），价格只能走明文 HTTP 抓取 —— 抓取层已做重定向白名单、总时限与价格交叉校验（与上次真实价、与各省基准价），但明文链路本身的风险消不掉
+- 服务端启动前会强校验 `OIL_TOKEN_SECRET`（≥32 位）与 `DATABASE_URL`，缺一直接拒绝启动；健康检查分两个：`/health` 只说明进程活着，`/ready` 才真的连库
 - 页面 WXSS 里还有 42 处硬编码色值（26 处 hex + 16 处 rgba 阴影/边框）没走 `styles/tokens.wxss` 的设计令牌，纯样式一致性问题，不影响功能
-- 小程序主包有 2MB 上限，`project.config.json` 的 `packOptions.ignore` 已经排除了 `docs`、`design`、`scripts`、`server` 这些非运行文件
+- 小程序主包有 2MB 上限，`project.config.json` 的 `packOptions.ignore` 已经排除了 `docs`、`design`、`scripts`、`server`、`.github` 这些非运行文件
 - 换过 AppID 之后预览二维码要重出，预览包是按 AppID 上传的，旧码会指向已经不存在的账号
 
 ## License

@@ -15,6 +15,11 @@
       <text class="page-sub">只在符合你的条件时通知</text>
     </view>
 
+    <!-- 数据来源：当前价与目标价都基于这份数据 -->
+    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}">
+      <text class="source-bar-text">{{sourceText}}</text>
+    </view>
+
     <!-- 订阅状态 -->
     <view class="subscription-card {{subscription.active ? 'on' : ''}}">
       <view class="subscription-icon">
@@ -99,7 +104,9 @@
     <view class="card">
       <view class="card-title-row">
         <text class="card-title">最近提醒</text>
-        <text class="micro">演示记录</text>
+        <!-- 只有本地演示记录才标「演示记录」，后端返回的是真实发送记录 -->
+        <text class="micro" wx:if="{{historyIsDemo}}">演示记录</text>
+        <text class="micro" wx:elif="{{history.length > 0}}">发送记录</text>
       </view>
       <view wx:if="{{history.length === 0}}" class="state-box" style="padding:24rpx 0;">
         <text>还没有触发过提醒</text>

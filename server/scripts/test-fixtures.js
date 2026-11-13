@@ -54,23 +54,36 @@ function seed() {
     return dao.history.upsertMany(historyDocs);
   }).then(function () {
     // 调价节点
+    // ⚠️ 必须带 dedupKey：这张表现在靠它去重，
+    // 采集器每轮都会写同一个节点，没有去重键就会越积越多。
     var eventDocs = shared.ADJUSTMENTS.map(function (a) {
-      return { date: a.date, title: a.title, deltas: a.deltas, source: 'seed' };
+      return {
+        dedupKey: ['seed', a.date].join('::'),
+        date: a.date,
+        title: a.title,
+        deltas: a.deltas,
+        source: 'seed'
+      };
     });
-    return dao.events.insertMany(eventDocs);
+    return dao.events.upsertMany(eventDocs);
   }).then(function () {
     // 下一轮调价窗口：按最后一次调价 + 10 天的周期推
     var levels92 = shared.levels('92');
     var last = levels92[levels92.length - 1];
     var base = last && last.date ? new Date(last.date + 'T00:00:00Z') : new Date();
     var next = new Date(base.getTime() + 10 * 86400000);
-    return dao.windows.insert({
-      date: next.toISOString().slice(0, 10),
+    var nextDate = next.toISOString().slice(0, 10);
+    return dao.windows.upsert({
+      dedupKey: ['seed', nextDate].join('::'),
+      date: nextDate,
       time: '24:00',
-      cycleStart: next.toISOString().slice(0, 10),
+      cycleStart: nextDate,
       isOfficial: false,
       basis: '按 10 个工作日调价周期推算',
-      forecast: {},
+      // 预测是区间结构（direction / literMin / literMax / estimated），
+      // 不是按油品 id 的字典 —— 来源只给整体区间，没有分油品幅度
+      forecast: { direction: 'down', literMin: 0.08, literMax: 0.1, estimated: true },
+      forecastDirection: 'down',
       source: 'seed'
     });
   }).then(function () {

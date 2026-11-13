@@ -11,6 +11,62 @@
  * 翻译统一放在这里，DAO 层只见库里的名字。
  */
 const dao = require('../dao');
+const shared = require('../shared/shared');
+
+/* ---------------- 入参校验 ---------------- */
+
+/** 一次最多接受多少条规则 / 记录 */
+var MAX_RULES = 50;
+var MAX_HISTORY = 50;
+
+/** 项目支持的油品标号 */
+var FUEL_IDS = ['92', '95', '98', '0'];
+
+function badRequest(message, code) {
+  var err = new Error(message);
+  err.code = code || 'INVALID_INPUT';
+  return err;
+}
+
+/**
+ * 校验提醒规则。
+ *
+ * ⚠️ 原来完全不校验：targetPrice 传 "abc" 会直接进 NUMERIC(6,2) 报 500，
+ * regionCode 传乱码会静默查不到数据，rules 数组也没有长度上限 ——
+ * express.json 允许 1mb，一个请求能塞进上万条，打出上万条独立 SQL。
+ */
+function validateRules(rules) {
+  if (!Array.isArray(rules)) throw badRequest('规则格式不正确', 'INVALID_RULES');
+  if (rules.length > MAX_RULES) {
+    throw badRequest('一次最多提交 ' + MAX_RULES + ' 条规则', 'TOO_MANY_RULES');
+  }
+  rules.forEach(function (rule) {
+    if (!rule || typeof rule !== 'object') throw badRequest('规则格式不正确', 'INVALID_RULES');
+    if (!rule.regionCode || !shared.findRegion(rule.regionCode)) {
+      throw badRequest('地区代码不存在：' + (rule.regionCode || ''), 'INVALID_REGION');
+    }
+    if (FUEL_IDS.indexOf(String(rule.fuelId)) < 0) {
+      throw badRequest('油品标号不存在：' + (rule.fuelId || ''), 'INVALID_FUEL');
+    }
+    if (rule.targetPrice !== undefined && rule.targetPrice !== null) {
+      var target = Number(rule.targetPrice);
+      if (!isFinite(target) || target <= 0 || target > 100) {
+        throw badRequest('目标价不合法', 'INVALID_TARGET_PRICE');
+      }
+    }
+  });
+}
+
+/** 校验提醒记录 */
+function validateHistory(history) {
+  if (!Array.isArray(history)) throw badRequest('记录格式不正确', 'INVALID_HISTORY');
+  if (history.length > MAX_HISTORY) {
+    throw badRequest('一次最多提交 ' + MAX_HISTORY + ' 条记录', 'TOO_MANY_HISTORY');
+  }
+  history.forEach(function (item) {
+    if (!item || typeof item !== 'object') throw badRequest('记录格式不正确', 'INVALID_HISTORY');
+  });
+}
 
 /**
  * 小程序端字段 → 库里字段。
@@ -72,6 +128,7 @@ function actionRulesList(userId) {
 function actionRulesSave(userId, rules) {
   var list = rules || [];
   if (!list.length) return Promise.resolve({ rules: [] });
+  validateRules(list);
 
   var tasks = list.map(function (rule) {
     return dao.rules.upsert(toDbRule(userId, rule));
@@ -91,11 +148,18 @@ function actionHistoryList(userId) {
 function actionHistorySave(userId, history) {
   var list = history || [];
   if (!list.length) return Promise.resolve({ history: [] });
+  validateHistory(list);
 
   var tasks = list.map(function (item) {
+    // ⚠️ dedup_key 必须由服务端加前缀，不能直接用客户端给的值：
+    // 系统推送的去重键是 [openid, 地区, 油品, 类型, 日期].join('::')，
+    // 客户端要是能指定这个值，就能提前占住全局去重键，
+    // 让某次系统推送被永久跳过。强制加 'local:' 前缀后不可能撞上。
+    var raw = item.dedupKey || '';
+    var suffix = raw || ((item.time || Date.now()) + ':' + Math.random().toString(36).slice(2));
     return dao.logs.insert({
       userId: userId,
-      dedupKey: item.dedupKey || ('local:' + userId + ':' + (item.time || Date.now()) + ':' + Math.random().toString(36).slice(2)),
+      dedupKey: 'local:' + userId + ':' + suffix,
       sent: !!item.sent,
       failReason: item.failReason || null,
       payload: item

@@ -41,7 +41,7 @@ cp .env.example .env
 | `WX_APP_SECRET` | 小程序 AppSecret，**只在服务器上** |
 | `OIL_SUBSCRIBE_TEMPLATE_ID` | 订阅消息模板 ID，默认用 `server/src/services/subscribe-templates.js` 里的主模板 |
 | `OIL_MINIPROGRAM_STATE` | 订阅消息跳转的小程序版本：`formal` 正式版（默认）/ `developer` 开发版 / `trial` 体验版 |
-| `OIL_TOKEN_SECRET` | 自签 token 的密钥，随便一串长随机字符 |
+| `OIL_TOKEN_SECRET` | 自签 token 的密钥，**至少 32 位**的随机字符。⚠️ 启动前会强校验：缺了或太短，服务直接拒绝启动 —— 空密钥等于谁都能自签任意 openid |
 | `OIL_API_BASE_URL` | 后端对外地址，部署流水线拿它做健康检查 |
 | `OIL_COLLECT_CRON` | 采集频率，默认 `0 */30 * * * *`（6 段：秒 分 时 日 月 周） |
 | `OIL_ALERT_CRON` | 提醒频率，默认 `0 */10 * * * *` |
@@ -69,11 +69,18 @@ cd server
 npm start
 ```
 
-或者用 systemd / pm2 托管。健康检查：
+或者用 systemd / pm2 托管。健康检查分两个，别混用：
 
 ```bash
+# 存活检查：只说明进程还在（数据库指错库它照样 200）
 curl https://你的域名/health
+
+# 就绪检查：真的去连库 + 检查配置（部署流水线探的是这个）
+curl https://你的域名/ready
 ```
+
+⚠️ 启动前会做配置体检：`OIL_TOKEN_SECRET`（≥32 位）与 `DATABASE_URL` 缺一即打印错误并
+`exit 1`；`WX_APP_ID` / `WX_APP_SECRET` 缺失只警告（只影响登录与订阅消息，不至于让服务起不来）。
 
 ## 六、切前端
 

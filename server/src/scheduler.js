@@ -134,6 +134,31 @@ function register(name, cron, fn) {
   var timer = null;
   var scheduled = false;
 
+  // setTimeout 的延时上限是 2^31-1 ms（约 24.8 天）。
+  // 月/年级的 cron 一次要等那么久，超了就溢出成 1ms —— 任务立刻触发、
+  // 接着又立刻排下一次，进程变成忙循环。
+  var MAX_TIMEOUT = 2147483647;
+
+  function schedule(waitMs) {
+    timer = setTimeout(function () {
+      var remain = delayTarget - Date.now();
+      if (remain > 0) {
+        // 刚才只是等到了 setTimeout 上限，任务还没到点 —— 重新排一次，别执行
+        schedule(Math.min(remain, MAX_TIMEOUT));
+        return;
+      }
+      Promise.resolve()
+        .then(fn)
+        .catch(function (err) {
+          console.error('[scheduler] ' + name + ' 执行失败：', err.message);
+        })
+        .then(function () { tick(); });
+    }, Math.max(0, waitMs));
+    if (timer.unref) timer.unref();
+  }
+
+  var delayTarget = 0;
+
   function tick() {
     var delay = nextRun(cron, new Date());
     if (delay === null) {
@@ -141,15 +166,8 @@ function register(name, cron, fn) {
       console.warn('[scheduler] ' + name + ' 的 cron 无法匹配，该任务已停用：' + cron);
       return;
     }
-    timer = setTimeout(function () {
-      Promise.resolve()
-        .then(fn)
-        .catch(function (err) {
-          console.error('[scheduler] ' + name + ' 执行失败：', err.message);
-        })
-        .then(function () { tick(); });
-    }, Math.max(0, delay - Date.now()));
-    if (timer.unref) timer.unref();
+    delayTarget = delay;
+    schedule(Math.min(Math.max(0, delay - Date.now()), MAX_TIMEOUT));
     if (!scheduled) {
       scheduled = true;
       console.log('[scheduler] 已注册 ' + name + ' (' + cron + ')，下次 ' +

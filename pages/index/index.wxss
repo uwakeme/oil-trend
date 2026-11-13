@@ -270,6 +270,9 @@
   margin-top: 8rpx;
 }
 
+/* 无方向（持平 / 幅度未知）用中性色，别让空状态看起来像涨跌 */
+.other-fuel-change.flat { color: var(--muted); }
+
 /* ---------- 调价窗口 ---------- */
 .next-card {
   background: #ece8dc;

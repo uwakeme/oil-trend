@@ -8,6 +8,45 @@ const PERIODS = [
   { key: '3m', label: '3月' }
 ];
 
+/**
+ * 涨跌方向（三态）。
+ *
+ * ⚠️ 原来写成 `changeAmount < 0 ? 'down' : 'up'`：
+ * 涨跌额为 0 时会被染成「上涨」。这里以涨跌额为准，
+ * 涨跌额缺失时才退回方向字段。
+ *
+ * 涨跌额可能是字符串（pg 的 NUMERIC 读出来是文本），
+ * 统一用 fmt.priceValue 转数字，转换不了算缺失。
+ */
+function directionOf(item) {
+  var amount = fmt.priceValue(item.changeAmount);
+  if (amount === null) {
+    if (item.direction === 'down') return 'down';
+    if (item.direction === 'up') return 'up';
+    return 'flat';
+  }
+  if (amount < 0) return 'down';
+  if (amount > 0) return 'up';
+  return 'flat';
+}
+
+/**
+ * 行情时效文案。
+ *
+ * ⚠️ 后端不一定给 delayMinutes（报价时间解析不出来时是 null），
+ * 直接拼字符串会显示成「延时 undefined 分钟」。
+ * 缺这个数时只说「延时行情」，不出现 undefined。
+ *
+ * @param {object} main   行情载荷
+ * @param {string} prefix 前缀（页面顶部的徽章用「行情」，卡片里不用）
+ */
+function timelinessText(main, prefix) {
+  if (!main.delayed) return prefix + '实时';
+  var minutes = fmt.priceValue(main.delayMinutes);
+  if (minutes === null || minutes <= 0) return '延时行情';
+  return prefix + '延时 ' + minutes + ' 分钟';
+}
+
 Page({
   data: {
     loading: true,
@@ -18,7 +57,9 @@ Page({
     tabs: [],
     market: {},
     delayText: '',
-    sourceNote: ''
+    sourceNote: '',
+    sourceText: '',
+    sourceWarn: false
   },
 
   onLoad() {
@@ -26,14 +67,19 @@ Page({
   },
 
   onShow() {
-    // 行情带时间戳，回来太久了就重新取一次，避免看到停住的价格
+    // 行情带时间戳，回来太久了就重新取一次，避免看到停住的价格。
+    // _loadedAt 在 load() 开头就记了，首屏不会重复发一轮。
     if (!this._loadedAt || Date.now() - this._loadedAt > 60000) {
       this.load();
     }
   },
 
   onPullDownRefresh() {
+    // 无论成功、失败还是被竞态丢弃，都要停掉下拉刷新，
+    // 否则菊花会一直转。
     this.load().then(function () {
+      wx.stopPullDownRefresh();
+    }, function () {
       wx.stopPullDownRefresh();
     });
   },
@@ -42,6 +88,14 @@ Page({
     var self = this;
     var symbol = this.data.symbol;
     var period = this.data.period;
+    // 请求序号：连点品种 / 周期会连发多轮请求，
+    // 先发的那轮可能后到，不能让它把后一轮的结果盖回去。
+    this._reqSeq = (this._reqSeq || 0) + 1;
+    var seq = this._reqSeq;
+    // 取数时刻在发请求之前就记下来：onShow 靠它判断要不要刷新。
+    // 原来记在 .then 里，首屏 onLoad 的请求还没回来，
+    // 紧接着的 onShow 看到 _loadedAt 是 undefined，又发一轮（首屏 4 个请求）。
+    this._loadedAt = Date.now();
     this.setData({ loading: true, loadError: '' });
 
     // 选中的品种可能正好是 brent 或 wti，去重后再并发，省掉一次重复请求
@@ -54,11 +108,12 @@ Page({
     return Promise.all(symbols.map(function (s) {
       return api.getMarket(s, period);
     })).then(function (res) {
+      if (seq !== self._reqSeq) return;
       var map = {};
       symbols.forEach(function (s, i) { map[s] = res[i]; });
-      self._loadedAt = Date.now();
       self.applyMarket(map[symbol], map.brent, map.wti);
     }).catch(function () {
+      if (seq !== self._reqSeq) return;
       self.setData({ loading: false, loadError: '行情数据加载失败，请稍后重试' });
     });
   },
@@ -70,24 +125,30 @@ Page({
     }
     var self = this;
     function tab(item) {
+      item = item || {};
+      var sym = item.symbol || '';
       return {
-        symbol: item.symbol,
-        code: item.symbol === 'brent' ? 'BRENT' : 'WTI',
-        label: item.symbol === 'brent' ? '布伦特' : '纽约',
+        symbol: sym,
+        code: sym === 'wti' ? 'WTI' : 'BRENT',
+        label: sym === 'wti' ? '纽约' : '布伦特',
         priceText: fmt.price(item.price),
         changeText: fmt.percent(item.changePercent),
-        // 同上：direction 不能是 null
-        direction: item.direction || (Number(item.changeAmount) < 0 ? 'down' : 'up')
+        // direction 不能是 null，也不能把持平说成上涨
+        direction: directionOf(item)
       };
     }
     // 演示数据（服务端还没采集到真实行情）不能标「实时」——
     // 那会把演示曲线说成真实行情，与「如实展示来源」冲突。
     var isDemo = !!(main.source && main.source.mode === 'demo');
-    // direction 必须有值：trend-chart 声明它是 String 属性，传 null 会报类型警告
-    var marketDirection = main.direction || (Number(main.changeAmount) < 0 ? 'down' : 'up');
-    var delayText = isDemo
-      ? '演示数据'
-      : (main.delayed ? ('延时 ' + main.delayMinutes + ' 分钟') : '实时');
+    // direction 必须有值：trend-chart 声明它是 String 属性，传 null 会报类型警告。
+    // 国际行情的涨跌方向要从涨跌幅算，不能直接用 main.direction（那里没有这个字段）。
+    var marketDirection = directionOf(main);
+    var delayText = isDemo ? '演示数据' : timelinessText(main, '');
+    // 品种代码：后端会给 BRENT / WTI，没给时按 symbol 兜底，别显示空字符串
+    var symbol = main.symbol || this.data.symbol;
+    var code = main.code || (symbol === 'wti' ? 'WTI' : 'BRENT');
+    // 来源提示条：后端挂了回落演示数据时必须是 warn 样式
+    var sourceLine = fmt.sourceLine(main.source);
 
     this.setData({
       loading: false,
@@ -95,11 +156,10 @@ Page({
       tabs: [tab(brent), tab(wti)],
       market: {
         name: main.name,
-        code: main.code,
+        code: code,
         priceText: fmt.price(main.price),
         changeText: fmt.signed(main.changeAmount) + '  ' + fmt.percent(main.changePercent),
         // trend-chart 的 direction 是 String 属性，传 null 会报类型不兼容警告。
-        // 国际行情的涨跌方向要从涨跌幅算，不能直接用 main.direction（那里没有这个字段）。
         direction: marketDirection,
         openText: fmt.price(main.open),
         prevText: fmt.price(main.prevClose),
@@ -110,8 +170,10 @@ Page({
         points: main.points || [],
         axis: main.axis || []
       },
-      delayText: isDemo ? '演示数据' : (main.delayed ? ('行情延时 ' + main.delayMinutes + ' 分钟') : '行情实时'),
-      sourceNote: (main.source && main.source.note) || ''
+      delayText: isDemo ? '演示数据' : timelinessText(main, '行情'),
+      sourceNote: (main.source && main.source.note) || '',
+      sourceText: sourceLine.text,
+      sourceWarn: sourceLine.warn
     });
   },
 

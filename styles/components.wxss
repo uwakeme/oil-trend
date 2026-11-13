@@ -44,6 +44,8 @@
 .badge.up { background: var(--red-soft); color: var(--red); }
 .badge.neutral { background: #eceae2; color: #626a64; }
 .badge.amber { background: var(--amber-soft); color: var(--amber-ink); }
+/* flat = 无方向：持平或幅度未知，不能染成涨跌色 */
+.badge.flat { background: #eceae2; color: #626a64; }
 
 /* ---------- 按钮 ---------- */
 .primary-button {
@@ -147,6 +149,11 @@
 .switch.on::after { transform: translateX(32rpx); }
 
 /* ---------- 底部弹层 ---------- */
+/*
+ * 单一真源：components/bottom-sheet/index.wxss 只写动画与内部间距，
+ * 遮罩与面板的基础样式都在这里 —— 以前两边各写一份同名规则，
+ * 靠「后写的覆盖先写的」生效，改样式时很容易改错文件。
+ */
 .sheet-mask {
   position: fixed;
   left: 0; right: 0; top: 0; bottom: 0;
@@ -157,11 +164,20 @@
   position: fixed;
   left: 0; right: 0; bottom: 0;
   z-index: 101;
+  /* 面板本身不再滚动：滚动交给里面的 scroll-view，
+     否则长列表（31 个省）在真机上滚不动 */
   max-height: 84vh;
+  display: flex;
+  flex-direction: column;
   background: var(--paper);
-  border-radius: 50rpx 50rpx 68rpx 68rpx;
-  padding: 24rpx 40rpx 56rpx;
+  border-radius: 50rpx 50rpx 0 0;
+  padding: 24rpx 40rpx calc(48rpx + env(safe-area-inset-bottom));
   box-sizing: border-box;
+}
+.sheet-scroll {
+  /* scroll-view 必须给高度约束，否则内容会撑开整个面板 */
+  max-height: calc(84vh - 190rpx);
+  flex: 1 1 auto;
 }
 .sheet-handle {
   width: 72rpx;
@@ -169,12 +185,14 @@
   border-radius: 8rpx;
   background: #cbc9c0;
   margin: 0 auto 36rpx;
+  flex: 0 0 auto;
 }
 .sheet-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 32rpx;
+  flex: 0 0 auto;
 }
 .sheet-head-title {
   font-size: 34rpx;
@@ -195,6 +213,30 @@
   padding: 0;
 }
 .sheet-body { font-size: 22rpx; line-height: 1.8; color: var(--muted); }
+
+/* ---------- 来源提示条 ---------- */
+/*
+ * 五页统一显示「这次数据从哪来」。
+ * 后端挂了回落演示数据时必须看得见 —— 静默换成演示数据装没事，
+ * 等于骗用户以为看到的是真实油价。
+ */
+.source-bar {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 14rpx 24rpx;
+  margin-bottom: 20rpx;
+  border-radius: 16rpx;
+  background: #ece8dc;
+  color: var(--muted);
+  font-size: 18rpx;
+  line-height: 1.5;
+}
+.source-bar.warn {
+  background: rgba(176, 92, 40, .12);
+  color: #a8551f;
+}
+.source-bar-text { flex: 1 1 auto; }
 
 /* ---------- 信息条 ---------- */
 .info-strip {

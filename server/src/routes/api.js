@@ -12,6 +12,7 @@ const query = require('../services/query');
 const notices = require('../services/notices');
 const user = require('../services/user');
 const locate = require('../services/locate');
+const errors = require('../errors');
 const { requireAuth } = require('../middleware/auth');
 
 var router = express.Router();
@@ -20,18 +21,19 @@ function ok(data) {
   return { ok: true, data: data };
 }
 
-function fail(message, code) {
-  return { ok: false, message: message, code: code || 'ERROR' };
-}
-
-/** 包一层，把异常转成统一外壳 */
+/**
+ * 包一层，把异常转成统一外壳。
+ *
+ * ⚠️ 不再把 err.message 原样返回：会带出 pg 的 SQL 错误、微信 errmsg 等内部信息。
+ * 白名单里的业务错误码透出原文，其余换成固定文案（见 src/errors.js）。
+ */
 function handle(fn) {
   return function (req, res) {
     Promise.resolve()
       .then(function () { return fn(req, res); })
       .catch(function (err) {
         console.error('[api]', req.method, req.path, err);
-        res.json(fail((err && err.message) || String(err), (err && err.code) || 'INTERNAL_ERROR'));
+        res.json(errors.publicError(err));
       });
   };
 }

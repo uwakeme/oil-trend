@@ -273,3 +273,11 @@
   display: inline-block;
   width: 280rpx;
 }
+
+/* 原文链接：小程序打不开外部网页，点一下把链接复制到剪贴板 */
+.source-link {
+  display: inline-block;
+  margin-top: 10rpx;
+  font-size: 20rpx;
+  color: var(--green);
+}

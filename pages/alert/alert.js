@@ -27,6 +27,48 @@ function usedAtText(value) {
   return fmt.cnDate(new Date(t.getTime() + 8 * 3600000).toISOString());
 }
 
+/**
+ * 记录时间 → 'YYYY-MM-DD HH:mm'（UTC+8）。
+ *
+ * 后端存的是 TIMESTAMP，返回的是 ISO 串（UTC），
+ * 直接截前 16 位会比本地时间差 8 小时。
+ */
+function historyTime(value) {
+  if (!value) return '';
+  var t = new Date(value);
+  if (isNaN(t.getTime())) return String(value).slice(0, 16);
+  var iso = new Date(t.getTime() + 8 * 3600000).toISOString();
+  return iso.slice(0, 10) + ' ' + iso.slice(11, 16);
+}
+
+/**
+ * 历史记录 → 统一的展示结构。
+ *
+ * 后端返回的记录是 {userId,dedupKey,sent,failReason,time,payload}，
+ * 本地演示记录是 {id,title,time,channel,priceText} —— 字段不一样，
+ * 直接渲染的话后端记录会是一片空白。
+ */
+function historyView(item, index) {
+  if (!item) return { id: 'history-' + index, title: '', time: '', channel: '', priceText: '' };
+  if (item.dedupKey) {
+    var payload = item.payload || {};
+    return {
+      id: item.dedupKey,
+      title: payload.title || '提醒记录',
+      time: historyTime(item.time),
+      channel: item.sent ? '订阅消息' : ('发送失败 · ' + (item.failReason || '未知原因')),
+      priceText: payload.price === undefined ? '' : fmt.price(payload.price)
+    };
+  }
+  return {
+    id: item.id || ('history-' + index),
+    title: item.title || '',
+    time: item.time || '',
+    channel: item.channel || '',
+    priceText: item.priceText || ''
+  };
+}
+
 Page({
   data: {
     loading: true,
@@ -47,6 +89,10 @@ Page({
     targetCaption: '',
     targetWarn: false,
     history: [],
+    // 历史记录是不是演示数据（后端返回的记录带 dedupKey）
+    historyIsDemo: false,
+    sourceText: '',
+    sourceWarn: false,
     sheetVisible: false,
     hasTemplate: false
   },
@@ -68,8 +114,18 @@ Page({
     }
   },
 
+  onHide() {
+    // 弹层状态跨 tab 残留：离开页面时复位。
+    // 只复位弹层，不动 _reqSeq，也不清用户已选的地区 / 油品。
+    this.setData({ sheetVisible: false });
+  },
+
   onPullDownRefresh() {
+    // 无论成功、失败还是被竞态丢弃，都要停掉下拉刷新，
+    // 否则菊花会一直转。
     this.load().then(function () {
+      wx.stopPullDownRefresh();
+    }, function () {
       wx.stopPullDownRefresh();
     });
   },
@@ -77,6 +133,10 @@ Page({
   load() {
     var self = this;
     var prefs = store.getPrefs();
+    // 请求序号：切换地区 / 油品会连发两轮请求，
+    // 先发的那轮可能后到，不能让它把新一轮的结果盖回去。
+    this._reqSeq = (this._reqSeq || 0) + 1;
+    var seq = this._reqSeq;
     this.setData({ loading: true, loadError: '' });
 
     return Promise.all([
@@ -84,6 +144,7 @@ Page({
       api.getAlertRules(),
       api.getAlertHistory()
     ]).then(function (res) {
+      if (seq !== self._reqSeq) return;
       var home = res[0] || {};
       var rules = res[1] || [];
       var history = res[2] || [];
@@ -124,6 +185,15 @@ Page({
         if (priceList[k].id === prefs.fuelId) { fuelName = priceList[k].name; break; }
       }
 
+      // 来源：提醒页的当前价来自 home，home.source 原来被整份丢掉了，
+      // 现在存下来如实展示 —— 后端挂了回落演示数据时必须看得见。
+      var sourceLine = fmt.sourceLine(home.source, '目标价以此为基准');
+      // 历史记录是不是演示的：后端返回的记录带 dedupKey，
+      // 本地演示记录没有这个字段（{id,title,time,channel,priceText}）。
+      // ⚠️ 不用 api.sourceStatus()：那是模块级全局状态，
+      // home / rules / history 三个请求谁先返回谁覆盖，判定会漂。
+      var isBackendHistory = history.length > 0 && !!history[0].dedupKey;
+
       self.setData({
         loading: false,
         loadError: '',
@@ -132,11 +202,15 @@ Page({
         fuelName: fuelName,
         currentPriceText: fmt.price(price),
         rule: rule,
-        history: history,
+        history: history.map(historyView),
+        historyIsDemo: history.length > 0 && !isBackendHistory,
+        sourceText: sourceLine.text,
+        sourceWarn: sourceLine.warn,
         hasTemplate: subscribe.hasTemplate()
       });
       self.applyRule();
     }).catch(function () {
+      if (seq !== self._reqSeq) return;
       self.setData({ loading: false, loadError: '提醒规则加载失败，请稍后重试' });
     });
   },

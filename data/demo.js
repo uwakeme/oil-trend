@@ -62,6 +62,19 @@ function regionByCode(code) {
 }
 
 /**
+ * 查地区，查不到返回 null。
+ *
+ * ⚠️ regionByCode 找不到会静默回退上海 —— 传入非法地区代码时，
+ * 演示源会给出一份「上海」的数据，和用户实际选的地方对不上。
+ */
+function findRegion(code) {
+  for (var i = 0; i < REGIONS.length; i++) {
+    if (REGIONS[i].code === code) return REGIONS[i];
+  }
+  return null;
+}
+
+/**
  * 某地某油品在某天的零售价
  *
  * ⚠️ 地区价差按油品分别取：现实中各省的标号结构不同
@@ -100,7 +113,10 @@ function getRegions() {
 function windowPayload(fuelId) {
   var windowDate = clock.shiftDate(ADJUST_WINDOW.date);
   var cycleStart = clock.shiftDate(ADJUST_WINDOW.cycleStartDate);
-  var forecast = ADJUST_WINDOW.forecast[fuelId];
+  // forecast 的结构与服务端一致：{ direction, literMin, literMax, estimated }
+  // ⚠️ 不再是「按油品 id 的字典」—— 预测只有整体区间，
+  // 以前把区间中值复制给四个油品当成各自的幅度，那是猜的。
+  var forecast = ADJUST_WINDOW.forecast || {};
 
   // 天数计算全部基于平移后的日期，和界面显示的日期保持一致。
   // 之前用未平移的原始日期算，会和显示差一天；进度还会恒为 0 后突然跳 100%。
@@ -116,9 +132,9 @@ function windowPayload(fuelId) {
     cycleStart: cycleStart,
     cycleStarted: progress > 0,
     progress: progress,
-    forecastAmount: forecast,
-    forecast: ADJUST_WINDOW.forecast,
-    direction: forecast < 0 ? 'down' : 'up',
+    forecast: forecast,
+    // 方向单独给：幅度待公布时也要能显示「预计下调」
+    forecastDirection: forecast.direction || '',
     isOfficial: ADJUST_WINDOW.isOfficial,
     basis: ADJUST_WINDOW.basis
   };
@@ -311,7 +327,13 @@ function buildPricesFor(region, notice) {
   var out = {};
   // 用「这次调价执行当天之后的价格」，不能用当前价 ——
   // 否则每条历史通知显示的都是今天的价格，看着像同一条通知
-  var executeDate = String(notice.executeAt || '').slice(0, 10);
+  //
+  // ⚠️ 执行日期必须用**平移后**的：getNotices 返回的 executeAt 是平移过的，
+  // 这里算价格却用原始日期，两个时间基准不一致。
+  // 平移生效后（今天 ≠ 锚点日），最后一次调价节点会被 break 掉，
+  // after 取到上一次调价后的价格，误差 0.04~0.19 元/升，还和首页当前价对不上。
+  var executeDate = clock.shiftDate(String(notice.executeAt || '').slice(0, 10));
+  if (!executeDate) return out;
   FUELS.forEach(function (f) {
     var delta = notice.changes[f.id];
     var after = priceOn(region.code, f.id, executeDate);
@@ -362,6 +384,7 @@ module.exports = {
   getTrend: getTrend,
   getNotices: getNotices,
   getMarket: getMarket,
+  findRegion: findRegion,
   currentPrice: currentPrice,
   priceOn: priceOn
 };

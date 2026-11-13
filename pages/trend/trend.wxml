@@ -9,6 +9,11 @@
   </view>
 
   <block wx:else>
+    <!-- 来源提示：后端挂了回落演示数据时必须看得见 -->
+    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}">
+      <text class="source-bar-text">{{sourceText}}</text>
+    </view>
+
     <view class="page-head">
       <text class="page-kicker">PRICE HISTORY</text>
       <text class="page-title">价格走势</text>

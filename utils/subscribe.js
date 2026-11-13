@@ -48,8 +48,12 @@ function requestSubscribe() {
         var granted = [];
         var denied = [];
         Object.keys(res || {}).forEach(function (key) {
-          if (res[key] === 'accept') granted.push(key);
-          else denied.push(key);
+          // ⚠️ res 里还有 errMsg 字段（值是 "requestSubscribeMessage:ok"），
+          // 它不是模板 ID —— 当成「被拒的模板」塞进 denied 是错的。
+          if (key === 'errMsg') return;
+          var state = res[key];
+          if (state === 'accept') granted.push(key);
+          else if (state === 'reject' || state === 'ban') denied.push(key);
         });
         resolve({ granted: granted, denied: denied });
       },

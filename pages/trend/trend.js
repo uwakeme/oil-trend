@@ -27,7 +27,9 @@ Page({
     lowText: '--',
     highText: '--',
     countText: '--',
-    sourceNote: ''
+    sourceNote: '',
+    sourceText: '',
+    sourceWarn: false
   },
 
   onLoad() {
@@ -49,7 +51,11 @@ Page({
   },
 
   onPullDownRefresh() {
+    // 无论成功失败都要停掉下拉刷新动画：
+    // 只在 then 里停的话，请求被后来的请求顶掉时会一直转圈。
     this.load().then(function () {
+      wx.stopPullDownRefresh();
+    }).catch(function () {
       wx.stopPullDownRefresh();
     });
   },
@@ -57,10 +63,18 @@ Page({
   load() {
     var self = this;
     var prefs = store.getPrefs();
+    // 请求序号：切油品 / 切周期会连发请求，先发的那轮可能后到，
+    // 不能让它把新条件的结果盖回去。
+    this._reqSeq = (this._reqSeq || 0) + 1;
+    var seq = this._reqSeq;
     this.setData({ loading: true, loadError: '' });
     return api.getTrend(prefs.regionCode, this.data.fuelId, this.data.period)
-      .then(function (payload) { self.applyTrend(payload); })
+      .then(function (payload) {
+        if (seq !== self._reqSeq) return;
+        self.applyTrend(payload);
+      })
       .catch(function () {
+        if (seq !== self._reqSeq) return;
         self.setData({ loading: false, loadError: '走势数据加载失败，请稍后重试' });
       });
   },
@@ -71,9 +85,12 @@ Page({
       return;
     }
     var fuelName = (payload.fuel && payload.fuel.name) || '92# 汽油';
+    var srcLine = fmt.sourceLine(payload.source);
     this.setData({
       loading: false,
       loadError: '',
+      sourceText: srcLine.text,
+      sourceWarn: srcLine.warn,
       region: payload.region || {},
       fuelName: fuelName,
       points: payload.points || [],
@@ -88,6 +105,8 @@ Page({
       sourceNote: (payload.source && payload.source.note) || '',
       events: (payload.events || []).map(function (e) {
         return {
+          // WXML 的 wx:key 指向 date，字段不能少
+          date: e.date,
           dateText: fmt.shortDate(e.date),
           title: e.title,
           priceText: fmt.price(e.priceAfter),

@@ -15,6 +15,11 @@
       <text class="page-sub">原油市场参考 · 美元 / 桶</text>
     </view>
 
+    <!-- 数据来源：后端挂了回落演示数据时必须看得见 -->
+    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}">
+      <text class="source-bar-text">{{sourceText}}</text>
+    </view>
+
     <text class="delay-badge">{{delayText}}</text>
 
     <view class="market-tabs">

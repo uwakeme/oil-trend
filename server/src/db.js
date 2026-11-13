@@ -49,17 +49,26 @@ function one(text, params) {
   });
 }
 
-/** 在事务里执行一组操作 */
+/**
+ * 在事务里执行一组操作
+ *
+ * ⚠️ pool.connect() 返回的是 **Promise**，不是 client ——
+ * 原来写成 `var client = pool.connect(); client.query(...)`，
+ * 一调用就抛「client.query is not a function」。全项目没有调用点，
+ * 但留着就是个随时会踩的雷。
+ */
 function transaction(fn) {
-  var client = pool.connect();
-  return client.query('BEGIN').then(function () {
-    return fn(client).then(function (result) {
-      return client.query('COMMIT').then(function () { return result; });
-    }).catch(function (err) {
-      return client.query('ROLLBACK').then(function () { throw err; });
-    });
-  }).finally(function () {
-    client.release();
+  return pool.connect().then(function (client) {
+    return client.query('BEGIN')
+      .then(function () { return fn(client); })
+      .then(function (result) {
+        return client.query('COMMIT').then(function () { return result; });
+      })
+      .catch(function (err) {
+        // 回滚本身也可能失败（比如连接断了），别把原始错误盖掉
+        return client.query('ROLLBACK').then(function () { throw err; }, function () { throw err; });
+      })
+      .finally(function () { client.release(); });
   });
 }
 

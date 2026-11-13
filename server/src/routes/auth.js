@@ -7,13 +7,14 @@
 const express = require('express');
 const auth = require('../services/auth');
 const dao = require('../dao');
+const errors = require('../errors');
 
 var router = express.Router();
 
 router.post('/login', function (req, res) {
   var code = req.body && req.body.code;
   if (!code) {
-    res.json({ ok: false, message: '缺少 code', code: 'NO_CODE' });
+    res.json({ ok: false, message: errors.PUBLIC_ERRORS.NO_CODE, code: 'NO_CODE' });
     return;
   }
   auth.login(code).then(function (result) {
@@ -23,7 +24,8 @@ router.post('/login', function (req, res) {
     res.json({ ok: true, data: { token: result.token, openid: result.openid } });
   }).catch(function (err) {
     console.error('[auth] login failed', err.message);
-    res.json({ ok: false, message: err.message || '登录失败', code: err.code || 'LOGIN_FAILED' });
+    // ⚠️ 不透传 err.message：微信返回的 errmsg 里可能带内部细节
+    res.json(errors.publicError(err));
   });
 });
 

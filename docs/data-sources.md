@@ -109,8 +109,18 @@
   价格超出 3–20 元/升合理区间整体转人工核对。
 - **下次调价预测**：解析 `#EA5146` 边框提示 div 的「下次油价X月X日X时调整 /
   预计上调（下调/搁浅）X元/吨（X–X元/升）」。预测写 `oil_windows`，
-  一律 `isOfficial: false`；来源只给整体升幅区间，四个油品共用区间中值，
-  basis 注明非官方、以正式公告为准。页面不写年份，按「早 20 天以上即跨年」推断。
+  一律 `isOfficial: false`；来源只给**整体升幅区间**，所以 `forecast` 存的是区间本身
+  `{direction, literMin, literMax, estimated}` —— 不再把区间中值复制给四个油品
+  （各油品幅度本来就不同，复制等于替来源猜了四个数）。
+  页面显示「预计下调 0.08–0.10 元/升（非官方估算）」。页面不写年份，按「早 20 天以上即跨年」推断。
+- **只有 HTTP，没有 HTTPS**：2026-11-13 实测，`https://www.qiyoujiage.com` 的证书是
+  腾讯 CDN 的通用证书（altnames 里没有该域名），握手直接失败。所以只能走明文 HTTP，
+  抓取层因此必须加固：
+  - 重定向只跟随白名单主机（`www.qiyoujiage.com`），跳去别处直接拒绝；
+  - 跨跳**总时限**（`req.setTimeout` 只是空闲超时，对方慢慢吐数据会不断重置它）；
+  - 入库前交叉校验两道：与**库里上一次真实价**比，落差 >1 元/升不入门（保留旧价并转人工核对）；
+    与 `data/reference-prices.js` 的**各省基准价**比，偏差 >1.5 元/升只记告警不阻断
+    （基准是固定快照，卡太紧每次调价都会误报）。
 - **采集节奏**：价格只在调价日变化，默认 6 小时新鲜期（`freshHours`），
   31 省 3 并发抓取；`regionCode` / `force` 参数可单地区强制重采。
   调度是进程内的（`server/src/scheduler.js`），默认每 30 分钟跑一次。
@@ -118,7 +128,7 @@
   `changeAmount` / `changeAt` 只跟**同来源**的旧价比 —— 演示价不是真实旧价，
   差值没意义；首次采集 `changeAmount` 记 0、`changeAt` 留空，不伪造涨跌。
 - **预测字段**：方向单独存 `oil_windows.forecast_direction`（up / down / flat）。
-  幅度解析不出来时 `forecast` 是空对象，前端显示「预计上调 · 幅度待公布」，
+  幅度解析不出来时 `forecast` 里没有区间，前端显示「预计上调 · 幅度待公布」，
   不能把「未知」当成「持平 0」。
 - **验证**：`node scripts/verify-collector.js`（fixture 回归，价格与
   `data/reference-prices.js` 独立来源逐值比对）；`--live` 追加真实抓取 +

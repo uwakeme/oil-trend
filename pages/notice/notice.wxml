@@ -9,6 +9,11 @@
   </view>
 
   <block wx:else>
+    <!-- 来源提示：后端挂了回落演示数据时必须看得见 -->
+    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}">
+      <text class="source-bar-text">{{sourceText}}</text>
+    </view>
+
     <view class="page-head">
       <text class="page-kicker">PRICE ADJUSTMENT</text>
       <text class="page-title">调价通知</text>
@@ -62,7 +67,6 @@
       </view>
     </view>
 
-    <view class="data-footnote"><text>通知正文与来源为版本演示</text><text class="foot-line">正式版本将提供来源名称与原文链接</text></view>
   </block>
 
   <!-- 通知详情 -->
@@ -85,7 +89,8 @@
       </view>
       <view class="source-box">
         <text class="source-box-title">来源与原文</text>
-        <text class="source-box-text">{{detail.sourceName}} · 发布于 {{detail.publishedText}}</text>
+        <text class="source-box-text">{{detail.sourceLine}}</text>
+        <text wx:if="{{detail.sourceUrl}}" class="source-link" bindtap="onOpenSource">查看原文 ›</text>
       </view>
     </block>
 
@@ -101,6 +106,11 @@
           <text class="info-strip-title">默认不发送预测提醒</text>
           <text class="info-strip-text">预测会随国际行情和计价周期变化，可能反转。想接收预测提醒，可在「提醒」页主动开启。</text>
         </view>
+      </view>
+      <view class="source-box" style="margin-top:24rpx">
+        <text class="source-box-title">来源与原文</text>
+        <text class="source-box-text">{{detail.sourceLine}}</text>
+        <text wx:if="{{detail.sourceUrl}}" class="source-link" bindtap="onOpenSource">查看原文 ›</text>
       </view>
     </block>
 

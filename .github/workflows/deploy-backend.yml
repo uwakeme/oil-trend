@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'server/**'
+      - 'data/reference-prices.js'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
@@ -46,8 +47,12 @@ jobs:
 
       - name: Copy backend to server
         run: |
-          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key -p ${{ secrets.SERVER_PORT || 22 }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "mkdir -p ${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/server ${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/logs"
+          ssh -o StrictHostKeyChecking=no -i /tmp/deploy_key -p ${{ secrets.SERVER_PORT || 22 }} ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} "mkdir -p ${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/server ${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/logs ${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/data"
+          # server/src server/scripts 是后端代码；
+          # data/reference-prices.js 是价格交叉校验的基准（小程序包里不打进去，
+          # 但服务端要用它核对抓到的价格对不对得上）
           scp -o StrictHostKeyChecking=no -i /tmp/deploy_key -P ${{ secrets.SERVER_PORT || 22 }} -r ./server/src ./server/scripts ./server/package.json ./server/package-lock.json ./server/schema.sql ./server/oil-trend-pm2.json ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/server/
+          scp -o StrictHostKeyChecking=no -i /tmp/deploy_key -P ${{ secrets.SERVER_PORT || 22 }} ./data/reference-prices.js ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/data/
 
       - name: Deploy to server via SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -70,11 +75,16 @@ jobs:
             if [ ! -f "${DEPLOY_DIR}/server/.env" ]; then
               echo "DATABASE_URL=${DATABASE_URL}" > ${DEPLOY_DIR}/server/.env
               echo ">> 已创建初始 .env（仅含 DATABASE_URL）"
-              echo ">> 请手动补充 WX_APP_ID / WX_APP_SECRET / OIL_SUBSCRIBE_TEMPLATE_ID / OIL_TOKEN_SECRET，否则登录与订阅消息不可用"
+              echo ">> 请手动补充 WX_APP_ID / WX_APP_SECRET / OIL_SUBSCRIBE_TEMPLATE_ID"
             fi
 
-            echo "停止旧服务..."
-            pm2 delete oil-trend-server 2>/dev/null || true
+            # ⚠️ 服务端启动时会强校验 OIL_TOKEN_SECRET（空密钥等于谁都能自签任意 openid）。
+            # 缺这个变量的话新版本会直接拒绝启动 —— 那时候线上就是「旧进程已停、新进程没起」。
+            # 所以在动进程之前先补上：只追加缺失的键，不碰用户已经维护的值。
+            if ! grep -q '^OIL_TOKEN_SECRET=' ${DEPLOY_DIR}/server/.env; then
+              echo ">> .env 里缺 OIL_TOKEN_SECRET，自动生成一个"
+              echo "OIL_TOKEN_SECRET=$(openssl rand -hex 32)" >> ${DEPLOY_DIR}/server/.env
+            fi
 
             echo "安装生产依赖..."
             cd ${DEPLOY_DIR}/server
@@ -82,15 +92,22 @@ jobs:
 
             echo "应用数据库结构..."
             # 用项目自带的 pg 跑，不依赖服务器装 psql。
-            # schema.sql 全是 CREATE TABLE IF NOT EXISTS，重复执行安全。
+            # schema.sql 全是 CREATE TABLE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS，重复执行安全。
+            # ⚠️ 放在重启之前：结构出错要趁旧进程还在的时候失败，
+            # 不然就变成「旧进程已删、新进程没起」了。
             node scripts/apply-schema.js
+
+            echo "预检新版本的配置..."
+            # 启动期强校验（config.validate()）在这里先跑一遍：
+            # 配置不全就在旧进程还活着的时候退出，天然就是回滚。
+            node -e "var c=require('./src/config');var r=c.validate();r.warnings.forEach(function(w){console.warn('⚠ '+w)});if(r.errors.length){console.error('配置不完整：');r.errors.forEach(function(e){console.error('  - '+e)});process.exit(1)}console.log('配置检查通过')"
 
             echo "跳过演示数据灌入..."
             # 生产库不灌演示数据。
             # 之前这里是「库空就自动灌」，结果每次部署都会把演示数据
             # 重新灌回去 —— 手动清理完，下一次部署又白清了。
 
-            echo "用 PM2 启动..."
+            echo "重启 PM2 进程..."
             if [ ! -f "${DEPLOY_DIR}/server/oil-trend-pm2.json" ]; then
               echo "错误: 未找到 oil-trend-pm2.json"
               exit 1
@@ -110,7 +127,14 @@ jobs:
             # 这里按实际部署目录替换掉占位符。
             sed "s#__DEPLOY_DIR__#${DEPLOY_DIR}#g" \
               ${DEPLOY_DIR}/server/oil-trend-pm2.json > ${DEPLOY_DIR}/server/pm2.runtime.json
-            pm2 start ${DEPLOY_DIR}/server/pm2.runtime.json
+            # ⚠️ 原来这里是 `pm2 delete` 再 `pm2 start`：
+            # 中间任何一步失败，线上就是「旧进程没了、新进程没起来」。
+            # 改成 restart：进程条目一直在，PM2 自己管重启与日志。
+            if pm2 describe oil-trend-server > /dev/null 2>&1; then
+              pm2 restart oil-trend-server --update-env
+            else
+              pm2 start ${DEPLOY_DIR}/server/pm2.runtime.json
+            fi
             pm2 save
 
             echo "部署完成"
@@ -128,29 +152,52 @@ jobs:
           script: |
             set -e
             DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}"
-            echo "等待服务启动..."
-            sleep 8
             # 对外域名从服务器上的 .env 读（OIL_API_BASE_URL），没配就退回本地端口
             PUBLIC_URL=$(grep -E '^OIL_API_BASE_URL=' ${DEPLOY_DIR}/server/.env 2>/dev/null | cut -d= -f2- | tr -d "'\"")
-            if [ -z "$PUBLIC_URL" ]; then
-              echo ">> .env 里没配 OIL_API_BASE_URL，改查服务器本地端口"
-              BASE="http://127.0.0.1:3002"
-            else
-              BASE="$PUBLIC_URL"
-            fi
-            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-              --connect-timeout 5 --max-time 15 \
-              "$BASE/health" || echo "000")
-            if [ "$HTTP_CODE" = "200" ]; then
-              echo "✓ 健康检查通过 ($BASE)"
-            else
-              echo "✗ 健康检查失败 (HTTP $HTTP_CODE) —— $BASE"
+
+            # ⚠️ 原来固定 sleep 8 然后探 /health：
+            # /health 只说明进程活着，数据库指错库它照样 200（假绿）；
+            # 固定 8 秒在慢机器上也不够，快的机器上是白等。
+            # 现在轮询 /ready —— 它会真的去连库、并检查配置。
+            LOCAL_BASE="http://127.0.0.1:3002"
+            echo "等待服务就绪（轮询 $LOCAL_BASE/ready）..."
+            READY=0
+            for i in $(seq 1 30); do
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 5 "${LOCAL_BASE}/ready" || echo "000")
+              if [ "$CODE" = "200" ]; then
+                READY=1
+                echo "✓ 服务已就绪（耗时约 $((i * 2)) 秒）"
+                break
+              fi
+              sleep 2
+            done
+            if [ "$READY" != "1" ]; then
+              echo "✗ 服务在 60 秒内没有就绪"
               echo "--- pm2 状态 ---"
               pm2 list || true
               echo "--- 最近日志 ---"
-              pm2 logs oil-trend-server --lines 30 --nostream || true
+              pm2 logs oil-trend-server --lines 40 --nostream || true
               exit 1
             fi
+
+            # 外网域名再探一次：nginx 反代或证书有问题也要看得见
+            if [ -n "$PUBLIC_URL" ]; then
+              echo "检查外网地址 $PUBLIC_URL ..."
+              CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 15 "${PUBLIC_URL}/ready" || echo "000")
+              if [ "$CODE" = "200" ]; then
+                echo "✓ 外网就绪检查通过 ($PUBLIC_URL)"
+              else
+                echo "✗ 外网就绪检查失败 (HTTP $CODE) —— $PUBLIC_URL"
+                pm2 logs oil-trend-server --lines 40 --nostream || true
+                exit 1
+              fi
+            else
+              echo ">> .env 里没配 OIL_API_BASE_URL，跳过外网检查"
+            fi
+
+      - name: Clean up SSH key
+        if: always()
+        run: rm -f /tmp/deploy_key
 
       - name: Summary
         if: always()

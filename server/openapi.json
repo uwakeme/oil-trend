@@ -919,8 +919,45 @@
           },
           "forecast": {
             "type": "object",
-            "description": "预测数据（非官方）",
+            "description": "预测数据（非官方）。只有区间，没有分油品幅度 —— 来源只给整体幅度区间，复制给四个油品等于替来源猜数",
+            "properties": {
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "up",
+                  "down",
+                  "flat"
+                ],
+                "description": "预测方向",
+                "example": "down"
+              },
+              "literMin": {
+                "type": "number",
+                "description": "区间下限（元/升，正数）",
+                "example": 0.08
+              },
+              "literMax": {
+                "type": "number",
+                "description": "区间上限（元/升，正数）",
+                "example": 0.1
+              },
+              "estimated": {
+                "type": "boolean",
+                "description": "true 表示这是估算区间，不是官方幅度",
+                "example": true
+              }
+            },
             "additionalProperties": true
+          },
+          "forecastDirection": {
+            "type": "string",
+            "description": "预测方向；幅度解析不出来时靠它表达方向（前端显示「预计上调 · 幅度待公布」）",
+            "enum": [
+              "up",
+              "down",
+              "flat"
+            ],
+            "example": "down"
           }
         }
       },
@@ -974,9 +1011,23 @@
           },
           "prices": {
             "type": "object",
-            "description": "调整后各油品价格",
+            "description": "调整后各油品价格（before / after / delta）",
             "additionalProperties": {
-              "type": "number"
+              "type": "object",
+              "properties": {
+                "before": {
+                  "type": "number",
+                  "example": 7.36
+                },
+                "after": {
+                  "type": "number",
+                  "example": 7.21
+                },
+                "delta": {
+                  "type": "number",
+                  "example": -0.15
+                }
+              }
             }
           },
           "source": {
@@ -1080,6 +1131,20 @@
                   }
                 ]
               },
+              "latestNotice": {
+                "nullable": true,
+                "description": "与 notice 同一份数据 —— 小程序端读的是这个名字，两个都给是为了不让两端字段漂移",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/NoticeItem"
+                  }
+                ]
+              },
+              "updatedAt": {
+                "type": "string",
+                "description": "本地区价格的最后采集时间，没有则为空串",
+                "example": "2026-11-12T07:20:12.610Z"
+              },
               "publishedAt": {
                 "type": "string",
                 "description": "最新通知的发布时间，没有则为空串",
@@ -1112,7 +1177,8 @@
             "type": "string",
             "enum": [
               "up",
-              "down"
+              "down",
+              "flat"
             ],
             "example": "up"
           },
@@ -1318,10 +1384,22 @@
                 "type": "string",
                 "enum": [
                   "up",
-                  "down"
+                  "down",
+                  "flat"
                 ],
                 "description": "涨跌方向，前端 trend-chart 组件的配色依据",
                 "example": "up"
+              },
+              "code": {
+                "type": "string",
+                "description": "品种代码",
+                "example": "BRENT"
+              },
+              "delayMinutes": {
+                "type": "number",
+                "nullable": true,
+                "description": "行情延时分钟数；算不出来时为 null（界面显示「延时行情」，不显示 undefined）",
+                "example": 12
               },
               "open": {
                 "type": "number",

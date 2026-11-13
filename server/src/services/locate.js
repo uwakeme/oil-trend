@@ -120,7 +120,14 @@ function segmentDistanceKm(pLat, pLng, aLat, aLng, bLat, bLng) {
   return Math.sqrt(ex * ex + ey * ey);
 }
 
-/** 点到某个省所有边界的最短距离（公里） */
+/**
+ * 点到某个省所有边界的最短距离（公里）
+ *
+ * ⚠️ 环是闭合的，最后一条边是 ring[last] → ring[0]。
+ * 原来循环到 ring.length - 1 就停了，这条边没算 ——
+ * 环首尾不重复时（抽稀后的省界数据就是这样），
+ * 「就近归属」的距离会偏大，边界上的点可能被判成不匹配。
+ */
 function distanceToProvinceKm(lat, lng, province) {
   var min = Infinity;
   for (var p = 0; p < province.polygons.length; p++) {
@@ -130,8 +137,10 @@ function distanceToProvinceKm(lat, lng, province) {
     }
     for (var r = 0; r < rings.length; r++) {
       var ring = rings[r];
-      for (var i = 0; i < ring.length - 1; i++) {
-        var d = segmentDistanceKm(lat, lng, ring[i][1], ring[i][0], ring[i + 1][1], ring[i + 1][0]);
+      for (var i = 0; i < ring.length; i++) {
+        var a = ring[i];
+        var b = ring[(i + 1) % ring.length];
+        var d = segmentDistanceKm(lat, lng, a[1], a[0], b[1], b[0]);
         if (d < min) min = d;
       }
     }
@@ -140,6 +149,43 @@ function distanceToProvinceKm(lat, lng, province) {
 }
 
 /* ---------------- 对外 ---------------- */
+
+/**
+ * 中国大陆的大致经纬度范围（含海南、东北、内蒙）。
+ *
+ * ⚠️ 界外坐标（比如误传的 (0,0) 或国外坐标）原来要走完 31 个省的
+ * 多边形距离全量计算才返回「没匹配」—— 同步、阻塞事件循环，
+ * 而这个接口不用登录、也没次数限制，一个脚本就能把 CPU 打满。
+ * 先用外接矩形挡掉绝大部分。
+ */
+var CHINA_BBOX = { minLng: 72, maxLng: 136, minLat: 2, maxLat: 54 };
+
+/**
+ * 结果缓存。
+ *
+ * 用户在同一个地方反复定位（页面重进、onShow 刷新）时，
+ * 坐标几乎一样 —— 缓存住省界计算结果，省掉 31 个省的全量重算。
+ * 坐标保留 3 位小数（约 100 米），够用且不会把缓存撑爆。
+ */
+var CACHE_LIMIT = 500;
+var CACHE = {};
+
+function cacheKey(lat, lng) {
+  return lat.toFixed(3) + ',' + lng.toFixed(3);
+}
+
+function cacheGet(key) {
+  return Object.prototype.hasOwnProperty.call(CACHE, key) ? CACHE[key] : null;
+}
+
+function cacheSet(key, value) {
+  var keys = Object.keys(CACHE);
+  if (keys.length >= CACHE_LIMIT) {
+    // 简单粗暴：满了就清一半
+    keys.slice(0, Math.floor(CACHE_LIMIT / 2)).forEach(function (k) { delete CACHE[k]; });
+  }
+  CACHE[key] = value;
+}
 
 /**
  * 判断经纬度落在哪个省。
@@ -160,6 +206,15 @@ function locateByLatLng(lat, lng) {
   if (latNum < -90 || latNum > 90 || lngNum < -180 || lngNum > 180) {
     return { regionCode: null, regionName: null, city: null, match: 'none', distanceKm: null };
   }
+  // 界外坐标直接返回，别做全量距离计算
+  if (lngNum < CHINA_BBOX.minLng || lngNum > CHINA_BBOX.maxLng ||
+      latNum < CHINA_BBOX.minLat || latNum > CHINA_BBOX.maxLat) {
+    return { regionCode: null, regionName: null, city: null, match: 'none', distanceKm: null };
+  }
+
+  var key = cacheKey(latNum, lngNum);
+  var cached = cacheGet(key);
+  if (cached) return cached;
 
   var index = buildIndex();
 
@@ -169,7 +224,9 @@ function locateByLatLng(lat, lng) {
     if (lngNum < box[0] || lngNum > box[2] || latNum < box[1] || latNum > box[3]) continue;
     for (var p = 0; p < index[i].polygons.length; p++) {
       if (pointInPolygon(lngNum, latNum, index[i].polygons[p])) {
-        return describe(index[i], 'inside', 0);
+        var hit = describe(index[i], 'inside', 0);
+        cacheSet(key, hit);
+        return hit;
       }
     }
   }
@@ -185,10 +242,14 @@ function locateByLatLng(lat, lng) {
     }
   }
   if (best && bestKm <= NEAREST_KM) {
-    return describe(best, 'nearest', Math.round(bestKm * 10) / 10);
+    var near = describe(best, 'nearest', Math.round(bestKm * 10) / 10);
+    cacheSet(key, near);
+    return near;
   }
 
-  return { regionCode: null, regionName: null, city: null, match: 'none', distanceKm: null };
+  var none = { regionCode: null, regionName: null, city: null, match: 'none', distanceKm: null };
+  cacheSet(key, none);
+  return none;
 }
 
 /**

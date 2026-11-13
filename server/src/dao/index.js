@@ -183,18 +183,27 @@ const events = {
     return mapRows(rows);
   },
 
-  async insertMany(list) {
+  /**
+   * 写入调价节点（按 dedup_key 去重）。
+   *
+   * ⚠️ 原来只有 insertMany，每轮采集都会重复插一遍同一个节点 ——
+   * 生产库里这张表永远是空的（采集器压根不写它），走势页的调价节点恒不显示。
+   * 现在采集正式公告时同步补写，靠 dedup_key 保证不重复。
+   */
+  async upsertMany(list) {
     if (!list.length) return;
     var values = [];
     var params = [];
     var tuples = list.map(function (item, i) {
-      var b = i * 4;
-      values.push('($' + (b + 1) + '::date, $' + (b + 2) + '::text, $' + (b + 3) + '::jsonb, $' + (b + 4) + '::text)');
-      params.push(item.date, item.title || null, JSON.stringify(item.deltas || {}), item.source || null);
+      var b = i * 5;
+      values.push('($' + (b + 1) + '::text, $' + (b + 2) + '::date, $' + (b + 3) + '::text, $' + (b + 4) + '::jsonb, $' + (b + 5) + '::text)');
+      params.push(item.dedupKey, item.date, item.title || null, JSON.stringify(item.deltas || {}), item.source || null);
       return values[i];
     });
     await db.query(
-      'INSERT INTO oil_adjust_events (date, title, deltas, source) VALUES ' + tuples.join(', '),
+      'INSERT INTO oil_adjust_events (dedup_key, date, title, deltas, source) VALUES ' + tuples.join(', ') + ' ' +
+      'ON CONFLICT (dedup_key) DO UPDATE SET date = EXCLUDED.date, title = EXCLUDED.title, ' +
+      'deltas = EXCLUDED.deltas, source = EXCLUDED.source',
       params
     );
   },
@@ -316,13 +325,44 @@ const notices = {
 
 const windows = {
   async latest() {
-    var row = await db.one('SELECT * FROM oil_windows ORDER BY date DESC LIMIT 1');
+    // 同一天可能有多条（历史脏数据 / 并发写入），取 id 最大的那条，
+    // 只按 date 排序时取到哪条是不确定的。
+    var row = await db.one('SELECT * FROM oil_windows ORDER BY date DESC, id DESC LIMIT 1');
     return toCamel(row);
   },
 
   async latestBySource(source) {
     var row = await db.one('SELECT * FROM oil_windows WHERE source = $1 ORDER BY date DESC LIMIT 1', [source]);
     return toCamel(row);
+  },
+
+  /**
+   * 按 dedup_key（来源::日期）落一条窗口。
+   *
+   * ⚠️ 原来只有「查最新再 update / insert」，多实例并发会插出同日期重复窗口，
+   * 而 latest() 按 date DESC 取哪条不确定。
+   * 现在靠 dedup_key 唯一索引走 upsert，并发下只有一条能落成。
+   */
+  async upsert(doc) {
+    var rows = await db.query(
+      'INSERT INTO oil_windows (dedup_key, date, time, cycle_start, is_official, basis, forecast, forecast_direction, source) ' +
+      'VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9) ' +
+      'ON CONFLICT (dedup_key) DO UPDATE SET date = EXCLUDED.date, time = EXCLUDED.time, ' +
+      'cycle_start = EXCLUDED.cycle_start, is_official = EXCLUDED.is_official, basis = EXCLUDED.basis, ' +
+      'forecast = EXCLUDED.forecast, forecast_direction = EXCLUDED.forecast_direction RETURNING *',
+      [
+        doc.dedupKey,
+        doc.date,
+        doc.time || '24:00',
+        doc.cycleStart || null,
+        !!doc.isOfficial,
+        doc.basis || null,
+        JSON.stringify(doc.forecast || {}),
+        doc.forecastDirection || null,
+        doc.source || null
+      ]
+    );
+    return rows.length ? toCamel(rows[0]) : null;
   },
 
   async update(id, doc) {
@@ -505,16 +545,75 @@ const rules = {
 
 const logs = {
   async listByUser(userId, limit) {
+    // LIMIT 一律内联整数，不走占位符（与其余四处保持一致）。
+    // ⚠️ 这条原来写的是 LIMIT $2 —— pg 其实能按 bigint 推断出来，
+    // 真正的问题不是「会报错」，而是全项目风格不统一、还多一次类型推断风险。
+    var lim = Math.max(0, Math.floor(Number(limit) || 50));
     var rows = await db.query(
-      'SELECT * FROM alert_logs WHERE user_id = $1 ORDER BY time DESC LIMIT $2',
-      [userId, limit || 50]
+      'SELECT * FROM alert_logs WHERE user_id = $1 ORDER BY time DESC LIMIT ' + lim,
+      [userId]
     );
     return mapRows(rows);
   },
 
-  async findByDedupKey(key) {
-    var row = await db.one('SELECT * FROM alert_logs WHERE dedup_key = $1', [key]);
-    return toCamel(row);
+  /**
+   * 是否已经发过同一个事件。
+   *
+   * ⚠️ dedup_key 是**全局**唯一列，查询必须带上 user_id ——
+   * 不带的话，A 用户的 key 能查到 B 用户的记录。
+   */
+  async findByDedupKey(key, userId) {
+    if (userId) {
+      var row = await db.one('SELECT * FROM alert_logs WHERE dedup_key = $1 AND user_id = $2', [key, userId]);
+      return toCamel(row);
+    }
+    var rowAny = await db.one('SELECT * FROM alert_logs WHERE dedup_key = $1', [key]);
+    return toCamel(rowAny);
+  },
+
+  /**
+   * 占位：先占住去重键，再去发消息。
+   *
+   * ⚠️ 原来是「查有没有发过 → 发消息 → 落库」，去重发生在副作用**之后**：
+   * 两个实例同时跑时两边都查不到，都会发一遍，用户收到两条。
+   * 现在先插入占位行，抢到行的人才有资格发 —— 去重前置到副作用之前。
+   *
+   * 返回 null = 这个键已经被别人占过了，直接跳过。
+   *
+   * ⚠️ 这里用「直接插入 + 捕获唯一键冲突」，不用
+   * `ON CONFLICT DO NOTHING RETURNING *`：
+   * pg-mem 在冲突时也会把已有行 RETURN 出来（真库返回 0 行），
+   * 两种引擎行为不一致，自检就测不出「到底有没有抢到」。
+   * 唯一键冲突的错误码是 23505，两边都一样。
+   */
+  async reserve(doc) {
+    try {
+      var rows = await db.query(
+        'INSERT INTO alert_logs (user_id, dedup_key, sent, fail_reason, payload) ' +
+        'VALUES ($1, $2, FALSE, NULL, $3::jsonb) RETURNING *',
+        [
+          doc.userId,
+          doc.dedupKey,
+          JSON.stringify(doc.payload || {})
+        ]
+      );
+      return rows.length ? toCamel(rows[0]) : null;
+    } catch (err) {
+      var msg = String((err && err.message) || '');
+      if ((err && err.code === '23505') || /duplicate key|duplicate/i.test(msg)) {
+        return null;
+      }
+      throw err;
+    }
+  },
+
+  /** 占位之后回填结果：发成功了还是失败了 */
+  async markResult(id, sent, failReason) {
+    var rows = await db.query(
+      'UPDATE alert_logs SET sent = $2, fail_reason = $3 WHERE id = $1 RETURNING *',
+      [id, !!sent, failReason || null]
+    );
+    return rows.length ? toCamel(rows[0]) : null;
   },
 
   async insert(doc) {

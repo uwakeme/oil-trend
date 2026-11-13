@@ -109,13 +109,6 @@ function buildData(opts) {
   };
 }
 
-/** 是否已经发过同一个事件 */
-function alreadySent(dedupKey) {
-  return dao.logs.findByDedupKey(dedupKey).then(function (doc) {
-    return !!doc;
-  });
-}
-
 /**
  * 下发一条订阅消息
  *
@@ -241,18 +234,24 @@ function sendFirstHit(rule, hits, summary) {
       return Promise.resolve(null);
     }
     var hit = hits[index++];
-    return alreadySent(hit.dedupKey).then(function (sent) {
-      if (sent) return step();
+    // ⚠️ 去重要**前置**：先占住去重键，占到的人才有资格发消息。
+    // 原来是「查有没有发过 → 发 → 落库」，去重发生在副作用之后：
+    // 两个实例同时跑时两边都查不到，都会发一遍，用户收到两条。
+    return dao.logs.reserve({
+      userId: rule.userId,
+      dedupKey: hit.dedupKey,
+      payload: { type: hit.type, title: hit.title, price: hit.price, data: hit.data }
+    }).then(function (reserved) {
+      // 占不到 = 这个键已经被人处理过了，换下一条
+      if (!reserved) return step();
       summary.matched++;
       return sendSubscribe(rule.userId, hit.template, hit.data).then(function (result) {
         // 无论成败都要落库：失败了也要记，否则下次会重复尝试同一件事
-        return dao.logs.insert({
-          userId: rule.userId,
-          dedupKey: hit.dedupKey,
-          sent: !!result.sent,
-          failReason: result.sent ? null : (result.reason || 'UNKNOWN'),
-          payload: { type: hit.type, title: hit.title, price: hit.price, data: hit.data }
-        }).then(function () {
+        return dao.logs.markResult(
+          reserved.id,
+          !!result.sent,
+          result.sent ? null : (result.reason || 'UNKNOWN')
+        ).then(function () {
           summary.details.push({
             userId: rule.userId,
             type: hit.type,

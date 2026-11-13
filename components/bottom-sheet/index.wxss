@@ -1,29 +1,16 @@
 @import "../../styles/tokens.wxss";
 @import "../../styles/components.wxss";
 
+/*
+ * 遮罩与面板的基础样式在 styles/components.wxss（唯一真源），
+ * 这里不再重复一份，只保留出场动画。
+ * ⚠️ 基础样式里没有 animation，规则整个删掉动画也会跟着没了。
+ */
 .sheet-mask {
-  position: fixed;
-  left: 0;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  background: rgba(10, 20, 15, .46);
-  z-index: 100;
   animation: maskIn .22s ease both;
 }
 
 .sheet-panel {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 101;
-  max-height: 84vh;
-  overflow-y: auto;
-  background: var(--paper);
-  border-radius: 50rpx 50rpx 0 0;
-  padding: 24rpx 40rpx calc(48rpx + env(safe-area-inset-bottom));
-  box-sizing: border-box;
   animation: sheetUp .25s ease both;
 }
 

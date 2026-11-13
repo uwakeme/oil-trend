@@ -4,7 +4,7 @@
  * 提醒规则同时保存在后端（跨设备生效），这里的本地副本用于
  * 离线可读与「后端未配置」时的降级展示。
  */
-const { DEFAULT_REGION_CODE } = require('../data/regions');
+const { REGIONS, DEFAULT_REGION_CODE } = require('../data/regions');
 
 const PREF_KEY = 'oil_trend_prefs';
 const RULE_KEY = 'oil_trend_alert_rules';
@@ -29,9 +29,23 @@ function write(key, value) {
   }
 }
 
+/**
+ * 地区代码合法性兜底。
+ *
+ * ⚠️ 服务端收到非法 regionCode 会明确报错（INVALID_REGION），
+ * 但客户端这边也要先挡一道：老版本缓存里的脏代码不能直接把整页搞挂，
+ * 也不能让「显示的地区」和「查到的数据」对不上。
+ */
+function isValidRegion(code) {
+  for (var i = 0; i < REGIONS.length; i++) {
+    if (REGIONS[i].code === code) return true;
+  }
+  return false;
+}
+
 function getPrefs() {
   var prefs = read(PREF_KEY, {});
-  if (!prefs.regionCode) prefs.regionCode = DEFAULT_REGION_CODE;
+  if (!prefs.regionCode || !isValidRegion(prefs.regionCode)) prefs.regionCode = DEFAULT_REGION_CODE;
   if (!prefs.fuelId) prefs.fuelId = '92';
   return prefs;
 }
@@ -70,6 +84,7 @@ function getRegionSource() {
 
 /** 记录地区，并标明来源（手动 / 自动） */
 function setRegion(code, source) {
+  if (!isValidRegion(code)) return getPrefs();
   return setPrefs({ regionCode: code, regionSource: source || '' });
 }
 
@@ -105,6 +120,7 @@ function prefsKey(prefs) {
 
 module.exports = {
   getPrefs: getPrefs,
+  isValidRegion: isValidRegion,
   prefsKey: prefsKey,
   setPrefs: setPrefs,
   seedRegionIfNeeded: seedRegionIfNeeded,

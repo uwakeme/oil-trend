@@ -21,7 +21,13 @@ const SOURCES = [
     name: '汽油价格网',
     kind: 'price',
     enabled: true,
+    // ⚠️ 这个站**没有** HTTPS：证书是腾讯 CDN 的通用证书，
+    // altnames 里没有 qiyoujiage.com，https 握手直接失败（2026-11-13 实测）。
+    // 只能走 HTTP —— 所以抓取层必须做交叉校验兜底（见 collector.js 的 saveRegionPrices）。
     url: 'http://www.qiyoujiage.com/',
+    // 允许跳转的主机：站点改版跳到 CDN 域名时还能跟上，
+    // 跳去别处就拒绝（避免请求被引到不可控的服务器）。
+    allowedHosts: ['www.qiyoujiage.com'],
     headers: {
       // 站点按 UA 做移动版跳转，用桌面浏览器 UA 拿 PC 页（参考 60s / OilPrice 的做法）
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'

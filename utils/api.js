@@ -18,6 +18,38 @@ function preferBackend() {
 }
 
 /**
+ * 最近一次取数的来源状态。
+ *
+ * 页面据此渲染「当前为演示数据 / 后端连接失败」的提示条 ——
+ * 后端整体故障时必须看得见，不能静默换成演示数据装没事。
+ */
+var lastStatus = {
+  mode: 'demo',
+  name: '',
+  note: '',
+  transport: '',
+  fellBack: false,
+  reason: ''
+};
+
+function sourceStatus() {
+  return lastStatus;
+}
+
+function rememberStatus(data) {
+  var src = (data && data.source) || {};
+  lastStatus = {
+    mode: src.mode || 'demo',
+    name: src.name || '',
+    note: src.note || '',
+    transport: src.transport || '',
+    fellBack: !!src.fellBack,
+    reason: src.reason || ''
+  };
+  return lastStatus;
+}
+
+/**
  * 给返回值打上来源标记。
  *
  * 「后端配好了」不等于「这次数据来自后端」——
@@ -32,24 +64,49 @@ function preferBackend() {
  *   2. 后端自己标的 —— 比如服务端库里还没采集到真实行情，
  *      接口返回的是演示曲线但如实标了 mode=demo。
  * 所以后端已经标了 demo 就尊重它，别覆盖成 live。
+ *
+ * extra.fellBack：这次是不是「本来要用后端、后端没给成，退回演示源」。
+ * extra.reason  ：退回来的原因（给页面做友好文案用，不暴露技术细节）。
  */
-function stampSource(data, mode, transport) {
+function stampSource(data, mode, transport, extra) {
+  var opt = extra || {};
   if (data && typeof data === 'object') {
     var existing = data.source || {};
     var finalMode = existing.mode === 'demo' ? 'demo' : mode;
-    data.source = Object.assign({}, existing, { mode: finalMode, transport: transport });
+    data.source = Object.assign({}, existing, {
+      mode: finalMode,
+      transport: transport,
+      fellBack: !!opt.fellBack,
+      reason: opt.reason || ''
+    });
   }
+  rememberStatus(data);
   return data;
 }
 
 /**
  * 后端返回必须带上业务字段才算成功。
  * 只判断「是不是 object」的话，后端返回 {} 会让页面拿到空数据却显示正常。
+ *
+ * keys     —— 必须**存在**的字段（null / undefined 视为缺）
+ * valueKeys —— 必须**有值**的字段：
+ *   数组要非空，数字要有限。
+ *
+ * ⚠️ 两类字段要分开：通知列表为空是合法的（后端确实还没有正式公告），
+ * 整包回落演示数据反而会显示假的通知；而行情曲线为空就是没数据，
+ * 必须回落并如实标成演示源，不能让人以为「实时行情但曲线空白」。
  */
-function hasExpected(data, keys) {
+function hasExpected(data, keys, valueKeys) {
   if (!keys || !keys.length) return true;
   for (var i = 0; i < keys.length; i++) {
     if (data[keys[i]] === undefined || data[keys[i]] === null) return false;
+  }
+  if (!valueKeys || !valueKeys.length) return true;
+  for (var j = 0; j < valueKeys.length; j++) {
+    var v = data[valueKeys[j]];
+    if (v === undefined || v === null) return false;
+    if (Array.isArray(v) && v.length === 0) return false;
+    if (typeof v === 'number' && !isFinite(v)) return false;
   }
   return true;
 }
@@ -60,20 +117,30 @@ function hasExpected(data, keys) {
  * @param {object}   payload     业务参数（必须含 action）
  * @param {Function} localFn     本地兜底实现
  * @param {Array}    expectKeys  后端返回必须包含的业务字段
+ * @param {Array}    valueKeys   后端返回必须有值的字段（数组非空 / 数字有限）
  */
-function fetchWithFallback(name, payload, localFn, expectKeys) {
+function fetchWithFallback(name, payload, localFn, expectKeys, valueKeys) {
   if (preferBackend()) {
     return cloud.callFunction(name, payload).then(function (data) {
-      if (data && typeof data === 'object' && hasExpected(data, expectKeys)) {
+      if (data && typeof data === 'object' && hasExpected(data, expectKeys, valueKeys)) {
         return stampSource(data, 'live', cloud.backendName());
       }
-      return stampSource(localFn(), 'demo', '本地演示源（后端返回数据不完整）');
+      return stampSource(localFn(), 'demo', '本地演示源（后端返回数据不完整）', {
+        fellBack: true,
+        reason: '后端返回的数据不完整，已临时使用演示数据'
+      });
     }).catch(function (err) {
       return stampSource(localFn(), 'demo',
-        '本地演示源（后端调用失败：' + (err && err.message ? err.message : '未知原因') + '）');
+        '本地演示源（后端调用失败：' + (err && err.message ? err.message : '未知原因') + '）', {
+          fellBack: true,
+          reason: '后端连接失败，已临时使用演示数据'
+        });
     });
   }
-  return Promise.resolve(stampSource(localFn(), 'demo', '本地演示源（未配置后端）'));
+  return Promise.resolve(stampSource(localFn(), 'demo', '本地演示源（未配置后端）', {
+    fellBack: false,
+    reason: ''
+  }));
 }
 
 /** 地区列表 */
@@ -109,7 +176,7 @@ function locate(lat, lng) {
 function getHome(regionCode, fuelId) {
   return fetchWithFallback('oilApi', { action: 'home', regionCode: regionCode, fuelId: fuelId }, function () {
     return demo.getHome(regionCode, fuelId);
-  }, ['prices', 'window']);
+  }, ['prices', 'window'], ['prices']);
 }
 
 /** 走势数据 */
@@ -121,10 +188,16 @@ function getTrend(regionCode, fuelId, period) {
     period: period
   }, function () {
     return demo.getTrend(regionCode, fuelId, period);
-  }, ['points']);
+  }, ['points'], ['points']);
 }
 
-/** 调价通知数据 */
+/**
+ * 调价通知数据
+ *
+ * ⚠️ 通知列表**允许为空**：后端确实还没有正式公告时就是空数组，
+ * 这时不能回落演示数据 —— 那会凭空造出几条假的调价通知。
+ * 所以这里不校验数组长度。
+ */
 function getNotices(regionCode, filter, fuelId) {
   return fetchWithFallback('oilApi', {
     action: 'notices',
@@ -140,7 +213,7 @@ function getNotices(regionCode, filter, fuelId) {
 function getMarket(symbol, period) {
   return fetchWithFallback('oilApi', { action: 'market', symbol: symbol, period: period }, function () {
     return demo.getMarket(symbol, period);
-  }, ['price', 'points']);
+  }, ['price', 'points'], ['points']);
 }
 
 /* ---------- 提醒规则与记录 ---------- */
@@ -149,8 +222,10 @@ function getAlertRules() {
   if (preferBackend()) {
     return cloud.callFunction('oilApi', { action: 'rules.list' }).then(function (data) {
       if (data && Array.isArray(data.rules)) return data.rules;
+      rememberStatus({ source: { mode: 'demo', transport: '本地演示源（后端返回数据不完整）', fellBack: true, reason: '后端返回的数据不完整，已临时使用演示数据' } });
       return store.getRules();
     }).catch(function () {
+      rememberStatus({ source: { mode: 'demo', transport: '本地演示源（后端调用失败）', fellBack: true, reason: '后端连接失败，已临时使用本地记录' } });
       return store.getRules();
     });
   }
@@ -180,8 +255,10 @@ function getAlertHistory() {
   if (preferBackend()) {
     return cloud.callFunction('oilApi', { action: 'history.list' }).then(function (data) {
       if (data && Array.isArray(data.history)) return data.history;
+      rememberStatus({ source: { mode: 'demo', transport: '本地演示源（后端返回数据不完整）', fellBack: true, reason: '后端返回的数据不完整，已临时使用演示数据' } });
       return localHistory();
     }).catch(function () {
+      rememberStatus({ source: { mode: 'demo', transport: '本地演示源（后端调用失败）', fellBack: true, reason: '后端连接失败，已临时使用本地记录' } });
       return localHistory();
     });
   }
@@ -204,6 +281,7 @@ module.exports = {
   getAlertRules: getAlertRules,
   saveAlertRules: saveAlertRules,
   getAlertHistory: getAlertHistory,
+  sourceStatus: sourceStatus,
   cloudReady: cloud.isReady,
   cloudError: cloud.lastError
 };

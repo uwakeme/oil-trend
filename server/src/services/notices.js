@@ -11,11 +11,41 @@ const query = require('./query');
 
 var NOTICE_PAGE = 20;
 
+/**
+ * 通知详情里的「调整后零售价」。
+ *
+ * 采集入库时不存这张表（各地挂牌价是采集来的，公告里并没有写），
+ * 这里只在「公告已生效」时用当前价倒推：
+ *   after  = 当前挂牌价（已经包含这次调整）
+ *   before = after - 本次调整幅度
+ * 还没生效的公告不倒推 —— 那时当前价里还没有这次调整，倒推出来是错的。
+ * 倒推不出来就留空，界面显示「暂无价格」，不编数字。
+ */
+function noticePricesOf(notice, priceMap, today) {
+  if (notice.prices && Object.keys(notice.prices).length) return notice.prices;
+  if (notice.kind !== 'official') return {};
+  var executeAt = String(notice.executeAt || '').slice(0, 10);
+  if (!executeAt || executeAt > today) return {};
+  var out = {};
+  Object.keys(priceMap).forEach(function (fuelId) {
+    var delta = (notice.changes || {})[fuelId];
+    if (typeof delta !== 'number') return;
+    var after = Number(priceMap[fuelId]);
+    if (!isFinite(after)) return;
+    out[fuelId] = {
+      before: Math.round((after - delta) * 100) / 100,
+      after: after,
+      delta: delta
+    };
+  });
+  return out;
+}
+
 function actionNotices(payload) {
   var regionCode = payload.regionCode || shared.DEFAULT_REGION_CODE;
   var filter = payload.filter || 'official';
   var skip = Number(payload.skip) || 0;
-  var region = shared.regionByCode(regionCode);
+  var region = query.resolveRegion(regionCode);
 
   return Promise.all([
     dao.notices.listPublic(filter, NOTICE_PAGE, skip),
@@ -30,6 +60,7 @@ function actionNotices(payload) {
 
     var priceMap = {};
     prices.forEach(function (p) { priceMap[p.fuelId] = p.price; });
+    var today = query.todayStr();
 
     return {
       region: { code: region.code, fullName: region.name + ' · ' + region.city },
@@ -50,7 +81,7 @@ function actionNotices(payload) {
           executeAt: n.executeAt,
           changes: n.changes || {},
           summary: n.summary || '',
-          prices: n.prices || {},
+          prices: noticePricesOf(n, priceMap, today),
           source: n.source || {}
         };
       }),
@@ -93,6 +124,26 @@ function sliceSeries(series, period) {
   return out.length ? out : list.slice(-1);
 }
 
+/**
+ * 延时分钟数。
+ *
+ * ⚠️ 后端原来不返回这个字段，前端直接拼「延时 undefined 分钟」。
+ * 行情源给的 quoteTime 是报价时刻，延时 = 现在 - 报价时刻；
+ * 算不出来就返回 null（界面显示「延时行情」，不显示 undefined）。
+ */
+function delayMinutesOf(doc) {
+  if (!doc || !doc.delayed) return 0;
+  var t = Date.parse(doc.quoteTime || '');
+  if (!isFinite(t)) return null;
+  var minutes = Math.round((Date.now() - t) / 60000);
+  return minutes > 0 ? minutes : null;
+}
+
+/** 品种代码：BRENT / WTI */
+function marketCode(symbol) {
+  return symbol === 'wti' ? 'WTI' : 'BRENT';
+}
+
 function actionMarket(payload) {
   var symbol = payload.symbol === 'wti' ? 'wti' : 'brent';
   var period = payload.period || '1d';
@@ -105,6 +156,7 @@ function actionMarket(payload) {
       return {
         symbol: fallback.symbol,
         name: fallback.name,
+        code: marketCode(symbol),
         price: fallback.price,
         changeAmount: fallback.changeAmount,
         changePercent: fallback.changePercent,
@@ -116,6 +168,7 @@ function actionMarket(payload) {
         points: fallback.points,
         axis: fallback.axis,
         delayed: fallback.delayed,
+        delayMinutes: delayMinutesOf({ delayed: fallback.delayed, quoteTime: fallback.quoteTime }),
         quoteTime: fallback.quoteTime,
         // mode 必须标 demo：前端靠它判断该不该显示「（演示数据）」，
         // 以及该不该把延迟状态写成「实时」。
@@ -130,15 +183,18 @@ function actionMarket(payload) {
       return { date: p.date, value: p.value !== undefined ? p.value : p.price };
     });
 
+    var changeAmount = doc.changeAmount || 0;
     return {
       symbol: doc.symbol,
       name: doc.name || doc.symbol,
+      code: marketCode(doc.symbol),
       price: doc.price,
-      changeAmount: doc.changeAmount || 0,
+      changeAmount: changeAmount,
       changePercent: doc.changePercent || 0,
       // direction 是前端 trend-chart 的必传属性（String），
       // 演示源 data/markets.js 也有，这里必须补上，否则前端拿到 null。
-      direction: (doc.changeAmount || 0) < 0 ? 'down' : 'up',
+      // 三态：涨跌额为 0 是「持平」，不能染成上涨。
+      direction: changeAmount < 0 ? 'down' : (changeAmount > 0 ? 'up' : 'flat'),
       open: doc.open,
       prevClose: doc.prevClose,
       high: doc.high,
@@ -146,6 +202,7 @@ function actionMarket(payload) {
       points: points,
       axis: shared.marketAxisLabel(quoteTimeOf(sliced), period === '1d' ? 'time' : 'day'),
       delayed: !!doc.delayed,
+      delayMinutes: delayMinutesOf(doc),
       quoteTime: doc.quoteTime || '',
       source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的国际行情' }
     };

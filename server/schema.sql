@@ -34,8 +34,10 @@ CREATE TABLE IF NOT EXISTS oil_price_history (
 );
 
 -- 调价节点：每次调价一条
+-- dedup_key 用来去重：采集器每轮都会写同一个节点，没有它就会越积越多
 CREATE TABLE IF NOT EXISTS oil_adjust_events (
   id            BIGSERIAL PRIMARY KEY,
+  dedup_key     TEXT,
   date          DATE NOT NULL,
   title         TEXT,
   deltas        JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -64,8 +66,10 @@ CREATE TABLE IF NOT EXISTS oil_notices (
 );
 
 -- 下一轮调价窗口
+-- dedup_key = 来源::日期：多实例并发写同一个窗口时靠它保证只有一条
 CREATE TABLE IF NOT EXISTS oil_windows (
   id            BIGSERIAL PRIMARY KEY,
+  dedup_key     TEXT,
   date          DATE NOT NULL,
   time          TEXT,
   cycle_start   DATE,
@@ -156,6 +160,15 @@ CREATE TABLE IF NOT EXISTS collector_runs (
 ALTER TABLE oil_windows ADD COLUMN IF NOT EXISTS forecast_direction TEXT;
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS target_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS subscribe_used_at TIMESTAMPTZ;
+
+-- 去重键补列 + 唯一索引。
+-- ⚠️ 用「独立列 + 唯一索引」而不是直接给表加 UNIQUE 约束：
+-- 老库里已有的行 dedup_key 是 NULL，Postgres 里多个 NULL 不算冲突，
+-- 加索引不会因为存量重复数据而失败。
+ALTER TABLE oil_adjust_events ADD COLUMN IF NOT EXISTS dedup_key TEXT;
+ALTER TABLE oil_windows ADD COLUMN IF NOT EXISTS dedup_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_events_dedup ON oil_adjust_events (dedup_key);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_windows_dedup ON oil_windows (dedup_key);
 
 -- 查询用的索引
 CREATE INDEX IF NOT EXISTS idx_history_region_date ON oil_price_history (region_code, date);

@@ -17,9 +17,48 @@ var LOCATE_DESC = {
   'no-backend': '服务暂时不可用，请手动选择'
 };
 
-/** 把调价幅度转成展示文案 */
-function changeMeta(amount) {
+/**
+ * 下一轮调价窗口的预测文案。
+ *
+ * 新口径：window.forecast = { direction, literMin, literMax, estimated }，
+ * 方向优先取 window.forecastDirection（后端单独存的方向字段）。
+ *
+ * ⚠️ 幅度没解析出来时只能说「幅度待公布」，
+ * 不能把未知写成「与上次持平」—— 那等于替来源猜了一个幅度。
+ */
+function forecastMeta(windowData) {
+  var win = windowData || {};
+  var forecast = win.forecast || {};
+  var dir = win.forecastDirection || forecast.direction || '';
+
+  // 有区间：方向 + 数字区间
+  if (forecast.estimated === true &&
+    typeof forecast.literMin === 'number' && typeof forecast.literMax === 'number') {
+    var min = forecast.literMin.toFixed(2);
+    var max = forecast.literMax.toFixed(2);
+    if (dir === 'down') return { text: '预计下调 ' + min + '–' + max, direction: 'down', caption: '元/升 · 非官方估算' };
+    if (dir === 'up') return { text: '预计上调 ' + min + '–' + max, direction: 'up', caption: '元/升 · 非官方估算' };
+    return { text: '预计搁浅', direction: 'flat', caption: '非官方' };
+  }
+
+  // 只有方向，没有幅度
+  if (dir === 'up') return { text: '预计上调', direction: 'up', caption: '幅度待公布 · 非官方' };
+  if (dir === 'down') return { text: '预计下调', direction: 'down', caption: '幅度待公布 · 非官方' };
+  return { text: '待公布', direction: 'flat', caption: '方向未定 · 非官方' };
+}
+
+/**
+ * 把调价幅度转成展示文案。
+ *
+ * hasBaseline 表示有可比基线 —— 后端给了 changeAt，也就是知道上次调价日。
+ * 没有基线时涨跌额是 0，那是「还不知道」不是「持平」：
+ * 首次真实采集就是这样，写成「与上次持平」等于替来源猜了一个结论。
+ */
+function changeMeta(amount, hasBaseline) {
   var value = Number(amount) || 0;
+  if (!hasBaseline) {
+    return { text: '暂无调价对比', direction: 'flat', verb: '待公布', value: '--' };
+  }
   if (!value) {
     return { text: '与上次持平', direction: 'flat', verb: '持平', value: '0.00' };
   }
@@ -50,6 +89,8 @@ Page({
     updatedLabel: '',
     sourceName: '',
     sourceNote: '',
+    sourceText: '',
+    sourceWarn: false,
     cloudStatus: '',
     aboutNote: '',
     sheetType: '',
@@ -78,6 +119,19 @@ Page({
       this._prefsKey = key;
       this.setData({ fuelId: prefs.fuelId || '92' });
       this.load(prefs.regionCode);
+    }
+  },
+
+  /**
+   * 切走时把弹层收掉。
+   *
+   * 不复位的话，从别的 tab 切回来会看到上次没关掉的浮层盖在首页上。
+   * 只复位弹层状态 —— _reqSeq、已选地区和油品都留着，
+   * 否则切回来会重复取数、丢掉用户的选择。
+   */
+  onHide() {
+    if (this.data.sheetType) {
+      this.setData({ sheetType: '' });
     }
   },
 
@@ -245,7 +299,8 @@ Page({
       return;
     }
     var prices = (payload.prices || []).map(function (p) {
-      var meta = changeMeta(p.changeAmount);
+      // changeAt 为空 = 没有基线可比（首次采集），0 是未知不是持平
+      var meta = changeMeta(p.changeAmount, !!p.changeAt);
       return Object.assign({}, p, {
         priceText: fmt.price(p.price),
         changeText: meta.text,
@@ -262,22 +317,15 @@ Page({
     if (hero) fuelId = hero.id;
 
     var windowData = payload.window || {};
-    var forecastAmount = (windowData.forecast || {})[fuelId];
-    // 幅度解析不出来时后端给的是空 forecast + 单独的方向字段。
-    // 这时不能套 changeMeta —— 它会把 undefined 当成 0，
-    // 界面就变成「持平」，等于替来源猜了一个幅度。
-    var forecastKnown = forecastAmount !== undefined && forecastAmount !== null;
-    var forecastMeta;
-    if (forecastKnown) {
-      forecastMeta = changeMeta(forecastAmount);
-    } else {
-      var dir = windowData.forecastDirection || '';
-      forecastMeta = {
-        text: dir === 'up' ? '预计上调' : (dir === 'down' ? '预计下调' : '待公布'),
-        direction: dir === 'up' ? 'up' : (dir === 'down' ? 'down' : 'flat'),
-        caption: dir === 'up' ? '幅度待公布 · 非官方' : (dir === 'down' ? '幅度待公布 · 非官方' : '方向未定 · 非官方')
-      };
-    }
+    // 预测统一走 forecastMeta：区间对象 + 方向字段，幅度缺失时只说「待公布」
+    var fc = forecastMeta(windowData);
+
+    // 窗口可能已经过去 —— 来源还没公布下一轮时，库里留着的就是上一轮。
+    // 这时不能还写「下一次调价窗口 · 距窗口 -1 天」，
+    // 也不能把已经失效的预测挂在「下一次」下面。
+    var daysLeft = Number(windowData.daysLeft);
+    if (!isFinite(daysLeft)) daysLeft = 0;
+    var windowExpired = daysLeft < 0;
 
     var trendRaw = (payload.trend30 || {})[fuelId] || { points: [], labels: [] };
     var points = trendRaw.points || [];
@@ -287,24 +335,38 @@ Page({
       trendDirection = diff > 0 ? 'up' : (diff < 0 ? 'down' : 'flat');
     }
 
-    var latest = payload.latestNotice || {};
-    var noticeMeta = changeMeta((latest.changes || {})[fuelId]);
+    // 演示源给 latestNotice，后端给 notice —— 两个字段名都认
+    var latest = payload.latestNotice || payload.notice || {};
+    var noticeChanges = latest.changes || {};
+    // 幅度缺失时不能拿 0 顶上：那是替来源猜了一个幅度
+    var noticeDelta = noticeChanges[fuelId];
+    var noticeKnown = typeof noticeDelta === 'number' && isFinite(noticeDelta);
+    // 通知自己的幅度是公告里写明的，基线一定存在
+    var noticeMeta = noticeKnown
+      ? changeMeta(noticeDelta, true)
+      : { text: '幅度待公布', direction: 'flat', verb: '待公布', value: '--' };
+
     var noticePrices = prices.map(function (p) {
-      var delta = (latest.changes || {})[p.id] || 0;
-      var meta = changeMeta(delta);
+      var delta = noticeChanges[p.id];
+      var known = typeof delta === 'number' && isFinite(delta);
       return {
         id: p.id,
         name: p.name,
         priceText: fmt.price(p.price),
-        direction: meta.direction,
-        deltaText: (delta > 0 ? '+' : delta < 0 ? '-' : '') + Math.abs(delta).toFixed(2)
+        direction: known ? (delta < 0 ? 'down' : (delta > 0 ? 'up' : 'flat')) : 'flat',
+        deltaText: known ? ((delta > 0 ? '+' : delta < 0 ? '-' : '') + Math.abs(delta).toFixed(2)) : '--'
       };
     });
 
     var executeDate = String(latest.executeAt || '');
     var dayParts = executeDate.slice(0, 10).split('-');
+    var executeTime = executeDate.slice(11, 16);
 
     var source = payload.source || {};
+    var srcLine = fmt.sourceLine(source);
+    // 通知的来源名用通知自己的：整体来源和通知来源不是一回事
+    var noticeSourceName = ((latest.source && latest.source.name) || source.name || '未标注来源') +
+      (source.mode === 'demo' ? '（演示数据）' : '');
 
     this.setData({
       loading: false,
@@ -315,16 +377,20 @@ Page({
       hero: hero,
       window: {
         dateText: fmt.cnDate(windowData.date) + ' ' + (windowData.time || ''),
-        daysLeft: windowData.daysLeft
+        daysLeft: daysLeft,
+        passedDays: Math.abs(daysLeft),
+        expired: windowExpired,
+        titleText: windowExpired ? '上一轮调价窗口' : '下一次调价窗口'
       },
-      forecast: {
-        text: forecastKnown
-          ? (forecastAmount < 0 ? '↓ ' : forecastAmount > 0 ? '↑ ' : '') + Math.abs(forecastAmount || 0).toFixed(2)
-          : forecastMeta.text,
-        direction: forecastMeta.direction,
-        // 幅度未知时单位不该写「元/升」，改成说明文案
-        caption: forecastMeta.caption || (fuelId + '# · 元/升 · 非官方')
-      },
+      forecast: windowExpired
+        // 窗口已经过去，挂在下面的预测早就失效了，不展示
+        ? { text: '本轮窗口已过', direction: 'flat', caption: '新一轮窗口公布后显示预测' }
+        : {
+          text: fc.text,
+          direction: fc.direction,
+          // 幅度未知时单位不该写「元/升」，改成说明文案
+          caption: fc.caption
+        },
       trend: {
         points: points,
         labels: trendRaw.labels || [],
@@ -339,20 +405,25 @@ Page({
         verb: noticeMeta.verb,
         value: noticeMeta.value,
         changeDirection: noticeMeta.direction,
-        executeText: fmt.fullDate(executeDate.slice(0, 10)) + ' ' + (executeDate.slice(11, 16) || '') + ' 时执行。以下为本地各油品调整后的零售价格。',
+        executeText: executeDate
+          ? (fmt.fullDate(executeDate.slice(0, 10)) + ' ' + executeTime + ' 时执行。以下为本地各油品调整后的零售价格。')
+          : '执行日期待公布。以下为本地各油品调整后的零售价格。',
         prices: noticePrices,
-        sourceName: (source.name || '未标注来源') + (source.mode === 'demo' ? '（演示数据）' : ''),
+        sourceName: noticeSourceName,
         // 后端通知可能没有发布时间，缺了就不写「发布于 …」，别留个空壳
         publishedText: fmt.dateTime(latest.publishedAt),
-        sourceLine: (source.name || '未标注来源') + (source.mode === 'demo' ? '（演示数据）' : '') +
+        sourceLine: noticeSourceName +
           (latest.publishedAt ? (' · 发布于 ' + fmt.dateTime(latest.publishedAt)) : '')
       },
-      updatedLabel: fmt.dateTime(payload.updatedAt) + ' 更新',
+      // 后端没给更新时间就不写，别显示成「 更新」
+      updatedLabel: payload.updatedAt ? (fmt.dateTime(payload.updatedAt) + ' 更新') : '',
       sourceName: source.name || '未知来源',
       sourceNote: source.note || '',
+      sourceText: srcLine.text,
+      sourceWarn: srcLine.warn,
       cloudStatus: source.mode === 'live'
-        ? ('本次数据来自' + (source.name || source.transport || '后端服务'))
-        : ('本次数据来自' + (source.transport || '本地演示源')),
+        ? '本次数据来自服务端采集'
+        : '当前显示演示数据，非实时行情',
       aboutNote: '国内成品油价格按调价节点展示，不代表实时成交价。国际原油仅作市场参考，与国内零售价之间存在税费与定价周期差异。'
     });
   },

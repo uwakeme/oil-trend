@@ -28,6 +28,8 @@ Page({
     window: {},
     sync: {},
     notices: [],
+    sourceText: '',
+    sourceWarn: false,
     sheetVisible: false,
     sheetKind: 'official',
     detail: {}
@@ -52,7 +54,11 @@ Page({
   },
 
   onPullDownRefresh() {
+    // 无论成功失败都要停掉下拉刷新动画：
+    // 只在 then 里停的话，请求被后来的请求顶掉时会一直转圈。
     this.load().then(function () {
+      wx.stopPullDownRefresh();
+    }).catch(function () {
       wx.stopPullDownRefresh();
     });
   },
@@ -60,10 +66,18 @@ Page({
   load() {
     var self = this;
     var prefs = store.getPrefs();
+    // 请求序号：切筛选条件会连发请求，先发的那轮可能后到，
+    // 不能让它把新筛选条件的结果盖回去。
+    this._reqSeq = (this._reqSeq || 0) + 1;
+    var seq = this._reqSeq;
     this.setData({ loading: true, loadError: '' });
     return api.getNotices(prefs.regionCode, this.data.filter, prefs.fuelId)
-      .then(function (payload) { self.applyNotices(payload); })
+      .then(function (payload) {
+        if (seq !== self._reqSeq) return;
+        self.applyNotices(payload);
+      })
       .catch(function () {
+        if (seq !== self._reqSeq) return;
         self.setData({ loading: false, loadError: '调价通知加载失败，请稍后重试' });
       });
   },
@@ -80,7 +94,10 @@ Page({
 
     var notices = (payload.notices || []).map(function (n) {
       var fuelId = prefsFuelId();
-      var meta = changeMeta((n.changes || {})[fuelId]);
+      var delta = (n.changes || {})[fuelId];
+      // 幅度缺失时不能拿 0 顶上：那等于替来源猜了一个幅度
+      var known = typeof delta === 'number' && isFinite(delta);
+      var meta = known ? changeMeta(delta) : { text: '待公布', direction: 'flat' };
       return {
         id: n.id,
         kind: n.kind,
@@ -99,9 +116,13 @@ Page({
       return self.data.fuelId || '92';
     }
 
+    var srcLine = fmt.sourceLine(payload.source);
+
     this.setData({
       loading: false,
       loadError: '',
+      sourceText: srcLine.text,
+      sourceWarn: srcLine.warn,
       window: {
         dateText: fmt.cnDate(win.date),
         time: win.time,
@@ -160,22 +181,64 @@ Page({
       return map[key] || key + '#';
     }
 
+    var rawSource = raw.source || {};
+    var rawDelta = (raw.changes || {})[fuelId];
+    var rawKnown = typeof rawDelta === 'number' && isFinite(rawDelta);
+    var rawMeta = rawKnown ? changeMeta(rawDelta) : { verb: '待公布', direction: 'flat' };
+    var publishedText = fmt.dateTime(raw.publishedAt);
+
     this.setData({
       sheetVisible: true,
       sheetKind: kind,
       detail: {
         title: raw.title,
         summary: raw.summary,
-        verb: changeMeta((raw.changes || {})[fuelId]).verb,
-        direction: changeMeta((raw.changes || {})[fuelId]).direction,
+        verb: rawMeta.verb,
+        direction: rawMeta.direction,
         prices: prices,
-        sourceName: (raw.source && raw.source.name) || '未标注来源',
-        publishedText: fmt.dateTime(raw.publishedAt)
+        sourceName: rawSource.name || '未标注来源',
+        // 原文链接：没有就不给，别留个点不动的空壳
+        sourceUrl: rawSource.url || '',
+        sourceLine: (rawSource.name || '未标注来源') +
+          (publishedText ? (' · 发布于 ' + publishedText) : ''),
+        publishedText: publishedText
+      }
+    });
+  },
+
+  /**
+   * 「查看原文」。
+   *
+   * 小程序的 navigator 只能跳站内页，打不开外部网页，
+   * 所以把链接复制到剪贴板，用户自己去浏览器打开。
+   */
+  onOpenSource() {
+    var url = this.data.detail.sourceUrl;
+    if (!url) return;
+    wx.setClipboardData({
+      data: url,
+      success: function () {
+        wx.showToast({ title: '原文链接已复制', icon: 'none' });
+      },
+      fail: function () {
+        wx.showToast({ title: '复制失败，请手动复制链接', icon: 'none' });
       }
     });
   },
 
   onSheetClose() {
     this.setData({ sheetVisible: false });
+  },
+
+  /**
+   * 切走时把弹层收掉。
+   *
+   * 只复位弹层状态 —— _reqSeq、已选油品都留着，
+   * 否则切回来会重复取数、丢掉用户的选择。
+   */
+  onHide() {
+    if (this.data.sheetVisible) {
+      this.setData({ sheetVisible: false });
+    }
   }
 });
