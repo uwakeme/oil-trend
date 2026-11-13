@@ -56,6 +56,10 @@ Page({
     periods: PERIODS,
     tabs: [],
     market: {},
+    // 点少于 2 个画不出曲线：不渲染图表组件，改显示空态文案
+    hasChart: false,
+    // 后端明确标记「合法为空」时的空态文案
+    dataEmpty: false,
     delayText: '',
     sourceNote: '',
     sourceText: '',
@@ -77,11 +81,8 @@ Page({
   onPullDownRefresh() {
     // 无论成功、失败还是被竞态丢弃，都要停掉下拉刷新，
     // 否则菊花会一直转。
-    this.load().then(function () {
-      wx.stopPullDownRefresh();
-    }, function () {
-      wx.stopPullDownRefresh();
-    });
+    var stop = function () { wx.stopPullDownRefresh(); };
+    this.load().then(stop, stop);
   },
 
   load() {
@@ -114,7 +115,8 @@ Page({
       self.applyMarket(map[symbol], map.brent, map.wti);
     }).catch(function () {
       if (seq !== self._reqSeq) return;
-      self.setData({ loading: false, loadError: '行情数据加载失败，请稍后重试' });
+      // 能走到这里说明后端失败之后本地兜底也出错了 —— 那是数据源本身的问题
+      self.setData({ loading: false, loadError: '行情数据读取失败，请稍后重试' });
     });
   },
 
@@ -149,6 +151,11 @@ Page({
     var code = main.code || (symbol === 'wti' ? 'WTI' : 'BRENT');
     // 来源提示条：后端挂了回落演示数据时必须是 warn 样式
     var sourceLine = fmt.sourceLine(main.source);
+    // 后端明确说「合法为空」（还没采到行情）：显示空态，不回落演示数据
+    var dataEmpty = main.empty === true;
+    var points = dataEmpty ? [] : (main.points || []);
+    // 只有一个点画不出曲线（canvas 只会画出一个孤点）
+    var hasChart = points.length >= 2;
 
     this.setData({
       loading: false,
@@ -167,9 +174,11 @@ Page({
         lowText: fmt.price(main.low),
         quoteTime: main.quoteTime,
         delayText: delayText,
-        points: main.points || [],
-        axis: main.axis || []
+        points: points,
+        axis: dataEmpty ? [] : (main.axis || [])
       },
+      hasChart: hasChart,
+      dataEmpty: dataEmpty,
       delayText: isDemo ? '演示数据' : timelinessText(main, '行情'),
       sourceNote: (main.source && main.source.note) || '',
       sourceText: sourceLine.text,

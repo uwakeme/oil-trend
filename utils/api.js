@@ -6,6 +6,9 @@
  *   2. 后端不可用 / 调用失败 / 返回为空 → 自动回落本地演示数据源；
  *   3. 每次取数都会回报来源，页面据此如实展示。
  *
+ * ⚠️ 这里没有「全局来源状态」：并发请求谁先返回谁覆盖，判定必然漂。
+ * 来源一律随 payload.source 走，页面只认自己那份 payload。
+ *
  * 换数据来源只需要改后端（server/），本文件与页面都不用动。
  */
 const config = require('../config/index');
@@ -18,35 +21,18 @@ function preferBackend() {
 }
 
 /**
- * 最近一次取数的来源状态。
+ * 来源 mode 白名单。
  *
- * 页面据此渲染「当前为演示数据 / 后端连接失败」的提示条 ——
- * 后端整体故障时必须看得见，不能静默换成演示数据装没事。
+ * 后端给的是 'server'（真实采集）/ 'demo'（服务端自己回落演示），
+ * 小程序内部统一用 'live' 表示真实数据。
+ *
+ * ⚠️ 其它 mode 一律原样保留 —— 不认识的 mode 不能当成 live，
+ * 那会把「来源不明」说成「真实行情」。
  */
-var lastStatus = {
-  mode: 'demo',
-  name: '',
-  note: '',
-  transport: '',
-  fellBack: false,
-  reason: ''
-};
-
-function sourceStatus() {
-  return lastStatus;
-}
-
-function rememberStatus(data) {
-  var src = (data && data.source) || {};
-  lastStatus = {
-    mode: src.mode || 'demo',
-    name: src.name || '',
-    note: src.note || '',
-    transport: src.transport || '',
-    fellBack: !!src.fellBack,
-    reason: src.reason || ''
-  };
-  return lastStatus;
+function normalizeMode(mode) {
+  if (mode === 'demo') return 'demo';
+  if (mode === 'server') return 'live';
+  return mode;
 }
 
 /**
@@ -72,7 +58,9 @@ function stampSource(data, mode, transport, extra) {
   var opt = extra || {};
   if (data && typeof data === 'object') {
     var existing = data.source || {};
-    var finalMode = existing.mode === 'demo' ? 'demo' : mode;
+    // 后端自己标了 mode 就以它为准（server → live，demo → demo）；
+    // 没标才用调用方给的（后端成功 → live，本地兜底 → demo）
+    var finalMode = normalizeMode(existing.mode || mode);
     data.source = Object.assign({}, existing, {
       mode: finalMode,
       transport: transport,
@@ -80,7 +68,6 @@ function stampSource(data, mode, transport, extra) {
       reason: opt.reason || ''
     });
   }
-  rememberStatus(data);
   return data;
 }
 
@@ -97,6 +84,10 @@ function stampSource(data, mode, transport, extra) {
  * 必须回落并如实标成演示源，不能让人以为「实时行情但曲线空白」。
  */
 function hasExpected(data, keys, valueKeys) {
+  // 后端明确标记「合法为空」（该地区还没有历史价、还没采到价格、
+  // 还没有行情）：这是真的没数据，不是「后端没给成」。
+  // 这种情况下不能回落演示源 —— 那会凭空造出一份假数据。
+  if (data && data.empty === true) return true;
   if (!keys || !keys.length) return true;
   for (var i = 0; i < keys.length; i++) {
     if (data[keys[i]] === undefined || data[keys[i]] === null) return false;
@@ -112,6 +103,24 @@ function hasExpected(data, keys, valueKeys) {
 }
 
 /**
+ * 调本地兜底源。
+ *
+ * ⚠️ localFn 只会被调用一次：它自己抛错时直接 reject 出去，
+ * 让页面走失败分支（失败页 + 重试按钮）。
+ * 以前这里把 localFn() 放在 .then 里，外面的 .catch 会把「本地源出错」
+ * 当成「后端连接失败」再兜一次 —— 本地函数跑了两遍，报错原因也是错的。
+ */
+function callLocal(localFn, transport, extra) {
+  var data;
+  try {
+    data = localFn();
+  } catch (err) {
+    return Promise.reject(err);
+  }
+  return Promise.resolve(stampSource(data, 'demo', transport, extra));
+}
+
+/**
  * 后端优先、本地兜底
  * @param {string}   name        接口名（云函数时代的 action 名，现用于路由映射）
  * @param {object}   payload     业务参数（必须含 action）
@@ -119,28 +128,40 @@ function hasExpected(data, keys, valueKeys) {
  * @param {Array}    expectKeys  后端返回必须包含的业务字段
  * @param {Array}    valueKeys   后端返回必须有值的字段（数组非空 / 数字有限）
  */
+/**
+ * 后端优先、本地兜底。
+ *
+ * 三条路径：
+ *   1. 后端给了完整数据 → 用它
+ *   2. 后端调用失败       → 本地演示源（顶部 warn 条说明回落原因）
+ *   3. 后端返回了但不完整 → 本地演示源（文案区分「暂无该数据」与「连接失败」）
+ *
+ * 只有本地兜底自己也出错时才会 reject —— 那时页面显示失败页。
+ */
 function fetchWithFallback(name, payload, localFn, expectKeys, valueKeys) {
-  if (preferBackend()) {
-    return cloud.callFunction(name, payload).then(function (data) {
-      if (data && typeof data === 'object' && hasExpected(data, expectKeys, valueKeys)) {
-        return stampSource(data, 'live', cloud.backendName());
-      }
-      return stampSource(localFn(), 'demo', '本地演示源（后端返回数据不完整）', {
-        fellBack: true,
-        reason: '后端返回的数据不完整，已临时使用演示数据'
-      });
-    }).catch(function (err) {
-      return stampSource(localFn(), 'demo',
-        '本地演示源（后端调用失败：' + (err && err.message ? err.message : '未知原因') + '）', {
-          fellBack: true,
-          reason: '后端连接失败，已临时使用演示数据'
-        });
+  if (!preferBackend()) {
+    return callLocal(localFn, '本地演示源（未配置后端）', {
+      fellBack: false,
+      reason: ''
     });
   }
-  return Promise.resolve(stampSource(localFn(), 'demo', '本地演示源（未配置后端）', {
-    fellBack: false,
-    reason: ''
-  }));
+  return cloud.callFunction(name, payload).then(function (data) {
+    if (data && typeof data === 'object' && hasExpected(data, expectKeys, valueKeys)) {
+      return stampSource(data, 'live', cloud.backendName());
+    }
+    // 后端连上了但没给全 —— 是「后端暂无该数据」，不是「连接失败」
+    return callLocal(localFn, '本地演示源（后端返回数据不完整）', {
+      fellBack: true,
+      reason: '后端暂无该数据，已临时使用演示数据'
+    });
+  }, function () {
+    // 只有后端调用失败才走这里（用 then 的第二个参数，
+    // 不会把上面 localFn 自己的错误再兜一遍）
+    return callLocal(localFn, '本地演示源（后端调用失败）', {
+      fellBack: true,
+      reason: '后端连接失败，已临时使用演示数据'
+    });
+  });
 }
 
 /** 地区列表 */
@@ -222,10 +243,10 @@ function getAlertRules() {
   if (preferBackend()) {
     return cloud.callFunction('oilApi', { action: 'rules.list' }).then(function (data) {
       if (data && Array.isArray(data.rules)) return data.rules;
-      rememberStatus({ source: { mode: 'demo', transport: '本地演示源（后端返回数据不完整）', fellBack: true, reason: '后端返回的数据不完整，已临时使用演示数据' } });
+      // 后端没给规则 → 用本地留存的副本（提醒页的来源条按 home.source 显示，
+      // 这里不再往全局状态里记 —— 那个状态没人消费，还会被并发请求带偏）
       return store.getRules();
     }).catch(function () {
-      rememberStatus({ source: { mode: 'demo', transport: '本地演示源（后端调用失败）', fellBack: true, reason: '后端连接失败，已临时使用本地记录' } });
       return store.getRules();
     });
   }
@@ -255,10 +276,8 @@ function getAlertHistory() {
   if (preferBackend()) {
     return cloud.callFunction('oilApi', { action: 'history.list' }).then(function (data) {
       if (data && Array.isArray(data.history)) return data.history;
-      rememberStatus({ source: { mode: 'demo', transport: '本地演示源（后端返回数据不完整）', fellBack: true, reason: '后端返回的数据不完整，已临时使用演示数据' } });
       return localHistory();
     }).catch(function () {
-      rememberStatus({ source: { mode: 'demo', transport: '本地演示源（后端调用失败）', fellBack: true, reason: '后端连接失败，已临时使用本地记录' } });
       return localHistory();
     });
   }
@@ -281,7 +300,6 @@ module.exports = {
   getAlertRules: getAlertRules,
   saveAlertRules: saveAlertRules,
   getAlertHistory: getAlertHistory,
-  sourceStatus: sourceStatus,
   cloudReady: cloud.isReady,
   cloudError: cloud.lastError
 };

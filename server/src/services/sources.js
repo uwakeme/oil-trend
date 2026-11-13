@@ -121,42 +121,82 @@ const PARSERS = {
   ndrcNotice(raw) {
     var text = String(raw || '').replace(/\s+/g, '');
 
-    // 必须连方向一起抓：之前只抓数字，Number() 恒为正，
-    // 「下调 0.08 元」会被解析成 +0.08，涨跌方向整个反掉。
-    var m = text.match(/每升(?:汽柴油)?(?:价格)?(?:分别)?(上调|下调|调整)([\d.]+)元/);
-    if (!m) return null;
-    var magnitude = Number(m[2]);
-    if (!isFinite(magnitude)) return null;
-    var totalDelta = m[1] === '下调' ? -magnitude : magnitude;
-
-    var executeAt = null;
-    // 公告写的是「24时起」，不是「24:00」—— 只认 24:00 会把日期整个丢掉，
-    // 而没有日期的通知既没法倒计时也没法触发提醒。
-    var m2 = text.match(/(\d{4})年(\d{1,2})月(\d{1,2})日(?:24时|24:00)/);
-    if (m2) {
-      executeAt = m2[1] + '-' + pad(m2[2]) + '-' + pad(m2[3]);
+    // ---- 1. 逐项幅度 ----
+    // 正文里的典型写法是「92号汽油、95号汽油、98号汽油每升下调0.10元」：
+    // 几个油品**共用一个幅度**。所以先把油品标号按位置抓出来，
+    // 再看每个「每升X元」短语前面那一串标号 —— 那一串全都适用这个幅度。
+    //
+    // ⚠️ 之前用「标号 + 每升X元」配对，正则一匹配就吃掉整段，
+    // 于是共用幅度的写法只认得下最后一个油品（98# 的幅度记到 98# 头上，
+    // 92# 与 95# 直接丢了），却仍然判成「逐项解析成功」。
+    var labels = [];
+    var labelRe = /(^|[^0-9])(92|95|98|0)\s*[#号]\s*(?:汽油|柴油)?/g;
+    var lm;
+    while ((lm = labelRe.exec(text)) !== null) {
+      // (^|[^0-9]) 会吃掉标号前面那个字，算真实起点时要补回来。
+      // 前一位不是数字这条约束保证「90号」不会被当成「0号」。
+      labels.push({ fuelId: lm[2], start: lm.index + lm[1].length, end: labelRe.lastIndex });
     }
 
-    // 各油品幅度本来就不同，正文里通常逐个油品写。
-    // 能分别解析就分别解析，解析不出来就整体进人工核对。
     var deltas = {};
-    // ⚠️ 油品标号必须从正文里明确抓到数字（92号 / 95# / 98号 / 0号），
-    // 不能靠「汽油」这种泛称去猜标号 ——
-    // 发改委公告正文写的是「98号汽油每升下调0.10元」，
-    // 按泛称匹配会把 98# 的幅度记到 92# 头上（后一段覆盖前一段）。
-    // 中间的间隔也不允许出现数字、逗号、顿号，
-    // 否则「92号汽油、98号汽油每升下调0.10元」同样会串号。
-    var fuelRe = /((?:\d{1,3}[#号])?(?:汽油|柴油))[^。；;，,、0-9]{0,8}?每升(?:价格)?(上调|下调|调整)([\d.]+)元/g;
-    var hit;
-    while ((hit = fuelRe.exec(text)) !== null) {
-      var fuelKey = fuelKeyOf(hit[1]);
-      if (!fuelKey) continue;   // 泛称「汽油」猜不出标号，不填
-      var value = Number(hit[3]);
-      if (!isFinite(value)) continue;
-      deltas[fuelKey] = hit[2] === '下调' ? -value : value;
+    var ambiguousDirection = false;
+    var conflict = false;
+    var prevEnd = 0;
+    var amountRe = /每升(?:价格)?(上调|下调|调整)([\d.]+)元/g;
+    var am;
+    while ((am = amountRe.exec(text)) !== null) {
+      var dir = am[1];
+      var mag = Number(am[2]);
+      var group = fuelGroupBefore(text, labels, prevEnd, am.index);
+      prevEnd = amountRe.lastIndex;
+      if (!group.length || !isFinite(mag)) continue;
+      if (dir !== '上调' && dir !== '下调') {
+        // 「调整」看不出方向 —— 不猜，整条判存疑。
+        // （之前非「下调」一律取正，「调整0.10元」被当成**上涨**发布）
+        ambiguousDirection = true;
+        continue;
+      }
+      var value = dir === '下调' ? -mag : mag;
+      group.forEach(function (g) {
+        if (deltas[g.fuelId] !== undefined && deltas[g.fuelId] !== value) conflict = true;
+        deltas[g.fuelId] = value;
+      });
     }
-    // 逐项解析出来了才算可信；一个都没解析出来就只剩总幅度，那是猜的
-    var perFuel = Object.keys(deltas).length > 0;
+
+    // ---- 2. 执行日期 ----
+    // 只认「…24时起」这种带生效语义的写法。
+    // 被「上次/上轮/此前」修饰的日期是上一轮的，不能当本轮生效日 ——
+    // 之前不限语境直接取第一个匹配，「上次调价自11月1日24时起」会被当成本轮日期。
+    var executeAt = null;
+    var dateRe = /(\d{4})年(\d{1,2})月(\d{1,2})日(?:24时|24:00)/g;
+    var dm;
+    while ((dm = dateRe.exec(text)) !== null) {
+      var before = text.slice(Math.max(0, dm.index - 16), dm.index);
+      if (/上次|上轮|此前|前次|上一轮/.test(before)) continue;
+      // 取最后一个：本轮生效日总在上一轮之后
+      executeAt = dm[1] + '-' + pad(dm[2]) + '-' + pad(dm[3]);
+    }
+
+    // ---- 3. 总幅度（只用于存疑时的说明文案） ----
+    var totalDelta = null;
+    var totalM = text.match(/每升(?:汽柴油)?(?:价格)?(?:分别)?(上调|下调)([\d.]+)元/);
+    if (totalM) {
+      var tm = Number(totalM[2]);
+      if (isFinite(tm)) totalDelta = totalM[1] === '下调' ? -tm : tm;
+    }
+
+    // ---- 4. 判定 ----
+    var fuelIds = ['92', '95', '98', '0'];
+    // 逐项齐全才算可信：只解析出 1~2 个油品就发布，等于替公告补了缺失的幅度。
+    var perFuel = fuelIds.every(function (f) { return typeof deltas[f] === 'number'; });
+    // 国内成品油是一次整体调整，各油品方向必须一致
+    var hasUp = false;
+    var hasDown = false;
+    Object.keys(deltas).forEach(function (f) {
+      if (deltas[f] > 0) hasUp = true;
+      if (deltas[f] < 0) hasDown = true;
+    });
+    var mixedDirection = hasUp && hasDown;
 
     var titleMatch = text.match(/(?:国内)?成品油价格按机制(?:上调|下调)/);
 
@@ -167,9 +207,16 @@ const PARSERS = {
       delta: totalDelta,
       deltas: deltas,
       perFuel: perFuel,
-      // 机器判定可信：逐项幅度明确 **且** 执行日期明确。
-      // 两者缺一都说明正文写法跟预期不符，整条存疑，不对外发布。
-      reviewStatus: (perFuel && executeAt) ? 'approved' : 'pending',
+      ambiguousDirection: ambiguousDirection,
+      conflict: conflict,
+      mixedDirection: mixedDirection,
+      // 机器判定可信：四油品齐全 + 方向明确 + 执行日期明确，且无自相矛盾。
+      // 任何一项不满足都判存疑，不对外发布。
+      //
+      // ⚠️ 这条门槛定得死是有原因的：approved = 对外宣称「这是官方结果」，
+      // 猜错的代价是提醒金额全错。所以宁可多进人工核对队列。
+      reviewStatus: (perFuel && executeAt && !ambiguousDirection && !conflict && !mixedDirection)
+        ? 'approved' : 'pending',
       raw: raw && raw.length > 4000 ? raw.slice(0, 4000) : raw
     };
   },
@@ -196,6 +243,35 @@ const PARSERS = {
     };
   }
 };
+
+/**
+ * 取「每升X元」短语前面那一串连着的油品标号。
+ *
+ * 「92号汽油、95号汽油、98号汽油每升下调0.10元」里三个标号共用一个幅度，
+ * 所以从最后一个标号往前收，只收「中间只隔着分隔符（、和与及以，空白）」的连续一段。
+ * 隔着别的字就断开 —— 宁可少收，不能把不相干的油品挂到同一个幅度上。
+ *
+ * @param {string} text 正文
+ * @param {Array} labels 已抓到的标号（带 start/end）
+ * @param {number} fromPos 只考虑这个位置之后的标号（= 上一个金额短语的结尾）
+ * @param {number} amountStart 金额短语的起始位置
+ */
+function fuelGroupBefore(text, labels, fromPos, amountStart) {
+  var candidates = labels.filter(function (l) {
+    return l.start < amountStart && l.start >= fromPos;
+  });
+  if (!candidates.length) return [];
+  var group = [candidates[candidates.length - 1]];
+  for (var i = candidates.length - 2; i >= 0; i--) {
+    var gap = text.slice(candidates[i].end, group[0].start);
+    if (/^[、和与及以,，\s]*$/.test(gap)) group.unshift(candidates[i]);
+    else break;
+  }
+  // 最后一个标号到金额短语之间也只能是分隔符，否则说明它们不是同一件事
+  var tail = text.slice(group[group.length - 1].end, amountStart);
+  if (!/^[、和与及以,，\s]*$/.test(tail)) return [];
+  return group;
+}
 
 /**
  * 解析地区页里的下次调价预测（#EA5146 边框的提示 div）。

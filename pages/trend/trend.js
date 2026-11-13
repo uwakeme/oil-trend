@@ -19,6 +19,12 @@ Page({
     ],
     points: [],
     axis: [],
+    // 点少于 2 个画不出曲线：不渲染图表组件，改显示空态文案
+    hasChart: false,
+    // 后端明确标记「合法为空」时的空态文案
+    dataEmpty: false,
+    chartEmptyText: '',
+    chartEmptyHint: '',
     events: [],
     priceText: '--',
     deltaText: '--',
@@ -53,11 +59,8 @@ Page({
   onPullDownRefresh() {
     // 无论成功失败都要停掉下拉刷新动画：
     // 只在 then 里停的话，请求被后来的请求顶掉时会一直转圈。
-    this.load().then(function () {
-      wx.stopPullDownRefresh();
-    }).catch(function () {
-      wx.stopPullDownRefresh();
-    });
+    var stop = function () { wx.stopPullDownRefresh(); };
+    this.load().then(stop, stop);
   },
 
   load() {
@@ -75,7 +78,8 @@ Page({
       })
       .catch(function () {
         if (seq !== self._reqSeq) return;
-        self.setData({ loading: false, loadError: '走势数据加载失败，请稍后重试' });
+        // 能走到这里说明后端失败之后本地兜底也出错了 —— 那是数据源本身的问题
+        self.setData({ loading: false, loadError: '走势数据读取失败，请稍后重试' });
       });
   },
 
@@ -86,6 +90,15 @@ Page({
     }
     var fuelName = (payload.fuel && payload.fuel.name) || '92# 汽油';
     var srcLine = fmt.sourceLine(payload.source);
+    // 后端明确说「合法为空」（该地区还没有历史价）：显示空态，不回落演示数据
+    var dataEmpty = payload.empty === true;
+    var points = dataEmpty ? [] : (payload.points || []);
+    // 只有一个点画不出曲线（canvas 只会画出一个孤点）
+    var hasChart = points.length >= 2;
+    var chartEmptyText = dataEmpty ? '该地区暂无历史价格数据' : '暂无走势数据';
+    var chartEmptyHint = dataEmpty
+      ? '采集到该地区历史挂牌价后会自动显示'
+      : '历史价格正在积累中';
     this.setData({
       loading: false,
       loadError: '',
@@ -93,8 +106,12 @@ Page({
       sourceWarn: srcLine.warn,
       region: payload.region || {},
       fuelName: fuelName,
-      points: payload.points || [],
-      axis: payload.axis || [],
+      points: points,
+      axis: dataEmpty ? [] : (payload.axis || []),
+      hasChart: hasChart,
+      dataEmpty: dataEmpty,
+      chartEmptyText: chartEmptyText,
+      chartEmptyHint: chartEmptyHint,
       priceText: fmt.price(payload.price),
       deltaText: fmt.percent(payload.deltaPercent),
       direction: payload.direction || 'flat',

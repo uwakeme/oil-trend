@@ -88,7 +88,9 @@
   border-radius: 18rpx;
   padding: 16rpx 20rpx;
   font-size: 18rpx;
+  /* button 的 UA 默认样式带 margin: auto，放进 flex 行会被顶开 */
   flex: 0 0 auto;
+  margin: 0;
   line-height: 1.3;
 }
 

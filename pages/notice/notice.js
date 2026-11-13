@@ -27,6 +27,10 @@ Page({
     fuelId: '92',
     window: {},
     sync: {},
+    // 后端明确标记「合法为空」时的空态文案
+    dataEmpty: false,
+    emptyText: '',
+    emptyHint: '',
     notices: [],
     sourceText: '',
     sourceWarn: false,
@@ -56,11 +60,8 @@ Page({
   onPullDownRefresh() {
     // 无论成功失败都要停掉下拉刷新动画：
     // 只在 then 里停的话，请求被后来的请求顶掉时会一直转圈。
-    this.load().then(function () {
-      wx.stopPullDownRefresh();
-    }).catch(function () {
-      wx.stopPullDownRefresh();
-    });
+    var stop = function () { wx.stopPullDownRefresh(); };
+    this.load().then(stop, stop);
   },
 
   load() {
@@ -78,7 +79,8 @@ Page({
       })
       .catch(function () {
         if (seq !== self._reqSeq) return;
-        self.setData({ loading: false, loadError: '调价通知加载失败，请稍后重试' });
+        // 能走到这里说明后端失败之后本地兜底也出错了 —— 那是数据源本身的问题
+        self.setData({ loading: false, loadError: '调价通知读取失败，请稍后重试' });
       });
   },
 
@@ -89,7 +91,18 @@ Page({
     }
     var win = payload.window || {};
     var sync = payload.sync || {};
-    var syncMeta = fmt.syncStatus(sync.status);
+    // 同步状态要同时看 payload.source：
+    // 演示数据下报「自动同步正常」是误导（看到的不是采集结果）
+    var syncMeta = fmt.syncStatus(sync.status, payload.source);
+    // 有待人工核对的记录时不能只报「同步正常」
+    if (sync.needsReview && sync.needsReview.length && syncMeta.style !== 'error') {
+      syncMeta = {
+        text: fmt.SYNC_STATUS_META.pending.text + '（' + sync.needsReview.length + ' 条）',
+        style: 'warn'
+      };
+    }
+    // 后端明确说「合法为空」：显示空态，不回落演示数据也不当加载失败
+    var dataEmpty = payload.empty === true;
     var self = this;
 
     var notices = (payload.notices || []).map(function (n) {
@@ -118,17 +131,38 @@ Page({
 
     var srcLine = fmt.sourceLine(payload.source);
 
+    // 空列表要说清楚为什么空：
+    // 演示数据 → 提示换个筛选；真实来源 → 直说还没有正式公告
+    var emptyText = '该分类下暂无通知';
+    var emptyHint = '切换筛选条件查看其它记录';
+    var isDemo = !!(payload.source && payload.source.mode === 'demo');
+    // 后端明确说「合法为空」时也按真实来源的空态说（别让演示源的说法混进来）
+    if (!isDemo || dataEmpty) {
+      if (this.data.filter === 'forecast') {
+        emptyText = '暂无市场预测';
+        emptyHint = '预测来源接入后会自动同步';
+      } else {
+        emptyText = '还没有正式调价公告';
+        emptyHint = '正式公告发布后会自动同步到这里';
+      }
+    }
+
     this.setData({
       loading: false,
       loadError: '',
       sourceText: srcLine.text,
       sourceWarn: srcLine.warn,
       window: {
+        // 没有真实窗口日期就别渲染窗口卡（否则倒计时会写成「就是今天」）
+        hasDate: !!win.date,
         dateText: fmt.cnDate(win.date),
         time: win.time,
         progress: win.progress === undefined ? 0 : win.progress,
         cycleStarted: !!win.cycleStarted,
-        countdownText: fmt.countdown(win.daysLeft)
+        countdownText: fmt.countdown(win.daysLeft),
+        // 过期窗口的标题与首页共用一套规则（utils/format.windowTitle）
+        expired: fmt.windowExpired(win.daysLeft),
+        titleText: fmt.windowTitle(win.daysLeft)
       },
       sync: {
         // 状态文案由 format.syncStatus 统一映射，新增状态不会再漏
@@ -137,7 +171,10 @@ Page({
         // 没有采集发生就没有检查时刻，别显示「 检查更新」这种空壳
         checkedText: sync.lastCheckedAt ? (fmt.dateTime(sync.lastCheckedAt) + ' 检查更新') : ''
       },
-      notices: notices
+      notices: notices,
+      dataEmpty: dataEmpty,
+      emptyText: emptyText,
+      emptyHint: emptyHint
     });
   },
 

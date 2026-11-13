@@ -231,7 +231,9 @@ const notices = {
     var sql = "SELECT * FROM oil_notices WHERE review_status = $1";
     if (filter === 'forecast') {
       sql += " AND kind = 'forecast'";
-    } else {
+    } else if (filter !== 'all') {
+      // ⚠️ 'all' 是「全部」，不能静默落到 official ——
+      // 调价页的「全部」筛选以前只看得到正式结果，预测结果被吞掉了。
       sql += " AND kind = 'official'";
     }
     // ORDER BY 放在 LIMIT 之前：两种顺序 Postgres 都接受，但这个顺序兼容性更好
@@ -270,6 +272,25 @@ const notices = {
     return toCamel(row);
   },
 
+  /**
+   * 找同来源、同标题的存疑通知。
+   *
+   * ⚠️ 去重键里带执行日期：解析器修好、日期补上之后键就变了，
+   * 「存疑 → 可信」的覆盖更新根本不触发（键不一样），
+   * 旧的那条 pending 会永远留在库里、新的 approved 又插一条。
+   * 所以按 (来源, 标题) 再回退查一次。
+   */
+  async findPendingBySourceTitle(sourceId, title) {
+    var rows = await db.query(
+      "SELECT * FROM oil_notices WHERE review_status = 'pending' AND title = $1 ORDER BY id DESC",
+      [title]
+    );
+    var matched = mapRows(rows).filter(function (n) {
+      return n.source && n.source.sourceId === sourceId;
+    });
+    return matched.length ? matched[0] : null;
+  },
+
   async insert(doc) {
     var rows = await db.query(
       'INSERT INTO oil_notices (dedup_key, kind, title, published_at, execute_at, changes, summary, prices, source, review_status, raw) ' +
@@ -300,7 +321,10 @@ const notices = {
   async update(id, doc) {
     var rows = await db.query(
       'UPDATE oil_notices SET title = $2, published_at = $3, execute_at = $4, changes = $5::jsonb, ' +
-      'summary = $6, source = $7::jsonb, review_status = $8, raw = $9 WHERE id = $1 RETURNING *',
+      'summary = $6, source = $7::jsonb, review_status = $8, raw = $9, ' +
+      // dedup_key 也要能改：解析器修好后补上执行日期，键就变了，
+      // 不更新的话下一轮又按新键去查，还是找不到这一行。
+      'dedup_key = COALESCE($10, dedup_key) WHERE id = $1 RETURNING *',
       [
         id,
         doc.title || null,
@@ -310,7 +334,8 @@ const notices = {
         doc.summary || null,
         JSON.stringify(doc.source || {}),
         doc.reviewStatus || 'pending',
-        doc.raw || null
+        doc.raw || null,
+        doc.dedupKey || null
       ]
     );
     return rows.length ? toCamel(rows[0]) : null;
@@ -543,6 +568,30 @@ const rules = {
 
 /* ---------------- 提醒记录 ---------------- */
 
+/**
+ * 空占位的最长存活时间。
+ *
+ * 「占位了但没回填结果」（sent=FALSE 且 fail_reason 为空）说明进程崩在
+ * reserve 与 markResult 之间。这行会一直占着 dedupKey，让这个事件再也发不出去。
+ * 超过这个时长就当过期，下一轮可以把它抢回来重发。
+ */
+var STALE_PLACEHOLDER_MS = 10 * 60 * 1000;
+
+/**
+ * 按 dedup_key 查提醒记录。
+ *
+ * ⚠️ dedup_key 是**全局**唯一列，查询必须带上 user_id ——
+ * 不带的话，A 用户的 key 能查到 B 用户的记录。
+ */
+async function findLogByDedupKey(key, userId) {
+  if (userId) {
+    var row = await db.one('SELECT * FROM alert_logs WHERE dedup_key = $1 AND user_id = $2', [key, userId]);
+    return toCamel(row);
+  }
+  var rowAny = await db.one('SELECT * FROM alert_logs WHERE dedup_key = $1', [key]);
+  return toCamel(rowAny);
+}
+
 const logs = {
   async listByUser(userId, limit) {
     // LIMIT 一律内联整数，不走占位符（与其余四处保持一致）。
@@ -550,7 +599,11 @@ const logs = {
     // 真正的问题不是「会报错」，而是全项目风格不统一、还多一次类型推断风险。
     var lim = Math.max(0, Math.floor(Number(limit) || 50));
     var rows = await db.query(
-      'SELECT * FROM alert_logs WHERE user_id = $1 ORDER BY time DESC LIMIT ' + lim,
+      // 过滤掉「占位了但没回填结果」的僵尸行：
+      // sent=FALSE 且 fail_reason 为空 = 进程崩在 reserve 与 markResult 之间。
+      // 这种行对用户表现为「发送失败 · 未知原因」，没有意义，藏起来。
+      'SELECT * FROM alert_logs WHERE user_id = $1 AND (sent = TRUE OR fail_reason IS NOT NULL) ' +
+      'ORDER BY time DESC LIMIT ' + lim,
       [userId]
     );
     return mapRows(rows);
@@ -563,12 +616,7 @@ const logs = {
    * 不带的话，A 用户的 key 能查到 B 用户的记录。
    */
   async findByDedupKey(key, userId) {
-    if (userId) {
-      var row = await db.one('SELECT * FROM alert_logs WHERE dedup_key = $1 AND user_id = $2', [key, userId]);
-      return toCamel(row);
-    }
-    var rowAny = await db.one('SELECT * FROM alert_logs WHERE dedup_key = $1', [key]);
-    return toCamel(rowAny);
+    return findLogByDedupKey(key, userId);
   },
 
   /**
@@ -601,6 +649,23 @@ const logs = {
     } catch (err) {
       var msg = String((err && err.message) || '');
       if ((err && err.code === '23505') || /duplicate key|duplicate/i.test(msg)) {
+        // 键已被占：可能是「已经发过」，也可能是「上次进程崩了留下的空占位」。
+        // 空占位（sent=FALSE 且 fail_reason 为空）超过 STALE_PLACEHOLDER_MS
+        // 就当过期，用条件更新把它抢回来 —— 「time < 阈值」这个条件保证
+        // 并发实例里只有一个能抢到，另一个会拿到 0 行。
+        var existing = await findLogByDedupKey(doc.dedupKey, doc.userId);
+        if (existing && existing.sent === false && !existing.failReason) {
+          var taken = await db.query(
+            'UPDATE alert_logs SET time = NOW(), payload = $3::jsonb ' +
+            'WHERE id = $1 AND sent = FALSE AND fail_reason IS NULL AND time < $2 RETURNING *',
+            [
+              existing.id,
+              new Date(Date.now() - STALE_PLACEHOLDER_MS),
+              JSON.stringify(doc.payload || {})
+            ]
+          );
+          if (taken.length) return toCamel(taken[0]);
+        }
         return null;
       }
       throw err;
@@ -614,6 +679,17 @@ const logs = {
       [id, !!sent, failReason || null]
     );
     return rows.length ? toCamel(rows[0]) : null;
+  },
+
+  /**
+   * 释放占位：可重试的失败要把 dedupKey 还回去。
+   *
+   * ⚠️ 之前不管成没成都把占位行留着 —— 网络抖动这种**本该重试**的失败
+   * 也把 dedupKey 永久占住，这个事件再也不会发第二次。
+   * 只删「没发成功」的：已经发出去的行是历史记录，不能删。
+   */
+  async release(id) {
+    await db.query('DELETE FROM alert_logs WHERE id = $1 AND sent = FALSE', [id]);
   },
 
   async insert(doc) {

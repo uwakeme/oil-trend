@@ -117,17 +117,19 @@ Page({
   onHide() {
     // 弹层状态跨 tab 残留：离开页面时复位。
     // 只复位弹层，不动 _reqSeq，也不清用户已选的地区 / 油品。
-    this.setData({ sheetVisible: false });
+    //
+    // ⚠️ 只在真的开着的时候才 setData：
+    // 无条件 setData 会让每次切走都触发一次无谓的视图更新。
+    if (this.data.sheetVisible) {
+      this.setData({ sheetVisible: false });
+    }
   },
 
   onPullDownRefresh() {
     // 无论成功、失败还是被竞态丢弃，都要停掉下拉刷新，
     // 否则菊花会一直转。
-    this.load().then(function () {
-      wx.stopPullDownRefresh();
-    }, function () {
-      wx.stopPullDownRefresh();
-    });
+    var stop = function () { wx.stopPullDownRefresh(); };
+    this.load().then(stop, stop);
   },
 
   load() {
@@ -190,8 +192,8 @@ Page({
       var sourceLine = fmt.sourceLine(home.source, '目标价以此为基准');
       // 历史记录是不是演示的：后端返回的记录带 dedupKey，
       // 本地演示记录没有这个字段（{id,title,time,channel,priceText}）。
-      // ⚠️ 不用 api.sourceStatus()：那是模块级全局状态，
-      // home / rules / history 三个请求谁先返回谁覆盖，判定会漂。
+      // ⚠️ 不看模块级全局来源状态：那种状态被 home / rules / history
+      // 三个并发请求互相覆盖，判定会漂。来源一律随 payload.source 走。
       var isBackendHistory = history.length > 0 && !!history[0].dedupKey;
 
       self.setData({
@@ -211,7 +213,8 @@ Page({
       self.applyRule();
     }).catch(function () {
       if (seq !== self._reqSeq) return;
-      self.setData({ loading: false, loadError: '提醒规则加载失败，请稍后重试' });
+      // 能走到这里说明后端失败之后本地兜底也出错了 —— 那是数据源本身的问题
+      self.setData({ loading: false, loadError: '提醒数据读取失败，请稍后重试' });
     });
   },
 

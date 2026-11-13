@@ -33,7 +33,9 @@ function handle(fn) {
       .then(function () { return fn(req, res); })
       .catch(function (err) {
         console.error('[api]', req.method, req.path, err);
-        res.json(errors.publicError(err));
+        // 状态码要分：业务错误 4xx、内部错误 5xx。
+        // 全 200 的话监控与 CI 都看不出服务端出问题了。
+        res.status(errors.statusOf(err)).json(errors.publicError(err));
       });
   };
 }

@@ -10,7 +10,8 @@
 
   <block wx:else>
     <!-- 来源提示：后端挂了回落演示数据时必须看得见 -->
-    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}">
+    <!-- aria-live：来源变了（后端挂了变黄）要能被读屏软件念出来 -->
+    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}" role="status" aria-live="polite">
       <text class="source-bar-text">{{sourceText}}</text>
     </view>
 
@@ -20,8 +21,8 @@
       <text class="page-sub">正式结果与市场预测分开呈现</text>
     </view>
 
-    <view class="window-card">
-      <text class="window-label">下一次调价窗口</text>
+    <view class="window-card" wx:if="{{window.hasDate}}">
+      <text class="window-label">{{window.titleText}}</text>
       <view class="window-date">
         <text class="window-date-value">{{window.dateText}}</text>
         <text class="window-date-note">{{window.time}} · 预计时间</text>
@@ -50,9 +51,10 @@
       >{{item.label}}</view>
     </view>
 
+    <!-- 没有正式公告时的空态：说清楚是「还没有」，不是加载失败 -->
     <view wx:if="{{notices.length === 0}}" class="state-box">
-      <text class="state-box-title">该分类下暂无通知</text>
-      <text>切换筛选条件查看其它记录</text>
+      <text class="state-box-title">{{emptyText}}</text>
+      <text>{{emptyHint}}</text>
     </view>
 
     <view wx:for="{{notices}}" wx:key="id" class="notice-item" data-id="{{item.id}}" data-kind="{{item.kind}}" bindtap="onOpenNotice">
@@ -70,7 +72,7 @@
   </block>
 
   <!-- 通知详情 -->
-  <bottom-sheet visible="{{sheetVisible}}" title="{{sheetKind === 'official' ? '调价通知详情' : '市场预测说明'}}" bind:close="onSheetClose">
+  <bottom-sheet visible="{{sheetVisible}}" title="{{sheetKind === 'official' ? '调价通知详情' : '市场预测说明'}}" scroll-height="76vh" bind:close="onSheetClose">
     <block wx:if="{{sheetKind === 'official'}}">
       <view class="notice-detail-label">
         <text class="badge neutral">正式结果</text>

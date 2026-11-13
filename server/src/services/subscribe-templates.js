@@ -147,10 +147,65 @@ function validate(templateId, data) {
   return { ok: errors.length === 0, errors: errors };
 }
 
+/* ---------------- 微信请求体格式 ---------------- */
+
+/**
+ * 转成微信订阅消息要求的 data 格式。
+ *
+ * ⚠️ 微信的 message/subscribe/send 要求每个字段是**对象**：
+ *      { "thing5": { "value": "92# 汽油" } }
+ *    传扁平字符串（{ "thing5": "92# 汽油" }）平台一律拒收，errcode 47003。
+ *    —— 这条踩过：契约表与校验都是按扁平值写的，两边「一致地」漏了包装，
+ *    自检全绿但真发必失败。
+ *
+ * 包装放在契约表里，因为「字段名 + 值格式 + 包装方式」是同一份平台契约。
+ * 幂等：已经是 { value: ... } 的原样保留。
+ */
+function toWeChatData(values) {
+  var out = {};
+  Object.keys(values || {}).forEach(function (key) {
+    var v = values[key];
+    if (v && typeof v === 'object' && !Array.isArray(v) && 'value' in v) {
+      out[key] = { value: String(v.value) };
+      return;
+    }
+    out[key] = { value: String(v === undefined || v === null ? '' : v) };
+  });
+  return out;
+}
+
+/**
+ * 校验**最终请求体**里的 data（已经是 { value: ... } 结构）。
+ *
+ * 解包后按同一套契约校验 —— 包装错了也要能发现，
+ * 不能只校验扁平值就以为请求体是对的。
+ */
+function validateWeChat(templateId, data) {
+  var flat = {};
+  Object.keys(data || {}).forEach(function (key) {
+    var v = data[key];
+    flat[key] = (v && typeof v === 'object' && !Array.isArray(v) && 'value' in v) ? v.value : v;
+  });
+  var res = validate(templateId, flat);
+  if (!res.ok) return res;
+  var errors = [];
+  Object.keys(data || {}).forEach(function (key) {
+    var v = data[key];
+    if (!v || typeof v !== 'object' || Array.isArray(v) || !('value' in v)) {
+      errors.push('NOT_WRAPPED:' + key);
+      return;
+    }
+    if (typeof v.value !== 'string') errors.push('VALUE_NOT_STRING:' + key);
+  });
+  return { ok: errors.length === 0, errors: errors };
+}
+
 module.exports = {
   TEMPLATES: TEMPLATES,
   PRIMARY_TEMPLATE_ID: PRIMARY_TEMPLATE_ID,
   templateOf: templateOf,
+  toWeChatData: toWeChatData,
+  validateWeChat: validateWeChat,
   formatAmount: formatAmount,
   formatDate: formatDate,
   formatPhrase: formatPhrase,

@@ -16,13 +16,20 @@
     </view>
 
     <!-- 数据来源：后端挂了回落演示数据时必须看得见 -->
-    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}">
+    <!-- aria-live：来源变了（后端挂了变黄）要能被读屏软件念出来 -->
+    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}" role="status" aria-live="polite">
       <text class="source-bar-text">{{sourceText}}</text>
     </view>
 
-    <text class="delay-badge">{{delayText}}</text>
+    <!-- 后端明确说「还没采到行情」：显示空态，不回落演示数据也不当加载失败 -->
+    <view wx:if="{{dataEmpty}}" class="state-box">
+      <text class="state-box-title">暂无行情数据</text>
+      <text>国际行情来源接入后会自动显示</text>
+    </view>
 
-    <view class="market-tabs">
+    <text class="delay-badge" wx:if="{{!dataEmpty}}">{{delayText}}</text>
+
+    <view class="market-tabs" wx:if="{{!dataEmpty}}">
       <view
         wx:for="{{tabs}}"
         wx:key="symbol"
@@ -41,7 +48,7 @@
       </view>
     </view>
 
-    <view class="market-main">
+    <view class="market-main" wx:if="{{!dataEmpty}}">
       <view class="market-heading">
         <view>
           <text class="market-heading-title">{{market.name}}</text>
@@ -56,9 +63,14 @@
       </view>
       <text class="market-change {{market.direction}}">{{market.changeText}}</text>
 
-      <trend-chart points="{{market.points}}" mode="line" height="{{145}}" direction="{{market.direction}}" />
+      <!-- 点少于 2 个画不出曲线：不渲染图表组件，改显示空态文案 -->
+      <trend-chart wx:if="{{hasChart}}" points="{{market.points}}" mode="line" height="{{145}}" direction="{{market.direction}}" />
+      <view wx:else class="chart-empty">
+        <text class="chart-empty-text">暂无行情数据</text>
+        <text class="chart-empty-hint">行情来源接入后会自动显示</text>
+      </view>
 
-      <view class="market-axis">
+      <view class="market-axis" wx:if="{{hasChart}}">
         <text wx:for="{{market.axis}}" wx:key="*this">{{item}}</text>
       </view>
 
@@ -81,7 +93,7 @@
       </view>
     </view>
 
-    <view class="card">
+    <view class="card" wx:if="{{!dataEmpty}}">
       <view class="card-title-row">
         <text class="card-title">今日市场快照</text>
         <text class="micro">USD / BBL</text>

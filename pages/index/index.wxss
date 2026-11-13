@@ -365,7 +365,44 @@
   color: #92968f;
 }
 
+/* ---------- 走势图空态 ---------- */
+/* 点不够画不出曲线时显示这几行，别拿一个孤点装成有走势 */
+.chart-empty {
+  padding: 36rpx 0 28rpx;
+  text-align: center;
+}
+.chart-empty-text {
+  display: block;
+  font-size: 24rpx;
+  color: var(--ink);
+  font-weight: 600;
+  margin-bottom: 8rpx;
+}
+.chart-empty-hint {
+  display: block;
+  font-size: 18rpx;
+  color: var(--muted);
+}
+
 /* ---------- 最新通知 ---------- */
+/* 没有正式通知时的空态 */
+.notice-empty {
+  padding: 26rpx 0 18rpx;
+}
+.notice-empty-title {
+  display: block;
+  font-size: 24rpx;
+  color: var(--ink);
+  font-weight: 600;
+  margin-bottom: 10rpx;
+}
+.notice-empty-hint {
+  display: block;
+  font-size: 18rpx;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .notice-preview {
   display: flex;
   gap: 22rpx;

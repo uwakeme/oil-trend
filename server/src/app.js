@@ -70,6 +70,16 @@ function createApp() {
 
   app.disable('x-powered-by');
 
+  // ⚠️ 限流必须按**真实客户端 IP** 分桶。
+  // 部署在 nginx 后面时 req.ip 恒为 127.0.0.1（反代地址），
+  // 不开 trust proxy 的话所有用户共用一个桶：一个人打满，全站 429，
+  // 比「限流形同虚设」更糟（DoS 放大）。
+  //
+  // 这里是 1 跳：nginx → node。nginx 用 $proxy_add_x_forwarded_for 追加，
+  // X-Forwarded-For 最右侧一项才是真实客户端 IP；trust proxy: 1 正是取这一项，
+  // 客户端自己伪造的 XFF 在更左边，不影响判定。
+  app.set('trust proxy', 1);
+
   // 小程序端发的是 JSON，但提醒规则数组可能比较大，给足限制
   app.use(express.json({ limit: '1mb' }));
 
@@ -113,6 +123,16 @@ function createApp() {
   app.use('/api/locate', rateLimit({ max: 30, windowMs: 60000 }));
   app.use('/api/rules', rateLimit({ max: 60, windowMs: 60000 }));
   app.use('/api/history', rateLimit({ max: 60, windowMs: 60000 }));
+
+  // 读接口也要限：/api/trend 一次查三张表、/api/home 拼三十多行，
+  // 不限流的话一个脚本就能把连接池打满。
+  // 额度比写接口宽松：小程序切页会连打几个读接口，别把正常用户挡在门外。
+  app.use('/api/trend', rateLimit({ max: 60, windowMs: 60000 }));
+  app.use('/api/home', rateLimit({ max: 120, windowMs: 60000 }));
+  app.use('/api/notices', rateLimit({ max: 120, windowMs: 60000 }));
+  app.use('/api/market', rateLimit({ max: 120, windowMs: 60000 }));
+  app.use('/api/regions', rateLimit({ max: 60, windowMs: 60000 }));
+  app.use('/api/sync-status', rateLimit({ max: 60, windowMs: 60000 }));
 
   app.use('/api', authRoutes);
   app.use('/api', apiRoutes);

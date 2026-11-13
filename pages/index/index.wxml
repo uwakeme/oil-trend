@@ -11,7 +11,8 @@
 
   <block wx:else>
     <!-- 来源提示：后端挂了回落演示数据时必须看得见 -->
-    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}">
+    <!-- aria-live：来源变了（后端挂了变黄）要能被读屏软件念出来 -->
+    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}" role="status" aria-live="polite">
       <text class="source-bar-text">{{sourceText}}</text>
     </view>
 
@@ -36,8 +37,14 @@
       <text>{{locateHint}}</text>
     </view>
 
+    <!-- 后端明确说「还没采到数据」：显示空态，不回落演示数据也不当加载失败 -->
+    <view wx:if="{{dataEmpty}}" class="state-box">
+      <text class="state-box-title">该地区暂无油价数据</text>
+      <text>采集到该地区挂牌价后会自动显示</text>
+    </view>
+
     <!-- 主价格卡 -->
-    <view class="price-hero">
+    <view class="price-hero" wx:if="{{!dataEmpty}}">
       <text class="hero-ghost num">{{hero.id}}</text>
       <view class="price-topline">
         <view class="fuel-label">
@@ -60,7 +67,7 @@
     </view>
 
     <!-- 其余油品：固定 92/95/98/0 顺序，选中项进入大卡后隐藏 -->
-    <view class="other-fuels">
+    <view class="other-fuels" wx:if="{{!dataEmpty}}">
       <block wx:for="{{prices}}" wx:key="id">
         <view wx:if="{{item.id !== fuelId}}" class="other-fuel" data-fuel="{{item.id}}" bindtap="onSelectFuel">
           <text class="other-fuel-name">{{item.name}}</text>
@@ -74,7 +81,7 @@
     </view>
 
     <!-- 下一轮调价窗口 -->
-    <view class="next-card">
+    <view class="next-card" wx:if="{{window.hasWindow}}">
       <view class="next-top">
         <text class="next-title">{{window.titleText}}</text>
         <text class="countdown" wx:if="{{window.expired}}">已过 <text class="num">{{window.passedDays}}</text> 天 · 等待下一轮公布</text>
@@ -86,7 +93,8 @@
           <text class="next-date-value">{{window.dateText}}</text>
           <text class="next-date-note">预计时间 · 以官方公告为准</text>
         </view>
-        <view class="forecast">
+        <!-- 窗口已过期时不渲染预测区：挂着的预测早就失效了 -->
+        <view class="forecast" wx:if="{{!window.expired}}">
           <text class="forecast-value num {{forecast.direction}}">{{forecast.text}}</text>
           <text class="forecast-caption">{{forecast.caption}}</text>
         </view>
@@ -94,13 +102,18 @@
     </view>
 
     <!-- 近 30 天走势 -->
-    <view class="card">
+    <view class="card" wx:if="{{!dataEmpty}}">
       <view class="card-title-row">
         <text class="card-title">近 30 天走势</text>
         <view class="card-link" bindtap="goTrend">{{hero.name}}　›</view>
       </view>
-      <trend-chart points="{{trend.points}}" mode="step" height="{{70}}" direction="{{trend.direction}}" visible="{{!sheetType}}" />
-      <view class="chart-labels">
+      <!-- 点少于 2 个画不出曲线：不渲染图表组件，改显示空态文案 -->
+      <trend-chart wx:if="{{trend.hasChart}}" points="{{trend.points}}" mode="step" height="{{70}}" direction="{{trend.direction}}" visible="{{!sheetType}}" />
+      <view wx:else class="chart-empty">
+        <text class="chart-empty-text">暂无走势数据</text>
+        <text class="chart-empty-hint">该地区历史价格正在积累中</text>
+      </view>
+      <view class="chart-labels" wx:if="{{trend.hasChart}}">
         <text wx:for="{{trend.labels}}" wx:key="*this">{{item}}</text>
       </view>
     </view>
@@ -111,7 +124,12 @@
         <text class="card-title">最新调价通知</text>
         <view class="card-link" bindtap="goNotice">全部通知 ›</view>
       </view>
-      <view class="notice-preview" bindtap="onOpenNotice">
+      <!-- 没有正式通知：只说没有，不拼「--」日期，也不给点不动的详情入口 -->
+      <view wx:if="{{notice.empty}}" class="notice-empty">
+        <text class="notice-empty-title">暂无正式调价通知</text>
+        <text class="notice-empty-hint">正式公告来源接入后自动同步</text>
+      </view>
+      <view wx:else class="notice-preview" bindtap="onOpenNotice">
         <view class="notice-date-block">
           <text class="notice-day num">{{notice.day}}</text>
           <text class="notice-month">{{notice.month}}</text>
@@ -130,7 +148,7 @@
   </block>
 
   <!-- 地区选择 -->
-  <bottom-sheet visible="{{sheetType === 'city'}}" title="选择油价地区" bind:close="onSheetClose">
+  <bottom-sheet visible="{{sheetType === 'city'}}" title="选择油价地区" scroll-height="84vh" bind:close="onSheetClose">
     <view class="sheet-body">不同地区零售价可能不同，你选过的地区会被记住。</view>
 
     <!-- 当前位置：手动再定位一次 -->
@@ -164,13 +182,14 @@
   </bottom-sheet>
 
   <!-- 通知详情 -->
-  <bottom-sheet visible="{{sheetType === 'notice'}}" title="调价通知详情" bind:close="onSheetClose">
+  <bottom-sheet visible="{{sheetType === 'notice' && !notice.empty}}" title="调价通知详情" scroll-height="72vh" bind:close="onSheetClose">
     <view class="notice-detail-label">
       <text class="badge neutral">正式结果</text>
       <text class="badge {{notice.changeDirection}}">{{notice.verb}}</text>
     </view>
     <text class="detail-title">{{notice.title}}</text>
     <view class="sheet-body" style="margin-top:12rpx">{{notice.executeText}}</view>
+    <view class="sheet-body" style="margin-top:8rpx">{{notice.summaryText}}</view>
     <view class="detail-price-grid">
       <view wx:for="{{notice.prices}}" wx:key="id" class="detail-price">
         <text class="detail-price-name">{{item.name}}</text>
@@ -188,7 +207,7 @@
   </bottom-sheet>
 
   <!-- 数据来源说明 -->
-  <bottom-sheet visible="{{sheetType === 'about'}}" title="数据来源与说明" bind:close="onSheetClose">
+  <bottom-sheet visible="{{sheetType === 'about'}}" title="数据来源与说明" scroll-height="46vh" bind:close="onSheetClose">
     <view class="about-row">
       <text class="about-label">当前数据源</text>
       <text class="about-value">{{sourceName}}</text>

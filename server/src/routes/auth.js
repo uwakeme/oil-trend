@@ -14,7 +14,7 @@ var router = express.Router();
 router.post('/login', function (req, res) {
   var code = req.body && req.body.code;
   if (!code) {
-    res.json({ ok: false, message: errors.PUBLIC_ERRORS.NO_CODE, code: 'NO_CODE' });
+    res.status(400).json({ ok: false, message: errors.PUBLIC_ERRORS.NO_CODE, code: 'NO_CODE' });
     return;
   }
   auth.login(code).then(function (result) {
@@ -25,7 +25,8 @@ router.post('/login', function (req, res) {
   }).catch(function (err) {
     console.error('[auth] login failed', err.message);
     // ⚠️ 不透传 err.message：微信返回的 errmsg 里可能带内部细节
-    res.json(errors.publicError(err));
+    // 状态码分 4xx/5xx：登录失败是客户端问题，微信接口挂了是服务端问题
+    res.status(errors.statusOf(err)).json(errors.publicError(err));
   });
 });
 

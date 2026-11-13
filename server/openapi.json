@@ -1085,6 +1085,11 @@
                   "$ref": "#/components/schemas/PriceItem"
                 }
               },
+              "empty": {
+                "type": "boolean",
+                "description": "该地区还没有采到价格时为 true。合法空结果，不是故障 —— 前端据此显示空态，而不是回落演示数据",
+                "example": false
+              },
               "window": {
                 "$ref": "#/components/schemas/Window"
               },

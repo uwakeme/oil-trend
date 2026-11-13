@@ -37,6 +37,7 @@ jobs:
 
       # 部署前先跑自检：结构与 HTTP 契约不对就别部署了
       - name: Run backend self-test
+        id: selftest
         working-directory: ./server
         run: npm test
 
@@ -44,6 +45,31 @@ jobs:
         run: |
           echo "${{ secrets.SERVER_SSH_KEY }}" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
+
+      # 部署前先把线上正在跑的那份代码备份下来。
+      # ⚠️ scp 是**覆盖**式上传：预检失败时旧进程虽然还活着，
+      # 磁盘上已经是新版本 —— PM2 的 autorestart 一触发就加载坏版本。
+      # 有备份才能在失败时真的退回去。
+      - name: Backup current version on server
+        id: backup
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            set -e
+            DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}"
+            rm -rf ${DEPLOY_DIR}/server/.rollback
+            mkdir -p ${DEPLOY_DIR}/server/.rollback
+            cd ${DEPLOY_DIR}/server
+            # 只备份会被覆盖的部分。node_modules 不备份：依赖很少变，
+            # 备份它又慢又占磁盘。
+            for item in src scripts package.json package-lock.json schema.sql oil-trend-pm2.json; do
+              if [ -e "$item" ]; then cp -a "$item" ${DEPLOY_DIR}/server/.rollback/; fi
+            done
+            echo "已备份当前版本到 ${DEPLOY_DIR}/server/.rollback"
 
       - name: Copy backend to server
         run: |
@@ -55,6 +81,7 @@ jobs:
           scp -o StrictHostKeyChecking=no -i /tmp/deploy_key -P ${{ secrets.SERVER_PORT || 22 }} ./data/reference-prices.js ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}/data/
 
       - name: Deploy to server via SSH
+        id: deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -81,9 +108,22 @@ jobs:
             # ⚠️ 服务端启动时会强校验 OIL_TOKEN_SECRET（空密钥等于谁都能自签任意 openid）。
             # 缺这个变量的话新版本会直接拒绝启动 —— 那时候线上就是「旧进程已停、新进程没起」。
             # 所以在动进程之前先补上：只追加缺失的键，不碰用户已经维护的值。
-            if ! grep -q '^OIL_TOKEN_SECRET=' ${DEPLOY_DIR}/server/.env; then
-              echo ">> .env 里缺 OIL_TOKEN_SECRET，自动生成一个"
-              echo "OIL_TOKEN_SECRET=$(openssl rand -hex 32)" >> ${DEPLOY_DIR}/server/.env
+            if ! grep -Eq '^[[:space:]]*OIL_TOKEN_SECRET=.{32,}' ${DEPLOY_DIR}/server/.env; then
+              if grep -q '^[[:space:]]*OIL_TOKEN_SECRET=' ${DEPLOY_DIR}/server/.env; then
+                # 键在但值无效（空值 / 短于 32 位）：把这一行换掉。
+                # 这种值本来就过不了启动期校验，留着只会让部署卡死。
+                sed -i "s|^[[:space:]]*OIL_TOKEN_SECRET=.*|OIL_TOKEN_SECRET=$(openssl rand -hex 32)|" ${DEPLOY_DIR}/server/.env
+                echo ">> .env 里的 OIL_TOKEN_SECRET 无效（空值或短于 32 位），已重新生成"
+              else
+                # 键不存在：追加。⚠️ 追加前先确认文件末尾有换行 ——
+                # 没有换行的话新密钥会粘到上一行后面，那一行既不是合法键
+                # 也不是合法值，下次部署还会再追加一次。
+                if [ -s ${DEPLOY_DIR}/server/.env ] && [ "$(tail -c 1 ${DEPLOY_DIR}/server/.env | wc -l)" -eq 0 ]; then
+                  echo "" >> ${DEPLOY_DIR}/server/.env
+                fi
+                echo "OIL_TOKEN_SECRET=$(openssl rand -hex 32)" >> ${DEPLOY_DIR}/server/.env
+                echo ">> .env 里缺 OIL_TOKEN_SECRET，自动生成一个"
+              fi
             fi
 
             echo "安装生产依赖..."
@@ -143,6 +183,7 @@ jobs:
 
       # 健康检查在服务器上跑：runner 上的 127.0.0.1 是 runner 自己，不是服务器。
       - name: Health check on server
+        id: health
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -195,6 +236,43 @@ jobs:
               echo ">> .env 里没配 OIL_API_BASE_URL，跳过外网检查"
             fi
 
+      # 任何一步失败都把线上退回到备份的那一版。
+      # ⚠️ 以前健康检查超时只是 exit 1：磁盘上留着坏版本，
+      # 进程一重启就加载坏版本 —— 「失败」等于把线上留着半残状态。
+      - name: Roll back to previous version
+        id: rollback
+        if: failure()
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            DEPLOY_DIR="${{ secrets.DEPLOY_DIR || '/home/ubuntu/deploy/oil_trend' }}"
+            if [ ! -d "${DEPLOY_DIR}/server/.rollback/src" ]; then
+              echo "没有可还原的备份，保持现状"
+              exit 0
+            fi
+            echo "部署未通过，还原上一个版本..."
+            cd ${DEPLOY_DIR}/server
+            rm -rf src scripts
+            cp -a ${DEPLOY_DIR}/server/.rollback/src ./src
+            if [ -e ${DEPLOY_DIR}/server/.rollback/scripts ]; then
+              cp -a ${DEPLOY_DIR}/server/.rollback/scripts ./scripts
+            fi
+            for item in package.json package-lock.json schema.sql oil-trend-pm2.json; do
+              if [ -e "${DEPLOY_DIR}/server/.rollback/$item" ]; then
+                cp -a "${DEPLOY_DIR}/server/.rollback/$item" ./ || true
+              fi
+            done
+            pm2 restart oil-trend-server --update-env || true
+            pm2 save || true
+            sleep 3
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 2 --max-time 5 "http://127.0.0.1:3002/ready" || echo "000")
+            echo "还原后 /ready 返回 ${CODE}"
+            rm -rf ${DEPLOY_DIR}/server/.rollback
+
       - name: Clean up SSH key
         if: always()
         run: rm -f /tmp/deploy_key
@@ -203,5 +281,8 @@ jobs:
         if: always()
         run: |
           echo "## 部署结果"
-          echo "- 后端自检: ${{ job.status }}"
-          echo "- 服务器部署: ${{ job.status }}"
+          echo "- 后端自检: ${{ steps.selftest.outcome }}"
+          echo "- 备份旧版本: ${{ steps.backup.outcome }}"
+          echo "- 服务器部署: ${{ steps.deploy.outcome }}"
+          echo "- 健康检查: ${{ steps.health.outcome }}"
+          echo "- 失败回滚: ${{ steps.rollback.outcome }}"

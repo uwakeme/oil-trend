@@ -74,6 +74,25 @@
   color: #92968f;
 }
 
+/* ---------- 图表空态 ---------- */
+/* 点不够画不出曲线时显示这几行，别拿一个孤点装成有走势 */
+.chart-empty {
+  padding: 60rpx 0 40rpx;
+  text-align: center;
+}
+.chart-empty-text {
+  display: block;
+  font-size: 26rpx;
+  color: var(--ink);
+  font-weight: 600;
+  margin-bottom: 10rpx;
+}
+.chart-empty-hint {
+  display: block;
+  font-size: 20rpx;
+  color: var(--muted);
+}
+
 /* ---------- 统计 ---------- */
 .stat-grid {
   display: flex;

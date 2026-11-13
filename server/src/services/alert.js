@@ -220,6 +220,30 @@ function matchRule(rule, prices, latestNotice, forecastNotice) {
 }
 
 /**
+ * 失败分类：可重试 / 不可重试。
+ *
+ * 可重试 —— 网络抖动、平台限流（45009）、access_token 失效（40001/40014）：
+ *   下一轮重来就行，占位必须释放，否则这个事件被永久锁死。
+ * 不可重试 —— 模板没配 / 数据不合契约 / 用户没有订阅额度（43101）：
+ *   再发多少次都一样，占位留着当失败凭据，额度一并用掉。
+ */
+function classifyFailure(reason) {
+  var s = String(reason || '');
+  if (!s) return 'retryable';
+  // 平台侧配置/参数问题：TEMPLATE_NOT_CONFIGURED / TEMPLATE_DATA_INVALID …
+  if (/^TEMPLATE_/.test(s)) return 'permanent';
+  var m = s.match(/^(\d{4,5}):/);
+  if (m) {
+    var code = m[1];
+    // 43101 无订阅额度、47002/47003 值或模板非法、40003 openid 非法
+    if (code === '43101' || code === '47002' || code === '47003' || code === '40003') return 'permanent';
+    return 'retryable';
+  }
+  // 没有错误码的（网络异常、请求超时等）都能再试
+  return 'retryable';
+}
+
+/**
  * 按顺序找第一条没发过的事件发出去。
  *
  * ⚠️ 一次性订阅的授权额度只有 1 条：命中多条也只发第一条，
@@ -246,29 +270,36 @@ function sendFirstHit(rule, hits, summary) {
       if (!reserved) return step();
       summary.matched++;
       return sendSubscribe(rule.userId, hit.template, hit.data).then(function (result) {
-        // 无论成败都要落库：失败了也要记，否则下次会重复尝试同一件事
-        return dao.logs.markResult(
-          reserved.id,
-          !!result.sent,
-          result.sent ? null : (result.reason || 'UNKNOWN')
-        ).then(function () {
-          summary.details.push({
-            userId: rule.userId,
-            type: hit.type,
-            sent: !!result.sent,
-            reason: result.reason
+        if (result.sent) {
+          return dao.logs.markResult(reserved.id, true, null).then(function () {
+            summary.details.push({
+              userId: rule.userId,
+              type: hit.type,
+              sent: true,
+              reason: ''
+            });
+            summary.sent++;
+            // 一次性订阅：额度用掉，用户要再收必须重新授权
+            return dao.rules.consumeSubscribe(rule).then(function () { return null; });
           });
-          if (!result.sent) {
-            summary.failed++;
-            // 43101 = 用户已无额度（授权用完或被拒）。这时候额度也没了，
-            // 继续显示「已开启」是骗人的，一并用掉。
-            if (String(result.reason || '').indexOf('43101') === 0) {
-              return dao.rules.consumeSubscribe(rule).then(function () { return null; });
-            }
-            return null;
-          }
-          summary.sent++;
-          // 一次性订阅：额度用掉，用户要再收必须重新授权
+        }
+        // 失败：分「可重试」和「不可重试」两种处理
+        var reason = result.reason || 'UNKNOWN';
+        summary.details.push({
+          userId: rule.userId,
+          type: hit.type,
+          sent: false,
+          reason: reason
+        });
+        summary.failed++;
+        if (classifyFailure(reason) === 'retryable') {
+          // 把占位释放掉：这一轮没发成，下一轮还能重试。
+          // ⚠️ 之前不管成没成都把占位行留着 —— 网络抖动一次，
+          // 这个事件的 dedupKey 就被永久占住，再也发不出第二次。
+          return dao.logs.release(reserved.id).then(function () { return null; });
+        }
+        // 不可重试：留着失败记录当凭据，并把额度用掉（再发也是白发）
+        return dao.logs.markResult(reserved.id, false, reason).then(function () {
           return dao.rules.consumeSubscribe(rule).then(function () { return null; });
         });
       });
@@ -317,6 +348,8 @@ module.exports = {
   run: run,
   matchRule: matchRule,
   buildData: buildData,
+  // 导出给自检用：失败分类决定占位放不放，两边必须一致
+  classifyFailure: classifyFailure,
   regionNameOf: regionNameOf,
   todayCN: todayCN,
   TEMPLATE_FIELDS: TEMPLATE_FIELDS

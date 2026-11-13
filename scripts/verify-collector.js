@@ -186,12 +186,24 @@ function runSuite(label, sources) {
     assert.strictEqual(r.reviewStatus, 'approved');
   });
 
-  check(label + ' ndrcNotice 顿号串号：98# 的幅度不会记到 92# 头上', () => {
+  check(label + ' ndrcNotice 顿号串号：列表里的每个标号都拿到那个幅度', () => {
     const r = sources.PARSERS.ndrcNotice(
       '自2026年11月24日24时起，92号汽油、98号汽油每升下调0.10元。'
     );
+    // 「A、B每升X元」是公告的列表写法：A 与 B 都适用这个幅度。
+    // ⚠️ 旧解析器把这种写法读成「只有最后一个标号算数」，
+    // 92# 明明写在正文里却被丢掉 —— 而且照样判成 approved。
     assert.strictEqual(r.deltas['98'], -0.1);
-    assert.strictEqual(r.deltas['92'], undefined, '92# 没被明确写出，不该拿到 98# 的幅度');
+    assert.strictEqual(r.deltas['92'], -0.1, '92# 在正文里写了，同一个幅度也适用它');
+  });
+
+  check(label + ' ndrcNotice 四油品共用一个幅度：逐项齐全判可信', () => {
+    const r = sources.PARSERS.ndrcNotice(
+      '自2026年11月24日24时起，92号汽油、95号汽油、98号汽油每升下调0.10元，0号柴油每升下调0.10元。'
+    );
+    assert.deepStrictEqual(r.deltas, { '92': -0.1, '95': -0.1, '98': -0.1, '0': -0.1 });
+    assert.strictEqual(r.perFuel, true);
+    assert.strictEqual(r.reviewStatus, 'approved');
   });
 
   check(label + ' ndrcNotice 只有总幅度：不复制给四个油品，判存疑', () => {
@@ -209,8 +221,48 @@ function runSuite(label, sources) {
 
   check(label + ' ndrcNotice 有幅度没日期：正文格式不符，判存疑', () => {
     const r = sources.PARSERS.ndrcNotice('92号汽油每升下调0.08元，98号汽油每升下调0.10元。');
-    assert.strictEqual(r.perFuel, true);
+    // ⚠️ perFuel 的含义是「四油品逐项齐全」：只解析出 2 个油品时
+    // 缺失的两个是**猜不出来的**，不能当成「逐项解析成功」。
+    assert.strictEqual(r.perFuel, false, '只解析出 2 个油品不算逐项齐全');
     assert.strictEqual(r.executeAt, null);
+    assert.strictEqual(r.reviewStatus, 'pending');
+  });
+
+  check(label + ' ndrcNotice 中性词「调整」不猜方向，判存疑', () => {
+    const r = sources.PARSERS.ndrcNotice(
+      '自2026年11月24日24时起，92号汽油每升调整0.10元，95号汽油每升调整0.10元，' +
+      '98号汽油每升调整0.10元，0号柴油每升调整0.10元。'
+    );
+    // 「调整」看不出上调还是下调 —— 之前非「下调」一律取正，
+    // 等于把一条方向不明的公告当成**上涨**发布出去。
+    assert.strictEqual(r.ambiguousDirection, true);
+    assert.strictEqual(r.reviewStatus, 'pending');
+  });
+
+  check(label + ' ndrcNotice 不拿上一轮的日期当本轮生效日', () => {
+    const r = sources.PARSERS.ndrcNotice(
+      '上次调价自2026年11月1日24时起，本轮92号汽油每升下调0.10元，95号汽油每升下调0.10元，' +
+      '98号汽油每升下调0.10元，0号柴油每升下调0.10元。'
+    );
+    assert.strictEqual(r.executeAt, null, '上一轮的日期不是本轮生效日');
+    assert.strictEqual(r.reviewStatus, 'pending');
+  });
+
+  check(label + ' ndrcNotice 同一油品两种幅度，判存疑', () => {
+    const r = sources.PARSERS.ndrcNotice(
+      '自2026年11月24日24时起，92号汽油每升下调0.10元，92号汽油每升下调0.20元，95号汽油每升下调0.10元，' +
+      '98号汽油每升下调0.10元，0号柴油每升下调0.10元。'
+    );
+    assert.strictEqual(r.conflict, true);
+    assert.strictEqual(r.reviewStatus, 'pending');
+  });
+
+  check(label + ' ndrcNotice 各油品方向不一致，判存疑', () => {
+    const r = sources.PARSERS.ndrcNotice(
+      '自2026年11月24日24时起，92号汽油每升下调0.10元，95号汽油每升上调0.10元，' +
+      '98号汽油每升下调0.10元，0号柴油每升下调0.10元。'
+    );
+    assert.strictEqual(r.mixedDirection, true);
     assert.strictEqual(r.reviewStatus, 'pending');
   });
 

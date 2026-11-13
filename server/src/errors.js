@@ -35,6 +35,43 @@ var PUBLIC_ERRORS = {
 var GENERIC_MESSAGE = '服务器内部错误，请稍后重试';
 
 /**
+ * 对外错误码 → HTTP 状态码。
+ *
+ * ⚠️ 以前一律 200 + { ok:false }：外壳统一是好事，
+ * 但 nginx / 云监控 / CI 只能靠状态码识别故障，
+ * 全 200 等于可观测性归零 —— 数据库挂了也看不出来。
+ * 现在业务错误 4xx、内部错误 5xx，外壳 { ok, message, code } 不变。
+ */
+var STATUS_BY_CODE = {
+  UNAUTHORIZED: 401,
+  FORBIDDEN: 403,
+  NOT_FOUND: 404,
+  NO_CODE: 400,
+  LOGIN_FAILED: 401,
+  INVALID_REGION: 400,
+  INVALID_RULES: 400,
+  INVALID_HISTORY: 400,
+  INVALID_FUEL: 400,
+  INVALID_TARGET_PRICE: 400,
+  TOO_MANY_RULES: 400,
+  TOO_MANY_HISTORY: 400,
+  NO_HISTORY: 404,
+  RATE_LIMITED: 429,
+  TEMPLATE_NOT_CONFIGURED: 500,
+  TEMPLATE_NOT_REGISTERED: 500,
+  INVALID_INPUT: 400
+};
+
+/**
+ * 取一个异常该返回的 HTTP 状态码。
+ * 不在白名单里的一律 500 —— 内部错误不该让客户端以为是自己的问题。
+ */
+function statusOf(err) {
+  var code = (err && err.code) || 'INTERNAL_ERROR';
+  return STATUS_BY_CODE[code] || 500;
+}
+
+/**
  * 把异常转成对外可返回的错误体。
  * @param {Error} err
  * @returns {{ok:false, message:string, code:string}}
@@ -49,4 +86,10 @@ function publicError(err) {
   return { ok: false, message: message, code: code };
 }
 
-module.exports = { PUBLIC_ERRORS: PUBLIC_ERRORS, GENERIC_MESSAGE: GENERIC_MESSAGE, publicError: publicError };
+module.exports = {
+  PUBLIC_ERRORS: PUBLIC_ERRORS,
+  GENERIC_MESSAGE: GENERIC_MESSAGE,
+  publicError: publicError,
+  statusOf: statusOf,
+  STATUS_BY_CODE: STATUS_BY_CODE
+};

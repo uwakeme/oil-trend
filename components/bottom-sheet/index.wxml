@@ -1,5 +1,5 @@
 <view wx:if="{{visible}}" class="sheet-mask" catchtap="onMaskTap" catchtouchmove="noop"></view>
-<view wx:if="{{visible}}" class="sheet-panel">
+<view wx:if="{{visible}}" class="sheet-panel" style="height: {{scrollHeight}};">
   <view class="sheet-handle"></view>
   <view class="sheet-head">
     <text class="sheet-head-title">{{title}}</text>
@@ -10,6 +10,10 @@
     普通 view + overflow-y 在真机上滚不动，
     而面板上的 catchtouchmove 会把滚动手势一起吃掉。
     catchtouchmove 只留在遮罩上，遮罩负责挡住背景页面跟着滚。
+  -->
+  <!--
+    滚动区的高度由面板的确定高度 + flex 布局算出来（见 styles/components.wxss），
+    这样 scroll-view 拿到的是确定高度，31 个省的列表在真机上才滚得动。
   -->
   <scroll-view class="sheet-scroll" scroll-y="{{true}}">
     <view class="sheet-content">

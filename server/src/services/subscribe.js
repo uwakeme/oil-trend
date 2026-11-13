@@ -57,6 +57,28 @@ function getAccessToken(force) {
 }
 
 /**
+ * 组装微信订阅消息的**最终请求体**。
+ *
+ * ⚠️ data 里每个字段必须是 { "value": "..." } 对象 —— 扁平字符串会被平台
+ * 以 47003 拒收。单独抽出来是为了让自检能直接断言最终请求体的形状，
+ * 而不是断言自己生成的中间产物（那正是上一轮漏掉这个坑的原因）。
+ */
+function buildBody(options) {
+  var opts = options || {};
+  return {
+    touser: opts.openid,
+    template_id: opts.templateId || templateId(),
+    page: opts.page || 'pages/index/index',
+    // 微信要求每个字段是 { value: "..." } 对象，扁平字符串一律被拒（47003）
+    data: templates.toWeChatData(opts.data || {}),
+    // 开发版 / 体验版联调时要配 OIL_MINIPROGRAM_STATE=developer，
+    // 否则用户点开订阅消息跳不到对应版本
+    miniprogram_state: opts.miniprogramState || config.miniprogramState || 'formal',
+    lang: 'zh_CN'
+  };
+}
+
+/**
  * 下发一条订阅消息
  * @param {object} options { openid, templateId, page, data, miniprogramState }
  * @returns {Promise<{sent:boolean, reason?:string}>}
@@ -70,16 +92,21 @@ function send(options) {
     return Promise.resolve({ sent: false, reason: 'NO_OPENID' });
   }
 
-  var body = {
-    touser: options.openid,
-    template_id: tplId,
-    page: options.page || 'pages/index/index',
-    data: options.data || {},
-    // 开发版 / 体验版联调时要配 OIL_MINIPROGRAM_STATE=developer，
-    // 否则用户点开订阅消息跳不到对应版本
-    miniprogram_state: options.miniprogramState || config.miniprogramState || 'formal',
-    lang: 'zh_CN'
-  };
+  var body = buildBody({
+    openid: options.openid,
+    templateId: tplId,
+    page: options.page,
+    data: options.data,
+    miniprogramState: options.miniprogramState
+  });
+
+  // 发之前再校验一次**最终请求体**：字段名对不上、值格式不对、
+  // 或者包装成了扁平字符串（平台一律 47003 拒收），都在本地拦下来，
+  // 不去浪费用户的一次性订阅额度。
+  var check = templates.validateWeChat(tplId, body.data);
+  if (!check.ok) {
+    return Promise.resolve({ sent: false, reason: 'TEMPLATE_DATA_INVALID:' + check.errors.join(',') });
+  }
 
   function post(token) {
     return auth.callWeChat('/cgi-bin/message/subscribe/send', { access_token: token }, body);
@@ -110,6 +137,8 @@ function send(options) {
 module.exports = {
   send: send,
   getAccessToken: getAccessToken,
+  // 导出给自检用：最终 POST body 的形状必须被断言住
+  buildBody: buildBody,
   /**
    * 当前使用的模板 ID。
    *

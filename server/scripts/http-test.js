@@ -175,6 +175,32 @@ async function main() {
     check('非法 regionCode 不泄露内部信息',
       badRegion.body && String(badRegion.body.message).indexOf('oil_prices') < 0);
 
+    console.log('\n--- 错误状态码 ---');
+    // ⚠️ 以前一律 200 + {ok:false}：外壳统一是好事，
+    // 但 nginx / 监控 / CI 只能靠状态码识别故障，全 200 等于可观测性归零。
+    var badRegion2 = await request(port, 'GET', '/api/home?regionCode=999999');
+    check('业务错误返回 4xx 而不是 200', badRegion2.status >= 400 && badRegion2.status < 500,
+      '实际 ' + badRegion2.status);
+    check('错误体仍然带 ok/message/code',
+      badRegion2.body && badRegion2.body.ok === false &&
+      badRegion2.body.code === 'INVALID_REGION' && !!badRegion2.body.message);
+
+    console.log('\n--- 反代下的限流按真实客户端 IP 分桶 ---');
+    // ⚠️ 部署在 nginx 后面时 req.ip 恒为 127.0.0.1（反代地址），
+    // 不开 trust proxy 的话所有用户共用一个桶：一个人打满，全站 429。
+    var lastStatus = 0;
+    for (var j = 0; j < 34; j++) {
+      var r1 = await request(port, 'GET', '/api/locate?lat=23.1&lng=113.2', null,
+        { 'X-Forwarded-For': '9.9.9.9' });
+      lastStatus = r1.status;
+      if (lastStatus === 429) break;
+    }
+    check('同一个真实 IP 超过额度后被限流', lastStatus === 429, '实际 ' + lastStatus);
+    var otherIp = await request(port, 'GET', '/api/locate?lat=23.1&lng=113.2', null,
+      { 'X-Forwarded-For': '8.8.8.8' });
+    check('另一个真实 IP 不受牵连（限流按客户端分桶，不是全站一个桶）',
+      otherIp.status === 200, '实际 ' + otherIp.status);
+
     console.log('\n--- 汇总 ---');
     console.log('检查 ' + checks + ' 项，失败 ' + failures.length + ' 项');
     if (failures.length) {

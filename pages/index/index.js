@@ -81,6 +81,8 @@ Page({
     regionKeyword: '',
     prices: [],
     fuelId: '92',
+    // 后端明确标记「合法为空」（还没采到价格）时显示空态
+    dataEmpty: false,
     hero: {},
     window: {},
     forecast: {},
@@ -137,9 +139,9 @@ Page({
 
   onPullDownRefresh() {
     var prefs = store.getPrefs();
-    this.load(prefs.regionCode).then(function () {
-      wx.stopPullDownRefresh();
-    });
+    // 成功失败都要停掉下拉菊花，否则会一直转
+    var stop = function () { wx.stopPullDownRefresh(); };
+    this.load(prefs.regionCode).then(stop, stop);
   },
 
   load(regionCode) {
@@ -155,7 +157,9 @@ Page({
       self.applyHome(payload);
     }).catch(function () {
       if (seq !== self._reqSeq) return;
-      self.setData({ loading: false, loadError: '油价数据加载失败，请检查网络后重试' });
+      // 能走到这里说明后端失败之后本地兜底也出错了 ——
+      // 那是数据源本身的问题，不是网络问题，别把原因写错
+      self.setData({ loading: false, loadError: '油价数据读取失败，请稍后重试' });
     });
   },
 
@@ -298,7 +302,11 @@ Page({
       this.setData({ loading: false, loadError: '没有拿到油价数据' });
       return;
     }
-    var prices = (payload.prices || []).map(function (p) {
+    // 后端可能明确标记「合法为空」（还没采到该地区的挂牌价）：
+    // 这是真的没数据，显示空态 —— 不能回落演示数据，也不能当加载失败。
+    // 顺带把「一个价格都没有」也当空态：那样首页只剩一张空白大卡。
+    var dataEmpty = payload.empty === true;
+    var prices = (dataEmpty ? [] : (payload.prices || [])).map(function (p) {
       // changeAt 为空 = 没有基线可比（首次采集），0 是未知不是持平
       var meta = changeMeta(p.changeAmount, !!p.changeAt);
       return Object.assign({}, p, {
@@ -308,6 +316,8 @@ Page({
       });
     });
 
+    if (!prices.length) dataEmpty = true;
+
     var fuelId = this.data.fuelId;
     var hero = null;
     for (var i = 0; i < prices.length; i++) {
@@ -316,6 +326,7 @@ Page({
     if (!hero) hero = prices[0];
     if (hero) fuelId = hero.id;
 
+    // 调价窗口与价格无关：即使这个地区还没采到价，窗口也照常显示
     var windowData = payload.window || {};
     // 预测统一走 forecastMeta：区间对象 + 方向字段，幅度缺失时只说「待公布」
     var fc = forecastMeta(windowData);
@@ -325,9 +336,9 @@ Page({
     // 也不能把已经失效的预测挂在「下一次」下面。
     var daysLeft = Number(windowData.daysLeft);
     if (!isFinite(daysLeft)) daysLeft = 0;
-    var windowExpired = daysLeft < 0;
+    var windowExpired = fmt.windowExpired(daysLeft);
 
-    var trendRaw = (payload.trend30 || {})[fuelId] || { points: [], labels: [] };
+    var trendRaw = dataEmpty ? { points: [], labels: [] } : ((payload.trend30 || {})[fuelId] || { points: [], labels: [] });
     var points = trendRaw.points || [];
     var trendDirection = 'flat';
     if (points.length >= 2) {
@@ -337,6 +348,9 @@ Page({
 
     // 演示源给 latestNotice，后端给 notice —— 两个字段名都认
     var latest = payload.latestNotice || payload.notice || {};
+    // 没有 id 也没有标题 = 压根没有正式通知（不是「有通知但内容缺了」）。
+    // 这种时候不能再拼「--」日期和「调价幅度待公布」那种半吊子文案。
+    var noticeEmpty = !latest.id && !latest.title;
     var noticeChanges = latest.changes || {};
     // 幅度缺失时不能拿 0 顶上：那是替来源猜了一个幅度
     var noticeDelta = noticeChanges[fuelId];
@@ -365,22 +379,28 @@ Page({
     var source = payload.source || {};
     var srcLine = fmt.sourceLine(source);
     // 通知的来源名用通知自己的：整体来源和通知来源不是一回事
-    var noticeSourceName = ((latest.source && latest.source.name) || source.name || '未标注来源') +
+    // 通知的来源名用通知自己的：整体来源和通知来源不是一回事。
+    // 通知没带来源名时退回整体来源的公开说法，不暴露内部来源名。
+    var noticeSourceName = ((latest.source && latest.source.name) || fmt.sourceName(source)) +
       (source.mode === 'demo' ? '（演示数据）' : '');
 
     this.setData({
       loading: false,
       loadError: '',
+      dataEmpty: dataEmpty,
       region: payload.region || {},
       prices: prices,
       fuelId: fuelId,
       hero: hero,
       window: {
-        dateText: fmt.cnDate(windowData.date) + ' ' + (windowData.time || ''),
+        // 有没有真实的窗口日期：没有就别渲染窗口卡（否则倒计时会写成「就是今天」）
+        hasWindow: !!windowData.date,
+        dateText: windowData.date ? (fmt.cnDate(windowData.date) + ' ' + (windowData.time || '')) : '',
         daysLeft: daysLeft,
         passedDays: Math.abs(daysLeft),
         expired: windowExpired,
-        titleText: windowExpired ? '上一轮调价窗口' : '下一次调价窗口'
+        // 标题规则与调价页共用一套（utils/format.windowTitle）
+        titleText: fmt.windowTitle(daysLeft)
       },
       forecast: windowExpired
         // 窗口已经过去，挂在下面的预测早就失效了，不展示
@@ -394,36 +414,44 @@ Page({
       trend: {
         points: points,
         labels: trendRaw.labels || [],
-        direction: trendDirection
+        direction: trendDirection,
+        // 点少于 2 个画不出曲线：这时不渲染图表组件，改显示空态文案
+        hasChart: points.length >= 2
       },
       notice: {
-        id: latest.id,
-        title: latest.title,
-        day: dayParts.length === 3 ? dayParts[2] : '--',
-        month: dayParts.length === 3 ? Number(dayParts[1]) + '月' : '',
+        // 空态标记：WXML 据此换成「暂无正式调价通知」，
+        // 不再渲染日期块，也不再给出可点的详情入口
+        empty: noticeEmpty,
+        id: latest.id || '',
+        title: latest.title || '',
+        day: (noticeEmpty || dayParts.length !== 3) ? '' : dayParts[2],
+        month: (noticeEmpty || dayParts.length !== 3) ? '' : Number(dayParts[1]) + '月',
         fuelName: hero ? hero.name : '',
-        verb: noticeMeta.verb,
-        value: noticeMeta.value,
-        changeDirection: noticeMeta.direction,
-        executeText: executeDate
-          ? (fmt.fullDate(executeDate.slice(0, 10)) + ' ' + executeTime + ' 时执行。以下为本地各油品调整后的零售价格。')
-          : '执行日期待公布。以下为本地各油品调整后的零售价格。',
-        prices: noticePrices,
-        sourceName: noticeSourceName,
+        verb: noticeEmpty ? '' : noticeMeta.verb,
+        value: noticeEmpty ? '' : noticeMeta.value,
+        changeDirection: noticeEmpty ? 'flat' : noticeMeta.direction,
+        executeText: noticeEmpty ? '' : (executeDate
+          ? (fmt.fullDate(executeDate.slice(0, 10)) + ' ' + executeTime + ' 时执行')
+          : '执行日期待公布'),
+        // 摘要优先用后端给的 summary，没有就退回固定说明
+        summaryText: noticeEmpty ? '' : (latest.summary || '以下为本地各油品调整后的零售价格。'),
+        prices: noticeEmpty ? [] : noticePrices,
+        sourceName: noticeEmpty ? '' : noticeSourceName,
         // 后端通知可能没有发布时间，缺了就不写「发布于 …」，别留个空壳
-        publishedText: fmt.dateTime(latest.publishedAt),
-        sourceLine: noticeSourceName +
-          (latest.publishedAt ? (' · 发布于 ' + fmt.dateTime(latest.publishedAt)) : '')
+        publishedText: noticeEmpty ? '' : fmt.dateTime(latest.publishedAt),
+        sourceLine: noticeEmpty ? '' : (noticeSourceName +
+          (latest.publishedAt ? (' · 发布于 ' + fmt.dateTime(latest.publishedAt)) : ''))
       },
       // 后端没给更新时间就不写，别显示成「 更新」
       updatedLabel: payload.updatedAt ? (fmt.dateTime(payload.updatedAt) + ' 更新') : '',
-      sourceName: source.name || '未知来源',
+      // 数据源那几行也走 mode 白名单，不把内部来源名铺给用户
+      sourceName: fmt.sourceName(source),
       sourceNote: source.note || '',
       sourceText: srcLine.text,
       sourceWarn: srcLine.warn,
       cloudStatus: source.mode === 'live'
         ? '本次数据来自服务端采集'
-        : '当前显示演示数据，非实时行情',
+        : (source.mode === 'demo' ? '当前显示演示数据，非实时行情' : '数据来源待确认'),
       aboutNote: '国内成品油价格按调价节点展示，不代表实时成交价。国际原油仅作市场参考，与国内零售价之间存在税费与定价周期差异。'
     });
   },
@@ -506,6 +534,8 @@ Page({
   },
 
   onOpenNotice() {
+    // 没有正式通知时没有详情可看，别打开一个空白弹层
+    if (this.data.notice && this.data.notice.empty) return;
     this.setData({ sheetType: 'notice' });
   },
 

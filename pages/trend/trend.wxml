@@ -10,7 +10,8 @@
 
   <block wx:else>
     <!-- 来源提示：后端挂了回落演示数据时必须看得见 -->
-    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}">
+    <!-- aria-live：来源变了（后端挂了变黄）要能被读屏软件念出来 -->
+    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}" role="status" aria-live="polite">
       <text class="source-bar-text">{{sourceText}}</text>
     </view>
 
@@ -30,7 +31,13 @@
       >{{item.short}}</view>
     </view>
 
-    <view class="card">
+    <!-- 后端明确说「还没采到历史价」：显示空态，不回落演示数据也不当加载失败 -->
+    <view wx:if="{{dataEmpty}}" class="state-box">
+      <text class="state-box-title">{{chartEmptyText}}</text>
+      <text>{{chartEmptyHint}}</text>
+    </view>
+
+    <view class="card" wx:if="{{!dataEmpty}}">
       <view class="trend-summary">
         <view class="trend-price-row">
           <text class="trend-price num">{{priceText}}</text>
@@ -42,9 +49,14 @@
         </view>
       </view>
 
-      <trend-chart points="{{points}}" mode="step" height="{{176}}" show-y-axis="{{true}}" direction="{{direction}}" />
+      <!-- 点少于 2 个画不出曲线：不渲染图表组件，改显示空态文案 -->
+      <trend-chart wx:if="{{hasChart}}" points="{{points}}" mode="step" height="{{176}}" show-y-axis="{{true}}" direction="{{direction}}" />
+      <view wx:else class="chart-empty">
+        <text class="chart-empty-text">{{chartEmptyText}}</text>
+        <text class="chart-empty-hint">{{chartEmptyHint}}</text>
+      </view>
 
-      <view class="trend-axis">
+      <view class="trend-axis" wx:if="{{hasChart}}">
         <text wx:for="{{axis}}" wx:key="*this">{{item}}</text>
       </view>
 

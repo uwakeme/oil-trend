@@ -69,13 +69,31 @@ function fetchSource(source) {
  * 对外可见的只有 approved，文案里不能出现「待复核」这种自相矛盾的说法。
  */
 function noticeSummary(parsed) {
+  var changes = parsed.deltas || {};
+  var count = Object.keys(changes).length;
   if (parsed.reviewStatus === 'approved') {
-    return '来源公告逐项列明各油品调整幅度，已按原文发布。';
+    // 逐条数写出来：只解析出 1 个油品却说「逐项列明各油品」是反向错标
+    return '来源公告逐项列明 ' + count + ' 个油品的调整幅度，已按原文发布。';
   }
-  if (!parsed.perFuel) {
+  if (parsed.ambiguousDirection) {
+    return '来源公告只写「调整」，看不出上调还是下调，待人工核对。';
+  }
+  if (parsed.conflict) {
+    return '来源公告里同一个油品出现了两种不同幅度，待人工核对。';
+  }
+  if (parsed.mixedDirection) {
+    return '来源公告里各油品的调整方向不一致，待人工核对。';
+  }
+  if (count > 0 && count < 4) {
+    return '来源公告只解析出 ' + count + ' 个油品的幅度（四油品需齐全），待人工核对。';
+  }
+  if (!parsed.executeAt) {
+    return '来源公告未解析出执行日期，待人工核对后发布。';
+  }
+  if (parsed.delta !== null && parsed.delta !== undefined) {
     return '来源公告只解析出总幅度（每升 ' + parsed.delta + ' 元/升），各油品幅度待人工核对。';
   }
-  return '来源公告未解析出执行日期，待人工核对后发布。';
+  return '来源公告未能解析出结构化字段，待人工核对。';
 }
 
 /**
@@ -129,13 +147,28 @@ function saveNotice(source, parsed) {
 
   return dao.notices.findByDedupKey(key).then(function (exist) {
     if (!exist) {
-      return dao.notices.insert(Object.assign({ dedupKey: key }, doc)).then(function (inserted) {
-        // 可信的公告顺手补一条调价节点，走势页才有调价节点可显示
-        var follow = doc.reviewStatus === 'approved'
-          ? saveAdjustEvent(source, parsed)
-          : Promise.resolve(null);
-        return follow.then(function () {
-          return { deduped: false, id: inserted.id };
+      // ⚠️ 去重键里带执行日期：解析器修好、日期补上之后键就变了，
+      // 「存疑 → 可信」的覆盖更新根本不触发（键不一样），
+      // 旧的那条 pending 会永远留在库里。所以按 (来源, 标题) 再回退查一次。
+      return dao.notices.findPendingBySourceTitle(source.id, parsed.title).then(function (pendingRow) {
+        if (pendingRow && doc.reviewStatus === 'approved') {
+          return dao.notices.update(
+            pendingRow.id,
+            Object.assign({}, doc, { publishedAt: pendingRow.publishedAt, dedupKey: key })
+          ).then(function () {
+            return saveAdjustEvent(source, parsed).then(function () {
+              return { deduped: false, upgraded: true, id: pendingRow.id, reviewStatus: doc.reviewStatus, summary: doc.summary };
+            });
+          });
+        }
+        return dao.notices.insert(Object.assign({ dedupKey: key }, doc)).then(function (inserted) {
+          // 可信的公告顺手补一条调价节点，走势页才有调价节点可显示
+          var follow = doc.reviewStatus === 'approved'
+            ? saveAdjustEvent(source, parsed)
+            : Promise.resolve(null);
+          return follow.then(function () {
+            return { deduped: false, id: inserted.id, reviewStatus: doc.reviewStatus, summary: doc.summary };
+          });
         });
       });
     }
@@ -144,11 +177,11 @@ function saveNotice(source, parsed) {
       return dao.notices.update(exist.id, Object.assign({}, doc, { publishedAt: exist.publishedAt }))
         .then(function () {
           return saveAdjustEvent(source, parsed).then(function () {
-            return { deduped: false, upgraded: true, id: exist.id };
+            return { deduped: false, upgraded: true, id: exist.id, reviewStatus: doc.reviewStatus, summary: doc.summary };
           });
         });
     }
-    return { deduped: true, id: exist.id };
+    return { deduped: true, id: exist.id, reviewStatus: doc.reviewStatus, summary: doc.summary };
   });
 }
 
@@ -235,7 +268,13 @@ async function collectPriceSource(source, options) {
   async function worker() {
     while (queue.length) {
       var region = queue.shift();
-      var fetched = await fetchSource({ url: source.url + region.slug + '.shtml', headers: source.headers });
+      // ⚠️ allowedHosts 必须透传：地区页抓取是唯一在跑的来源，
+      // 不传的话重定向白名单形同虚设（站点跳到哪儿就跟到哪儿）。
+      var fetched = await fetchSource({
+        url: source.url + region.slug + '.shtml',
+        headers: source.headers,
+        allowedHosts: source.allowedHosts
+      });
       if (!fetched.ok) {
         failures.push({ regionCode: region.code, regionName: region.name, reason: fetched.reason, message: fetched.message });
         continue;
@@ -305,6 +344,11 @@ try {
   REFERENCE_PRICES = require('../../../data/reference-prices.js').REFERENCE_PRICES;
 } catch (e) {
   REFERENCE_PRICES = null;
+  // ⚠️ 基准价校验会**无声失效**：拿不到基准价时所有偏差检查都跳过，
+  // 而表现只是「没告警」—— 看不出是校验没跑还是真的没偏差。
+  // 所以这里必须喊一声，别让部署漏了基准价文件还蒙在鼓里。
+  console.warn('[collector] 基准价文件未找到（data/reference-prices.js），' +
+    '各省基准价偏差校验本次跳过：' + (e && e.message ? e.message : e));
 }
 
 /**
@@ -516,7 +560,17 @@ function collectFromSource(source, options) {
     }
     if (source.kind === 'notice') {
       return saveNotice(source, parsed).then(function (saved) {
-        return { sourceId: source.id, status: 'ok', saved: saved };
+        if (saved && saved.reviewStatus === 'approved') {
+          return { sourceId: source.id, status: 'ok', saved: saved };
+        }
+        // ⚠️ 存疑的公告不能报「同步正常」—— 它必须出现在待核对队列里，
+        // 否则前端完全看不出「有条公告没解析出来」，以为一切正常。
+        return {
+          sourceId: source.id,
+          status: 'needsReview',
+          reason: 'NOTICE_PENDING',
+          message: '公告已入库但可信度不足（' + ((saved && saved.summary) || '存疑') + '），待人工核对'
+        };
       });
     }
     if (source.kind === 'market') {

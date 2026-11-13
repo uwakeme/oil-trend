@@ -41,21 +41,30 @@ function get(url, options) {
 
   function attempt(currentUrl, redirectsLeft) {
     return new Promise(function (resolve, reject) {
+      // 只结算一次：请求、超时、预算三条路径都可能先到
+      var settled = false;
+      var budgetTimer = null;
+      function settle(fn, arg) {
+        if (settled) return;
+        settled = true;
+        if (budgetTimer) clearTimeout(budgetTimer);
+        fn(arg);
+      }
       var target;
       try {
         target = new URL(currentUrl);
       } catch (e) {
-        reject(new Error('URL_INVALID'));
+        settle(reject, new Error('URL_INVALID'));
         return;
       }
       if (target.protocol !== 'https:' && target.protocol !== 'http:') {
-        reject(new Error('PROTOCOL_UNSUPPORTED'));
+        settle(reject, new Error('PROTOCOL_UNSUPPORTED'));
         return;
       }
       // 总时限：所有跳转加起来不能超过这个预算
       var remaining = deadline - Date.now();
       if (remaining <= 0) {
-        reject(new Error('TOTAL_TIMEOUT'));
+        settle(reject, new Error('TOTAL_TIMEOUT'));
         return;
       }
       if (!firstHost) firstHost = target.host;
@@ -64,7 +73,7 @@ function get(url, options) {
         ? opts.allowedHosts
         : [firstHost];
       if (allowed.indexOf(target.host) < 0) {
-        reject(new Error('REDIRECT_BLOCKED'));
+        settle(reject, new Error('REDIRECT_BLOCKED'));
         return;
       }
 
@@ -82,11 +91,11 @@ function get(url, options) {
             var location = res.headers.location;
             res.resume();
             if (!location) {
-              reject(new Error('REDIRECT_WITHOUT_LOCATION'));
+              settle(reject, new Error('REDIRECT_WITHOUT_LOCATION'));
               return;
             }
             if (redirectsLeft <= 0) {
-              reject(new Error('TOO_MANY_REDIRECTS'));
+              settle(reject, new Error('TOO_MANY_REDIRECTS'));
               return;
             }
             var next = new URL(location, target.toString()).toString();
@@ -98,19 +107,29 @@ function get(url, options) {
           var size = 0;
           var tooLarge = false;
           res.on('data', function (chunk) {
+            // ⚠️ 总时限必须在**单跳内**也生效。
+            // req.setTimeout 是**空闲**超时：对方慢慢吐数据会不断把它重置，
+            // 请求能一直挂着不结束 —— 跨跳预算只在下一次跳转时才检查，
+            // 单跳里根本没有检查点。
+            if (Date.now() >= deadline) {
+              tooLarge = true;
+              req.destroy();
+              settle(reject, new Error('TOTAL_TIMEOUT'));
+              return;
+            }
             size += chunk.length;
             // 油价页只有几十 KB，超这个量级说明拿到的不是预期响应
             if (size > MAX_BYTES) {
               tooLarge = true;
               req.destroy();
-              reject(new Error('RESPONSE_TOO_LARGE'));
+              settle(reject, new Error('RESPONSE_TOO_LARGE'));
               return;
             }
             chunks.push(chunk);
           });
           res.on('end', function () {
             if (tooLarge) return;
-            resolve({
+            settle(resolve, {
               statusCode: status,
               body: Buffer.concat(chunks).toString('utf8'),
               url: target.toString()
@@ -121,11 +140,19 @@ function get(url, options) {
 
       req.setTimeout(Math.min(timeout, remaining), function () {
         req.destroy();
-        reject(new Error('TIMEOUT'));
+        settle(reject, new Error('TIMEOUT'));
       });
       req.on('error', function (err) {
-        reject(err);
+        settle(reject, err);
       });
+
+      // 硬预算：不管对方吐不吐字节，到点就掐断。
+      // 单靠 req.setTimeout（空闲超时）挡不住「慢速滴水」式的拖挂。
+      budgetTimer = setTimeout(function () {
+        req.destroy();
+        settle(reject, new Error('TOTAL_TIMEOUT'));
+      }, Math.max(1, remaining));
+
       req.end();
     });
   }

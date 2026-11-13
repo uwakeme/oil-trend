@@ -210,6 +210,9 @@ function actionHome(payload) {
       return {
         region: { code: region.code, fullName: region.name + ' · ' + region.city },
         prices: priceList,
+        // 合法为空要标出来：这个地区还没采到价，不是「后端没给成」。
+        // 前端据此显示空态，而不是回落演示数据。
+        empty: priceList.length === 0,
         window: buildWindow(win),
         trend30: trend30,
         changes: changes,
@@ -253,9 +256,26 @@ function actionTrend(payload) {
 
     var values = history.map(function (h) { return h.price; });
     if (!values.length) {
-      var err = new Error('该区间暂无历史数据');
-      err.code = 'NO_HISTORY';
-      throw err;
+      // ⚠️ 「该地区还没有历史价」是**合法的空**，不是故障。
+      // 以前抛 NO_HISTORY → 前端当失败处理 → 回落演示数据，
+      // 用户看到一堆假价格还以为服务挂了。
+      // 现在明确标 empty:true，前端显示「暂无数据」的空态。
+      return {
+        region: { code: region.code, fullName: region.name + ' · ' + region.city },
+        fuel: { id: fuelId, name: (shared.FUELS.filter(function (f) { return f.id === fuelId; })[0] || {}).name || fuelId },
+        price: null,
+        deltaPercent: 0,
+        direction: 'flat',
+        rangeLabel: { '3m': '近 3 个月', '6m': '近 6 个月', '1y': '近 1 年' }[period],
+        low: null,
+        high: null,
+        count: 0,
+        axis: [],
+        points: [],
+        events: [],
+        empty: true,
+        source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
+      };
     }
     var first = values[0];
     var last = values[values.length - 1];
@@ -287,15 +307,19 @@ function actionTrend(payload) {
       ],
       points: points,
       events: events.map(function (e) {
-        var delta = (e.deltas || {})[fuelId];
-        if (typeof delta !== 'number') delta = 0;
+        var raw = (e.deltas || {})[fuelId];
+        // ⚠️ 幅度解析不出来时不能直接置 0 —— 那会把「幅度未知」显示成「持平 0.00」。
+        // 公告里没写这个油品，就是没有，不是零调整。
+        var known = typeof raw === 'number';
+        var delta = known ? raw : 0;
         return {
           date: e.date,
           title: e.title,
-          amount: delta,
+          amount: known ? delta : null,
+          amountKnown: known,
           // 三态：幅度为 0 是「持平」，不是「上涨」。
           // 原来写成 < 0 ? 'down' : 'up'，持平的节点会被染成上涨色。
-          direction: delta < 0 ? 'down' : (delta > 0 ? 'up' : 'flat'),
+          direction: known ? (delta < 0 ? 'down' : (delta > 0 ? 'up' : 'flat')) : 'flat',
           priceAfter: priceByDate[e.date] !== undefined ? priceByDate[e.date] : priceMap[fuelId]
         };
       }),

@@ -644,6 +644,164 @@ async function main() {
   check('价格没变就不改调价日', histPriceRow.changeAt === '2026-11-01', String(histPriceRow.changeAt));
   check('价格没变就不改调价幅度', histPriceRow.changeAmount === 0.3, String(histPriceRow.changeAmount));
 
+  console.log('\n--- 订阅消息请求体：必须是 {value} 包装 ---');
+  // ⚠️ 微信 message/subscribe/send 要求每个字段是 {"value": "..."} 对象。
+  // 传扁平字符串平台一律拒收（errcode 47003）。
+  // 上一轮两边「一致地」漏了包装：契约表按扁平值校验，自检也按扁平值断言，
+  // 结果全绿但真发必失败。所以这里用**平台文档的固定夹具**交叉校验，
+  // 而不是拿自己生成的契约表当标准。
+  var subscribeTemplates = require(path.join(ROOT, 'src', 'services', 'subscribe-templates.js'));
+  var subscribeService = require(path.join(ROOT, 'src', 'services', 'subscribe.js'));
+  var alertService = require(path.join(ROOT, 'src', 'services', 'alert.js'));
+
+  // 微信官方文档里的请求体样例：字段名与结构就是平台契约
+  var WECHAT_FIXTURE = {
+    touser: 'OPENID',
+    template_id: 'TEMPLATE_ID',
+    page: 'index',
+    miniprogram_state: 'developer',
+    lang: 'zh_CN',
+    data: {
+      thing1: { value: 'pancakes' },
+      amount2: { value: '39.8元' },
+      date3: { value: '2026年11月24日' },
+      phrase4: { value: '微信支付' },
+      thing5: { value: '微信支付' }
+    }
+  };
+
+  var flat = alertService.buildData({
+    fuel: '92# 汽油', amount: 0.13, direction: '下调', date: '2026-11-24', tip: '广东现价8.39元'
+  });
+  var body = subscribeService.buildBody({
+    openid: 'OPENID',
+    templateId: subscribeTemplates.PRIMARY_TEMPLATE_ID,
+    page: 'pages/index/index',
+    data: flat,
+    miniprogramState: 'developer'
+  });
+  check('订阅消息 data 每个字段都是含 value 的对象',
+    Object.keys(body.data).every(function (k) {
+      var v = body.data[k];
+      return v && typeof v === 'object' && !Array.isArray(v) && typeof v.value === 'string';
+    }),
+    JSON.stringify(body.data));
+  check('订阅消息 data 的字段名都是模板占位符',
+    Object.keys(body.data).every(function (k) {
+      return !!subscribeTemplates.templateOf(subscribeTemplates.PRIMARY_TEMPLATE_ID).fields[k];
+    }),
+    Object.keys(body.data).join(','));
+  check('订阅消息请求体顶层字段与平台夹具一致',
+    JSON.stringify(Object.keys(body).sort()) === JSON.stringify(Object.keys(WECHAT_FIXTURE).sort()),
+    Object.keys(body).join(','));
+  check('平台夹具里出现过的字段，我们的请求体也是同样的 {value: 字符串} 结构',
+    Object.keys(WECHAT_FIXTURE.data).every(function (k) {
+      var f = WECHAT_FIXTURE.data[k];
+      var o = body.data[k];
+      if (!o) return true;
+      return f && typeof f === 'object' && typeof f.value === 'string' &&
+        typeof o === 'object' && typeof o.value === 'string';
+    }));
+
+  // 真正发一次（把微信接口桩掉），抓**实际 POST 出去的 body** 来断言
+  var authService = require(path.join(ROOT, 'src', 'services', 'auth.js'));
+  var captured = null;
+  var origCallWeChat = authService.callWeChat;
+  authService.callWeChat = function (urlPath, query, post) {
+    if (urlPath.indexOf('/cgi-bin/token') >= 0) {
+      return Promise.resolve({ access_token: 'TEST_TOKEN', expires_in: 7200 });
+    }
+    if (urlPath.indexOf('subscribe/send') >= 0) {
+      captured = post;
+      return Promise.resolve({ errcode: 0, errmsg: 'ok' });
+    }
+    return origCallWeChat.apply(null, arguments);
+  };
+  await subscribeService.send({
+    openid: 'OPENID',
+    templateId: subscribeTemplates.PRIMARY_TEMPLATE_ID,
+    page: 'pages/index/index',
+    data: flat
+  });
+  authService.callWeChat = origCallWeChat;
+  check('实际 POST 出去的 data 每个字段都是 {value: 字符串}',
+    !!captured && Object.keys(captured.data).every(function (k) {
+      var v = captured.data[k];
+      return v && typeof v === 'object' && !Array.isArray(v) && typeof v.value === 'string';
+    }),
+    captured ? JSON.stringify(captured.data) : '没抓到请求体');
+  check('实际 POST 出去的字段名与模板占位符一致',
+    !!captured && Object.keys(captured.data).every(function (k) {
+      return !!subscribeTemplates.templateOf(subscribeTemplates.PRIMARY_TEMPLATE_ID).fields[k];
+    }),
+    captured ? Object.keys(captured.data).join(',') : '');
+
+  console.log('\n--- 公告入库 → 可信度判定 → 对外可见性（端到端） ---');
+  // ⚠️ 不允许直接 insert 一条 approved 夹具 —— 那会绕过整条判定链路，
+  // 自检就成了「自己证明自己」。这里从**正文**出发走完整条链路。
+  var sources = require(path.join(ROOT, 'src', 'services', 'sources.js'));
+  var noticeSource = { id: 'ndrc-notice', name: '国家发展改革委价格监测中心', url: 'https://example.invalid/' };
+  var goodText = '根据国家发展改革委有关成品油价格调整的通知，自2026年12月10日24时起，' +
+    '国内成品油价格按机制下调，调整幅度为：92号汽油每升下调0.08元，95号汽油每升下调0.08元，' +
+    '98号汽油每升下调0.10元，0号柴油每升下调0.08元。';
+  var parsedGood = sources.PARSERS.ndrcNotice(goodText);
+  await collector.saveNotice(noticeSource, parsedGood);
+  var goodKey = shared.dedupKey(noticeSource.id, parsedGood.title, parsedGood.executeAt);
+  var rowGood = await dao.notices.findByDedupKey(goodKey);
+  check('正文完整的公告入库后 review_status 是 approved',
+    !!rowGood && rowGood.reviewStatus === 'approved', rowGood && rowGood.reviewStatus);
+  var publicList = await dao.notices.listPublic('official', 50, 0);
+  check('可信公告对外可见',
+    !!rowGood && publicList.some(function (n) { return n.id === rowGood.id; }));
+
+  // 只写了一个油品 —— 缺的两个是猜不出来的，不能发布
+  var parsedBad = sources.PARSERS.ndrcNotice('自2026年12月20日24时起，92号汽油每升下调0.10元。');
+  await collector.saveNotice(noticeSource, parsedBad);
+  var badKey = shared.dedupKey(noticeSource.id, parsedBad.title, parsedBad.executeAt);
+  var rowBad = await dao.notices.findByDedupKey(badKey);
+  check('残缺公告入库后是 pending', !!rowBad && rowBad.reviewStatus === 'pending',
+    rowBad && rowBad.reviewStatus);
+  check('残缺公告不对外可见',
+    !!rowBad && !(await dao.notices.listPublic('official', 50, 0)).some(function (n) { return n.id === rowBad.id; }));
+  check('残缺公告的摘要不谎称「逐项列明各油品」',
+    !!rowBad && rowBad.summary.indexOf('逐项列明') < 0, rowBad && rowBad.summary);
+
+  console.log('\n--- 发送失败不再永久占住去重键 ---');
+  var retryKey = 'selftest::retry::key';
+  var reserved1 = await dao.logs.reserve({ userId: 'u1', dedupKey: retryKey, payload: { type: 'x' } });
+  check('第一次能占到去重键', !!reserved1);
+  var reserved2 = await dao.logs.reserve({ userId: 'u1', dedupKey: retryKey, payload: { type: 'x' } });
+  check('同一个键第二次占不到（不会重复发）', !reserved2);
+  await dao.logs.release(reserved1.id);
+  var reserved3 = await dao.logs.reserve({ userId: 'u1', dedupKey: retryKey, payload: { type: 'x' } });
+  check('可重试失败释放占位后还能再占（下一轮能重发）', !!reserved3);
+  await dao.logs.markResult(reserved3.id, false, '45009:api freq out of limit');
+  var hist1 = await dao.logs.listByUser('u1', 50);
+  check('失败记录带原因时仍然出现在用户历史里',
+    hist1.some(function (h) { return h.dedupKey === retryKey && !!h.failReason; }));
+
+  // 崩在 reserve 与 markResult 之间的僵尸占位：历史里不显示，过期后能被回收
+  await pgPool.query(
+    'INSERT INTO alert_logs (user_id, dedup_key, time, sent, fail_reason, payload) ' +
+    'VALUES ($1, $2, NOW(), FALSE, NULL, $3::jsonb)',
+    ['u2', 'zombie::key', JSON.stringify({})]
+  );
+  var hist2 = await dao.logs.listByUser('u2', 50);
+  check('没回填结果的僵尸占位不出现在用户历史里',
+    !hist2.some(function (h) { return h.dedupKey === 'zombie::key'; }));
+  await pgPool.query(
+    'INSERT INTO alert_logs (user_id, dedup_key, time, sent, fail_reason, payload) ' +
+    'VALUES ($1, $2, $3::timestamptz, FALSE, NULL, $4::jsonb)',
+    ['u3', 'stale::key', new Date(Date.now() - 30 * 60 * 1000).toISOString(), JSON.stringify({})]
+  );
+  var staleTakeover = await dao.logs.reserve({ userId: 'u3', dedupKey: 'stale::key', payload: {} });
+  check('崩在中途的过期占位能被回收重发', !!staleTakeover);
+
+  check('网络类失败算可重试', alertService.classifyFailure('请求超时') === 'retryable');
+  check('平台限流算可重试', alertService.classifyFailure('45009:api freq out of limit') === 'retryable');
+  check('模板没配算不可重试', alertService.classifyFailure('TEMPLATE_NOT_CONFIGURED') === 'permanent');
+  check('没有订阅额度算不可重试', alertService.classifyFailure('43101:user refuse') === 'permanent');
+
   console.log('\n--- 错误信息不对外透传内部细节 ---');
   var errorsModule = require(path.join(ROOT, 'src', 'errors.js'));
   var internal = errorsModule.publicError({ code: 'PG_ERROR', message: 'relation "oil_prices" does not exist' });

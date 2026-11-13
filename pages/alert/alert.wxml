@@ -16,7 +16,8 @@
     </view>
 
     <!-- 数据来源：当前价与目标价都基于这份数据 -->
-    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}">
+    <!-- aria-live：来源变了（后端挂了变黄）要能被读屏软件念出来 -->
+    <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}" role="status" aria-live="polite">
       <text class="source-bar-text">{{sourceText}}</text>
     </view>
 
@@ -129,7 +130,7 @@
   </block>
 
   <!-- 订阅授权说明 -->
-  <bottom-sheet visible="{{sheetVisible}}" title="开启降价提醒" bind:close="onSheetClose">
+  <bottom-sheet visible="{{sheetVisible}}" title="开启降价提醒" scroll-height="70vh" bind:close="onSheetClose">
     <view class="sheet-body">正式调价时，此处将调用微信订阅消息授权。你可以自由选择提醒类型，未授权不会影响油价查询。</view>
 
     <view class="permission-item">

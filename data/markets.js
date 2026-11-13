@@ -170,7 +170,10 @@ function buildMarketPayload(symbol, period) {
     price: m.price,
     changeAmount: m.changeAmount,
     changePercent: m.changePercent,
-    direction: m.changeAmount < 0 ? 'down' : 'up',
+    // 三态：涨跌额为 0 是「持平」，不能染成上涨。
+    // openapi 声明的就是三态，生成源这里也得是三态 ——
+    // sync-shared 只保证两端「一致」，两端一致地写错它不会报警。
+    direction: m.changeAmount < 0 ? 'down' : (m.changeAmount > 0 ? 'up' : 'flat'),
     open: m.open,
     prevClose: m.prevClose,
     high: m.high,

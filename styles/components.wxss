@@ -167,6 +167,9 @@
   /* 面板本身不再滚动：滚动交给里面的 scroll-view，
      否则长列表（31 个省）在真机上滚不动 */
   max-height: 84vh;
+  /* 高度由 bottom-sheet 的 scroll-height 属性给（inline style），
+     默认 84vh。面板拿到确定高度后，内部 flex 布局才能
+     把剩余空间算给滚动区 —— scroll-view 必须有确定高度才滚得动 */
   display: flex;
   flex-direction: column;
   background: var(--paper);
@@ -175,9 +178,17 @@
   box-sizing: border-box;
 }
 .sheet-scroll {
-  /* scroll-view 必须给高度约束，否则内容会撑开整个面板 */
-  max-height: calc(84vh - 190rpx);
-  flex: 1 1 auto;
+  /*
+   * scroll-view 必须有确定高度，否则真机上滚不动
+   *（max-height 对 scroll-view 不生效）。
+   *
+   * 高度来源：面板的确定高度 − 把手 − 标题 − 内边距，
+   * 由 flex 布局算出来：
+   *   flex-basis 0  —— 不按内容高度算
+   *   min-height 0  —— 允许缩到内容以下，内容超了才会变成滚动
+   */
+  flex: 1 1 0;
+  min-height: 0;
 }
 .sheet-handle {
   width: 72rpx;
