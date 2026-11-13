@@ -25,7 +25,10 @@ const db = require('../db');
  */
 var NUMERIC_COLUMNS = {
   price: 1, changeamount: 1, changepercent: 1,
-  open: 1, prevclose: 1, high: 1, low: 1
+  open: 1, prevclose: 1, high: 1, low: 1,
+  // ⚠️ target_price 不转数字的话，提醒规则读出来是字符串 '7.20'，
+  // 而 alert.js 判断目标价用的是 typeof === 'number' → 目标价提醒永远不触发
+  targetprice: 1
 };
 
 /**
@@ -418,13 +421,25 @@ const rules = {
     return mapRows(rows);
   },
 
+  /**
+   * 写入一条提醒规则。
+   *
+   * ⚠️ subscribeGranted 是**三态**：
+   *   undefined —— 客户端这次没带这个字段（比如只是改了目标价），
+   *               保持库里的原值不动；
+   *   true     —— 客户端刚拿到微信的一次性授权，恢复额度并清掉「已用完」标记；
+   *   false    —— 客户端明确撤销授权。
+   * 写成布尔量之后，「已发完一条」和「从没授权过」就分不开了。
+   */
   async upsert(rule) {
     await db.query(
-      'INSERT INTO alert_rules (user_id, region_code, fuel_id, official_drop, target_price, predict_drop, subscribe_granted, extra, updated_at) ' +
-      'VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW()) ' +
+      'INSERT INTO alert_rules (user_id, region_code, fuel_id, official_drop, target_price, predict_drop, target_enabled, subscribe_granted, subscribe_used_at, extra, updated_at) ' +
+      'VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::boolean, FALSE), NULL, $9::jsonb, NOW()) ' +
       'ON CONFLICT (user_id, region_code, fuel_id) DO UPDATE SET ' +
       'official_drop = EXCLUDED.official_drop, target_price = EXCLUDED.target_price, ' +
-      'predict_drop = EXCLUDED.predict_drop, subscribe_granted = EXCLUDED.subscribe_granted, ' +
+      'predict_drop = EXCLUDED.predict_drop, target_enabled = EXCLUDED.target_enabled, ' +
+      'subscribe_granted = CASE WHEN $8::boolean IS NULL THEN alert_rules.subscribe_granted ELSE EXCLUDED.subscribe_granted END, ' +
+      'subscribe_used_at = CASE WHEN $8::boolean = TRUE THEN NULL ELSE alert_rules.subscribe_used_at END, ' +
       'extra = EXCLUDED.extra, updated_at = NOW()',
       [
         rule.userId,
@@ -433,9 +448,24 @@ const rules = {
         rule.officialDrop === undefined ? true : !!rule.officialDrop,
         rule.targetPrice === undefined ? null : rule.targetPrice,
         !!rule.predictDrop,
-        !!rule.subscribeGranted,
+        rule.targetEnabled === undefined ? true : !!rule.targetEnabled,
+        rule.subscribeGranted === undefined ? null : rule.subscribeGranted,
         JSON.stringify(rule.extra || {})
       ]
+    );
+  },
+
+  /**
+   * 一次性订阅的额度用掉了：置为未授权，并记下用掉的时间。
+   *
+   * 界面靠 subscribe_used_at 区分「授权已用完」和「从没授权过」——
+   * 两者都显示成「未开启」会让人以为是自己没点同意。
+   */
+  async consumeSubscribe(rule) {
+    await db.query(
+      'UPDATE alert_rules SET subscribe_granted = FALSE, subscribe_used_at = NOW(), updated_at = NOW() ' +
+      'WHERE user_id = $1 AND region_code = $2 AND fuel_id = $3',
+      [rule.userId, rule.regionCode, rule.fuelId]
     );
   }
 };

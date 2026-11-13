@@ -157,10 +157,21 @@ function getAlertRules() {
   return Promise.resolve(store.getRules());
 }
 
-function saveAlertRules(rules) {
+/**
+ * 保存提醒规则。
+ *
+ * @param {Array} rules 本地留存的规则（带界面状态）
+ * @param {Array} [payload] 发给后端的载荷，默认与 rules 相同。
+ *   两者分开是因为订阅授权是一次性的：只有「刚拿到授权」的那一次保存
+ *   才带 subscribeGranted=true，之后任何保存都不带 ——
+ *   否则服务端把额度用掉之后，界面上随便拨个开关就会把额度又续上，
+ *   而微信那边其实已经没额度了。
+ */
+function saveAlertRules(rules, payload) {
   store.saveRules(rules);
   if (!preferBackend()) return Promise.resolve(rules);
-  return cloud.callFunction('oilApi', { action: 'rules.save', rules: rules })
+  var body = payload || rules;
+  return cloud.callFunction('oilApi', { action: 'rules.save', rules: body })
     .then(function () { return rules; })
     .catch(function () { return rules; });
 }

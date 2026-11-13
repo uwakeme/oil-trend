@@ -210,6 +210,146 @@ async function main() {
     null
   ).length === 0);
 
+  console.log('\n--- 订阅消息模板契约 ---');
+  // 平台模板的字段名和值格式是硬约束：
+  // 字段名对不上 → errcode 47003；值格式不对 → 47002。
+  // 这里钉住契约表与三类提醒的 data，任何一边改了都要在这里暴露。
+  var templates = require(path.join(ROOT, 'src', 'services', 'subscribe-templates.js'));
+  var templateId = templates.PRIMARY_TEMPLATE_ID;
+  var tpl = templates.templateOf(templateId);
+  check('主模板已登记在契约表里', !!tpl);
+  check('模板字段与平台一致（thing5/amount2/phrase1/date3/thing4）',
+    !!tpl && Object.keys(tpl.fields).sort().join(',') === 'amount2,date3,phrase1,thing4,thing5',
+    tpl ? Object.keys(tpl.fields).sort().join(',') : '无');
+
+  check('金额带「元」且不带「元/升」', templates.formatAmount(0.13) === '0.13元',
+    String(templates.formatAmount(0.13)));
+  check('金额对空值返回 null（不能变成 0.00元）', templates.formatAmount(null) === null);
+  check('日期转中文年月日', templates.formatDate('2026-11-24') === '2026年11月24日',
+    String(templates.formatDate('2026-11-24')));
+  check('短语截到 5 字', templates.formatPhrase('预计下调再涨').length === 5);
+  check('文本截到 20 字', templates.formatThing('一二三四五六七八九十一二三四五六七八九十').length === 20);
+
+  var baseData = {
+    thing5: '92# 汽油', amount2: '0.13元', phrase1: '下调',
+    date3: '2026年11月24日', thing4: '广东现价7.36元'
+  };
+  function withField(key, value) {
+    var copy = Object.assign({}, baseData);
+    copy[key] = value;
+    return copy;
+  }
+  var badAmount = templates.validate(templateId, withField('amount2', '0.13 元/升'));
+  check('金额带「元/升」会被契约挡住',
+    !badAmount.ok && badAmount.errors.some(function (e) { return e.indexOf('BAD_AMOUNT') === 0; }),
+    badAmount.errors.join(','));
+  var badDate = templates.validate(templateId, withField('date3', '2026-11-24'));
+  check('ISO 日期会被契约挡住',
+    !badDate.ok && badDate.errors.some(function (e) { return e.indexOf('BAD_DATE') === 0; }),
+    badDate.errors.join(','));
+  var badField = templates.validate(templateId, { thing1: '92# 汽油' });
+  check('模板里没有的字段名会被挡住',
+    !badField.ok && badField.errors.some(function (e) { return e.indexOf('UNKNOWN_FIELD') === 0; }),
+    badField.errors.join(','));
+  var missingField = templates.validate(templateId, { thing5: '92# 汽油' });
+  check('漏填字段会被挡住',
+    !missingField.ok && missingField.errors.some(function (e) { return e.indexOf('MISSING') === 0; }),
+    missingField.errors.join(','));
+  check('合规数据能通过契约', templates.validate(templateId, baseData).ok,
+    templates.validate(templateId, baseData).errors.join(','));
+
+  console.log('\n--- 三类提醒的模板取值 ---');
+  var tHits = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92',
+      officialDrop: true, targetEnabled: true, targetPrice: 7.5, forecastDrop: true },
+    [{ regionCode: '440000', fuelId: '92', price: 7.36 }],
+    { kind: 'official', executeAt: '2026-11-24', changes: { '92': -0.08 } },
+    { kind: 'forecast', executeAt: '2026-11-26', changes: { '92': -0.06 } }
+  );
+  var hitByType = {};
+  tHits.forEach(function (h) { hitByType[h.type] = h; });
+  ['officialDrop', 'targetPrice', 'forecastDrop'].forEach(function (type) {
+    var hit = hitByType[type];
+    check(type + ' 能命中', !!hit);
+    if (!hit) return;
+    var v = templates.validate(templateId, hit.data);
+    check(type + ' 的 data 通过模板契约', v.ok, v.errors.join(','));
+    check(type + ' 的字段名与契约完全一致',
+      Object.keys(hit.data).sort().join(',') === Object.keys(tpl.fields).sort().join(','),
+      Object.keys(hit.data).sort().join(','));
+  });
+  if (hitByType.officialDrop) {
+    check('官方降价的金额是降价幅度', hitByType.officialDrop.data.amount2 === '0.08元',
+      hitByType.officialDrop.data.amount2);
+    check('官方降价的方向是「下调」', hitByType.officialDrop.data.phrase1 === '下调',
+      hitByType.officialDrop.data.phrase1);
+    check('官方降价的日期是执行日', hitByType.officialDrop.data.date3 === '2026年11月24日',
+      hitByType.officialDrop.data.date3);
+    check('官方降价的温馨提示带地区与现价',
+      hitByType.officialDrop.data.thing4.indexOf('广东') === 0 &&
+      hitByType.officialDrop.data.thing4.indexOf('7.36') > 0,
+      hitByType.officialDrop.data.thing4);
+  }
+  if (hitByType.targetPrice) {
+    check('目标价的金额填的是目标价', hitByType.targetPrice.data.amount2 === '7.50元',
+      hitByType.targetPrice.data.amount2);
+    check('目标价的方向是「已达目标」', hitByType.targetPrice.data.phrase1 === '已达目标',
+      hitByType.targetPrice.data.phrase1);
+    check('目标价的日期是今天（UTC+8）',
+      hitByType.targetPrice.data.date3 === templates.formatDate(alert.todayCN()),
+      hitByType.targetPrice.data.date3 + ' vs ' + templates.formatDate(alert.todayCN()));
+  }
+  if (hitByType.forecastDrop) {
+    check('预测下调的方向是「预计下调」', hitByType.forecastDrop.data.phrase1 === '预计下调',
+      hitByType.forecastDrop.data.phrase1);
+    check('预测下调的温馨提示标明非官方',
+      hitByType.forecastDrop.data.thing4.indexOf('以官方为准') > 0,
+      hitByType.forecastDrop.data.thing4);
+  }
+  check('地区名取自地区表（不是地区代码）', alert.regionNameOf('440000') === '广东',
+    alert.regionNameOf('440000'));
+  check('未知地区不静默回退成上海', alert.regionNameOf('999999') === '999999',
+    alert.regionNameOf('999999'));
+  check('目标价开关关掉时不命中',
+    alert.matchRule(
+      { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: false, targetEnabled: false, targetPrice: 99 },
+      [{ regionCode: '440000', fuelId: '92', price: 7.36 }],
+      null, null
+    ).length === 0);
+
+  console.log('\n--- 提醒规则字段映射 ---');
+  await user.actionRulesSave('openid-fields', [
+    { regionCode: '440000', fuelId: '92', officialDrop: true, targetEnabled: false,
+      targetPrice: 7.15, forecastDrop: true, subscribeGranted: true }
+  ]);
+  var fr = (await user.actionRulesList('openid-fields')).rules[0];
+  check('forecastDrop 能存能读（前端字段名）', fr.forecastDrop === true, String(fr.forecastDrop));
+  check('targetEnabled 能存能读', fr.targetEnabled === false, String(fr.targetEnabled));
+  check('targetPrice 读回来是数字', typeof fr.targetPrice === 'number' &&
+    Math.abs(fr.targetPrice - 7.15) < 0.001, String(fr.targetPrice));
+  check('subscribeGranted 读回 true', fr.subscribeGranted === true);
+
+  await dao.rules.consumeSubscribe({ userId: 'openid-fields', regionCode: '440000', fuelId: '92' });
+  var afterUse = (await user.actionRulesList('openid-fields')).rules[0];
+  check('额度用掉后 subscribeGranted 变 false', afterUse.subscribeGranted === false);
+  check('额度用掉后有 subscribeUsedAt', !!afterUse.subscribeUsedAt);
+
+  await user.actionRulesSave('openid-fields', [
+    { regionCode: '440000', fuelId: '92', officialDrop: true, targetEnabled: false,
+      targetPrice: 7.15, forecastDrop: true }
+  ]);
+  var afterPlain = (await user.actionRulesList('openid-fields')).rules[0];
+  check('普通保存不会把已用掉的额度续上', afterPlain.subscribeGranted === false);
+  check('普通保存不会清掉「已用完」标记', !!afterPlain.subscribeUsedAt);
+
+  await user.actionRulesSave('openid-fields', [
+    { regionCode: '440000', fuelId: '92', officialDrop: true, targetEnabled: false,
+      targetPrice: 7.15, forecastDrop: true, subscribeGranted: true }
+  ]);
+  var afterGrant = (await user.actionRulesList('openid-fields')).rules[0];
+  check('重新授权后额度恢复', afterGrant.subscribeGranted === true);
+  check('重新授权后清掉「已用完」标记', !afterGrant.subscribeUsedAt);
+
   console.log('\n--- 三端数值一致性 ---');
   var demo = require(path.join(ROOT, '..', 'data', 'demo.js'));
 

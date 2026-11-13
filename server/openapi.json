@@ -1461,15 +1461,26 @@
             "description": "目标价（元/升），null 表示不启用",
             "example": 7.2
           },
-          "predictDrop": {
+          "forecastDrop": {
             "type": "boolean",
-            "description": "预测下调也提醒（默认关）",
+            "description": "预测下调也提醒（默认关）。小程序端字段名，库里的列是 predict_drop，服务端负责翻译",
             "default": false
+          },
+          "targetEnabled": {
+            "type": "boolean",
+            "description": "目标价提醒开关（默认开）",
+            "default": true
           },
           "subscribeGranted": {
             "type": "boolean",
-            "description": "用户是否已授权订阅消息",
+            "description": "用户是否已授权订阅消息。一次授权只够发一条，发完服务端会置回 false；不传表示不改",
             "default": false
+          },
+          "subscribeUsedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "一次性订阅额度用掉的时间。有值说明「授权已用完」，null 表示从未授权过"
           }
         }
       },

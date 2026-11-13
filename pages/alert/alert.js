@@ -14,6 +14,19 @@ function clamp(value) {
   return v;
 }
 
+/**
+ * 额度用掉时间 → 「11月13日」。
+ *
+ * ⚠️ 服务端给的是 ISO 串（UTC），直接截前 10 位会差一天 ——
+ * 凌晨发的提醒在 UTC 里还是前一天。统一按 UTC+8 折算成日历日。
+ */
+function usedAtText(value) {
+  if (!value) return '';
+  var t = new Date(value);
+  if (isNaN(t.getTime())) return String(value).slice(0, 10);
+  return fmt.cnDate(new Date(t.getTime() + 8 * 3600000).toISOString());
+}
+
 Page({
   data: {
     loading: true,
@@ -26,7 +39,8 @@ Page({
       targetEnabled: true,
       targetPrice: 7.20,
       forecastDrop: false,
-      subscribeGranted: false
+      subscribeGranted: false,
+      subscribeUsedAt: null
     },
     subscription: { icon: 'bell-amber', title: '', text: '', buttonText: '' },
     targetText: '7.20',
@@ -97,7 +111,8 @@ Page({
           targetEnabled: true,
           targetPrice: 7.20,
           forecastDrop: false,
-          subscribeGranted: false
+          subscribeGranted: false,
+          subscribeUsedAt: null
         };
       }
 
@@ -161,8 +176,19 @@ Page({
         enabled: true,
         icon: 'bell-green',
         title: '微信提醒已开启',
-        text: '正式降价、目标价到达时发送订阅消息',
+        text: '一次授权可发一条，用完后需重新开启',
         buttonText: '管理'
+      };
+    }
+    // 额度用掉了 ≠ 从没授权过。这两种都显示「未开启」会让人以为自己没点同意。
+    if (rule.subscribeUsedAt) {
+      return {
+        active: false,
+        enabled: true,
+        icon: 'bell-muted',
+        title: '授权已用完',
+        text: '上一条提醒已于 ' + usedAtText(rule.subscribeUsedAt) + ' 发出，重新授权才能再收',
+        buttonText: '重新开启'
       };
     }
     return {
@@ -175,7 +201,16 @@ Page({
     };
   },
 
-  persist(nextRule) {
+  /**
+   * 保存规则。
+   *
+   * ⚠️ 订阅授权是一次性的：只有「刚拿到授权」的那一次保存才把
+   * subscribeGranted 发给后端，其余保存一律不带 ——
+   * 否则服务端把额度用掉之后，用户随便拨个开关就会把额度又续上，
+   * 微信那边其实已经没额度了，界面却还显示「已开启」。
+   */
+  persist(nextRule, opts) {
+    var grant = !!(opts && opts.grant);
     var rules = (this._rules || []).slice();
     var found = false;
     for (var i = 0; i < rules.length; i++) {
@@ -187,7 +222,15 @@ Page({
     }
     if (!found) rules.push(nextRule);
     this._rules = rules;
-    api.saveAlertRules(rules);
+
+    // 载荷和本地留存的副本要分开：载荷里只有授权那一次带 subscribeGranted
+    var payload = rules.map(function (r) {
+      var copy = Object.assign({}, r);
+      delete copy.subscribeGranted;
+      if (grant && r === nextRule) copy.subscribeGranted = true;
+      return copy;
+    });
+    api.saveAlertRules(rules, payload);
   },
 
   /* ---------- 开关 ---------- */
@@ -254,7 +297,8 @@ Page({
       if (res.granted && res.granted.length) {
         var rule = Object.assign({}, self.data.rule, { subscribeGranted: true });
         self.setData({ rule: rule });
-        self.persist(rule);
+        // grant: 只有这一次保存带 subscribeGranted=true
+        self.persist(rule, { grant: true });
         self.applyRule();
         wx.showToast({ title: '订阅已开启', icon: 'success' });
       } else {

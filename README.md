@@ -252,7 +252,8 @@ node scripts/verify-in-devtools.js
 | `WX_APP_ID` | 小程序 AppID，与 `project.private.config.json` 同一个 | 必填 |
 | `WX_APP_SECRET` | 小程序 AppSecret，只在服务器上 | 必填 |
 | `OIL_TOKEN_SECRET` | 自签 token 的密钥，一串足够长的随机字符 | 必填 |
-| `OIL_SUBSCRIBE_TEMPLATE_ID` | 订阅消息模板 ID | 可选 |
+| `OIL_SUBSCRIBE_TEMPLATE_ID` | 订阅消息模板 ID | 可选，默认取契约表里的主模板 |
+| `OIL_MINIPROGRAM_STATE` | 订阅消息跳转的版本：`formal` / `developer` / `trial` | `formal` |
 | `OIL_API_BASE_URL` | 后端对外地址，流水线用它做健康检查 | 无 |
 | `PORT` | 服务端口 | `3000` |
 | `OIL_COLLECT_CRON` | 采集频率，六段 cron | `0 */30 * * * *` |
@@ -264,7 +265,7 @@ node scripts/verify-in-devtools.js
 
 ## 已知限制
 
-- 订阅消息还没走通到底，缺正式 AppID 与模板 ID。没配置时「提醒」页会明说未配置，不会假装授权成功
+- 订阅消息的模板已对齐（模板 ID `OaHgjTXlhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg`，5 个字段），但线上还要补服务端 `.env` 的 `OIL_SUBSCRIBE_TEMPLATE_ID`；而且微信的订阅消息是**一次性**授权，用户每次同意只够收一条，用完要重新授权
 - 国家发改委公告与国际行情两个采集源还没启用，调价窗口的预测目前来自汽油价格网
 - 页面 WXSS 里还有 42 处硬编码色值（26 处 hex + 16 处 rgba 阴影/边框）没走 `styles/tokens.wxss` 的设计令牌，纯样式一致性问题，不影响功能
 - 小程序主包有 2MB 上限，`project.config.json` 的 `packOptions.ignore` 已经排除了 `docs`、`design`、`scripts`、`server` 这些非运行文件

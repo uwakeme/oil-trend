@@ -112,8 +112,14 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   fuel_id           TEXT NOT NULL,
   official_drop     BOOLEAN NOT NULL DEFAULT TRUE,
   target_price      NUMERIC(6, 2),
+  -- 目标价提醒开关。小程序端叫 targetEnabled，这里是它的真源 ——
+  -- 没有这一列时前端开关永远读不到 true，目标价提醒从来不会触发
+  target_enabled    BOOLEAN NOT NULL DEFAULT TRUE,
   predict_drop      BOOLEAN NOT NULL DEFAULT FALSE,
   subscribe_granted BOOLEAN NOT NULL DEFAULT FALSE,
+  -- 一次性订阅的额度用掉时间。授权只够发一条，发完置 false，
+  -- 界面据此显示「授权已用完」，而不是继续显示「微信提醒已开启」
+  subscribe_used_at TIMESTAMPTZ,
   extra             JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -145,6 +151,8 @@ CREATE TABLE IF NOT EXISTS collector_runs (
 -- 老库补列：CREATE TABLE IF NOT EXISTS 不会改动已存在的表，
 -- 部署脚本每次都会跑这个文件，所以补列放这里（重复执行安全）。
 ALTER TABLE oil_windows ADD COLUMN IF NOT EXISTS forecast_direction TEXT;
+ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS target_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS subscribe_used_at TIMESTAMPTZ;
 
 -- 查询用的索引
 CREATE INDEX IF NOT EXISTS idx_history_region_date ON oil_price_history (region_code, date);

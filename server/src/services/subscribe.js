@@ -12,6 +12,7 @@
  */
 const config = require('../config');
 const auth = require('./auth');
+const templates = require('./subscribe-templates');
 
 var tokenCache = null;   // { token, expiresAt }
 var refreshing = null;   // 并发刷新时复用一个 Promise
@@ -61,8 +62,8 @@ function getAccessToken(force) {
  * @returns {Promise<{sent:boolean, reason?:string}>}
  */
 function send(options) {
-  var templateId = options.templateId || config.subscribeTemplateId;
-  if (!templateId) {
+  var tplId = options.templateId || templateId();
+  if (!tplId) {
     return Promise.resolve({ sent: false, reason: 'TEMPLATE_NOT_CONFIGURED' });
   }
   if (!options.openid) {
@@ -71,10 +72,12 @@ function send(options) {
 
   var body = {
     touser: options.openid,
-    template_id: templateId,
+    template_id: tplId,
     page: options.page || 'pages/index/index',
     data: options.data || {},
-    miniprogram_state: options.miniprogramState || 'formal',
+    // 开发版 / 体验版联调时要配 OIL_MINIPROGRAM_STATE=developer，
+    // 否则用户点开订阅消息跳不到对应版本
+    miniprogram_state: options.miniprogramState || config.miniprogramState || 'formal',
     lang: 'zh_CN'
   };
 
@@ -107,6 +110,13 @@ function send(options) {
 module.exports = {
   send: send,
   getAccessToken: getAccessToken,
-  /** 当前配置的模板 ID（没配就是空串） */
-  templateId: function () { return config.subscribeTemplateId; }
+  /**
+   * 当前使用的模板 ID。
+   *
+   * 优先用 .env 的 OIL_SUBSCRIBE_TEMPLATE_ID（部署时可以覆盖），
+   * 没配就用契约表里的主模板 —— 契约表是平台模板的镜像，
+   * 平台换了模板必须同步改 subscribe-templates.js，
+   * 否则字段对不上，消息会被平台拒收。
+   */
+  templateId: function () { return config.subscribeTemplateId || templates.PRIMARY_TEMPLATE_ID; }
 };

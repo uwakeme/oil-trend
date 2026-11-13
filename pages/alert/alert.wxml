@@ -118,7 +118,7 @@
       </view>
     </view>
 
-    <view class="data-footnote"><text>微信订阅消息需要用户主动授权</text><text class="foot-line">可发送次数以微信平台规则为准</text></view>
+    <view class="data-footnote"><text>微信订阅消息需要用户主动授权</text><text class="foot-line">一次性授权仅可发送一条，用完需重新开启</text></view>
   </block>
 
   <!-- 订阅授权说明 -->
@@ -129,7 +129,7 @@
       <image class="icon-inline" src="/assets/icons/check-green.png" mode="aspectFit" />
       <view>
         <text class="permission-name">正式降价通知</text>
-        <text class="permission-desc">地区、油品、调价后价格与执行时间</text>
+        <text class="permission-desc">油品、降价幅度、调整方向与执行日期</text>
       </view>
     </view>
 
@@ -137,7 +137,7 @@
       <image class="icon-inline" src="/assets/icons/check-green.png" mode="aspectFit" />
       <view>
         <text class="permission-name">目标价到达通知</text>
-        <text class="permission-desc">当前价格、目标价格与查看入口</text>
+        <text class="permission-desc">当前价格、目标价与所在地区</text>
       </view>
     </view>
 

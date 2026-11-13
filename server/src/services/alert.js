@@ -8,41 +8,105 @@
  *   1. 官方正式降价 —— 可信度最高，默认开启
  *   2. 达到用户目标价 —— 按地区 + 油品匹配
  *   3. 预测下调 —— 默认关闭，需用户主动开启
+ *
+ * ⚠️ 订阅消息是**一次性**授权：用户每次点同意只够发一条。
+ * 所以命中多条也只发第一条，发成功后把这条规则的订阅额度用掉，
+ * 用户要再收必须重新授权（提醒页会如实显示「授权已用完」）。
  */
 const dao = require('../dao');
 const shared = require('../shared/shared');
 const subscribe = require('./subscribe');
+const templates = require('./subscribe-templates');
 
 /**
- * 订阅消息模板字段映射
+ * 模板字段映射
  *
- * ⚠️ 这里必须与「微信公众平台 → 订阅消息 → 模板详情」里的字段一一对应。
- * 下面是常见配置（thing=事物、time=时间、amount=金额、phrase=短语），
- * 申请模板后请按实际字段名调整。
+ * ⚠️ 字段名必须与「微信公众平台 → 订阅消息 → 模板详情」里的占位符**一字不差**，
+ * 自己起名（thing1、price…）平台一律拒收（errcode 47003）。
+ *
+ * 当前模板「油价调整提醒」（编号 1103，信息查询）只有 5 个字段：
+ *   thing5  油品种类  thing  （≤20 字符）
+ *   amount2 调整价格  amount （≤10 字符，形如 "0.13元"）
+ *   phrase1 调整方向  phrase （≤5 字符）
+ *   date3   调整日期  date   （"2026年11月24日"）
+ *   thing4  温馨提示  thing  （≤20 字符）
+ *
+ * 模板里**没有**「地区」「当前价」「目标价」字段，
+ * 地区与当前价只能塞进「温馨提示」。
+ *
+ * 字段名的唯一真源是 subscribe-templates.js（平台模板的镜像），
+ * 这里不再另写一份，换模板只改契约表。
  */
+function templateFieldsOf(templateId) {
+  var tpl = templates.templateOf(templateId);
+  if (!tpl) return null;
+  var fields = {};
+  Object.keys(tpl.fields).forEach(function (key) {
+    fields[key] = tpl.fields[key].label;
+  });
+  return fields;
+}
+
+var REMINDER_FIELDS = templateFieldsOf(templates.PRIMARY_TEMPLATE_ID);
+
+/** 三种提醒共用同一个模板：字段语义一样，只是填的值不同 */
 var TEMPLATE_FIELDS = {
-  officialDrop: {
-    page: 'pages/index/index',
-    fields: {
-      thing1: '油品',
-      thing2: '地区',
-      amount3: '降价幅度',
-      time4: '执行时间'
-    }
-  },
-  targetPrice: {
-    page: 'pages/index/index',
-    fields: {
-      thing1: '油品',
-      thing2: '地区',
-      amount3: '当前价格',
-      thing4: '目标价格'
-    }
-  }
+  officialDrop: { page: 'pages/index/index', fields: REMINDER_FIELDS },
+  targetPrice: { page: 'pages/index/index', fields: REMINDER_FIELDS },
+  forecastDrop: { page: 'pages/index/index', fields: REMINDER_FIELDS }
 };
 
 function fuelName(id) {
   return { '92': '92# 汽油', '95': '95# 汽油', '98': '98# 汽油', '0': '0# 柴油' }[id] || id + '#';
+}
+
+function pad2(n) {
+  return n < 10 ? '0' + n : '' + n;
+}
+
+/**
+ * 地区名。
+ *
+ * ⚠️ alert_rules 表里**没有** region_name 列，rule.regionName 永远是 undefined，
+ * 以前写 rule.regionName || rule.regionCode 拿到的是 '440000' 这种代码。
+ * 而且 shared.regionByCode 找不到时会静默回退上海 —— 这里自己查，
+ * 查不到就退回原始代码，不能张冠李戴。
+ */
+function regionNameOf(regionCode) {
+  var list = shared.REGIONS || [];
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].code === regionCode) return list[i].name;
+  }
+  return regionCode || '';
+}
+
+/**
+ * 服务器「今天」（按 UTC+8 日历日）。
+ *
+ * ⚠️ 不能用 shared.clock.today()：那是**演示数据**的平移日期，
+ * 线上真实场景拿来当今天会算错日期。
+ */
+function todayCN() {
+  var t = new Date(Date.now() + 8 * 3600000);
+  return t.getUTCFullYear() + '-' + pad2(t.getUTCMonth() + 1) + '-' + pad2(t.getUTCDate());
+}
+
+/**
+ * 组装一条订阅消息的 data。
+ *
+ * 值一律走 subscribe-templates.js 的格式化函数：
+ *   amount2 只能给「数字+元」，"0.13 元/升" 会被平台判格式非法；
+ *   date3   只能给中文年月日，"2026-11-24" 解析不了；
+ *   phrase1 最多 5 个字符，thing 最多 20 个字符。
+ */
+function buildData(opts) {
+  return {
+    thing5: templates.formatThing(opts.fuel),
+    amount2: templates.formatAmount(opts.amount),
+    phrase1: templates.formatPhrase(opts.direction),
+    date3: templates.formatDate(opts.date),
+    thing4: templates.formatThing(opts.tip)
+  };
 }
 
 /** 是否已经发过同一个事件 */
@@ -54,19 +118,27 @@ function alreadySent(dedupKey) {
 
 /**
  * 下发一条订阅消息
+ *
+ * 发之前先按模板契约自检：字段名对不上、值格式不合法，
+ * 平台会直接拒收（47003 / 47002），报错还很难看出是哪一项。
+ * 自己先拦下来，日志里才有可读的原因。
  */
 function sendSubscribe(openid, template, templateData) {
-  // 模板字段映射必须覆盖要发的数据，漏字段直接报配置错误，
-  // 而不是把消息发出去后被平台拒掉。
-  var keys = Object.keys(templateData || {});
-  for (var i = 0; i < keys.length; i++) {
-    if (!template.fields || !template.fields[keys[i]]) {
-      return Promise.resolve({ sent: false, reason: 'TEMPLATE_FIELD_MISMATCH:' + keys[i] });
-    }
+  var templateId = subscribe.templateId();
+  if (!templateId) {
+    return Promise.resolve({ sent: false, reason: 'TEMPLATE_NOT_CONFIGURED' });
+  }
+  // 模板 ID 没登记在契约表里 → 不知道该填哪几个字段，硬发只会被拒
+  if (!templates.templateOf(templateId)) {
+    return Promise.resolve({ sent: false, reason: 'TEMPLATE_NOT_REGISTERED:' + templateId });
+  }
+  var check = templates.validate(templateId, templateData);
+  if (!check.ok) {
+    return Promise.resolve({ sent: false, reason: 'TEMPLATE_DATA_INVALID:' + check.errors.join(',') });
   }
   return subscribe.send({
     openid: openid,
-    templateId: subscribe.templateId ? subscribe.templateId() : '',
+    templateId: templateId,
     page: template.page,
     data: templateData
   });
@@ -84,6 +156,9 @@ function matchRule(rule, prices, latestNotice, forecastNotice) {
   });
   if (!priceDoc) return hits;
 
+  var regionName = regionNameOf(rule.regionCode);
+  var currentText = Number(priceDoc.price).toFixed(2);
+
   /* --- 1. 官方正式降价 --- */
   if (rule.officialDrop && latestNotice && latestNotice.kind === 'official') {
     var delta = (latestNotice.changes || {})[rule.fuelId];
@@ -94,12 +169,14 @@ function matchRule(rule, prices, latestNotice, forecastNotice) {
         title: rule.fuelId + '# ' + fuelName(rule.fuelId) + ' 官方降价',
         price: priceDoc.price,
         template: TEMPLATE_FIELDS.officialDrop,
-        data: {
-          thing1: fuelName(rule.fuelId),
-          thing2: rule.regionName || rule.regionCode,
-          amount3: Math.abs(delta).toFixed(2) + ' 元/升',
-          time4: latestNotice.executeAt || ''
-        }
+        data: buildData({
+          fuel: fuelName(rule.fuelId),
+          amount: Math.abs(delta),
+          direction: '下调',
+          date: latestNotice.executeAt,
+          // 模板没有「地区」字段，地区和当前价只能写进温馨提示
+          tip: regionName + '现价' + currentText + '元'
+        })
       });
     }
   }
@@ -113,12 +190,14 @@ function matchRule(rule, prices, latestNotice, forecastNotice) {
         title: '已达目标价 ' + rule.targetPrice.toFixed(2),
         price: priceDoc.price,
         template: TEMPLATE_FIELDS.targetPrice,
-        data: {
-          thing1: fuelName(rule.fuelId),
-          thing2: rule.regionName || rule.regionCode,
-          amount3: priceDoc.price.toFixed(2) + ' 元/升',
-          thing4: rule.targetPrice.toFixed(2) + ' 元/升'
-        }
+        data: buildData({
+          fuel: fuelName(rule.fuelId),
+          // 「调整价格」在目标价场景填目标价，方向填「已达目标」
+          amount: rule.targetPrice,
+          direction: '已达目标',
+          date: todayCN(),
+          tip: regionName + '现价' + currentText + '元'
+        })
       });
     }
   }
@@ -132,18 +211,72 @@ function matchRule(rule, prices, latestNotice, forecastNotice) {
         dedupKey: [rule.userId, rule.regionCode, rule.fuelId, 'forecast', forecastNotice.executeAt].join('::'),
         title: '预测下调（非官方）',
         price: priceDoc.price,
-        template: TEMPLATE_FIELDS.officialDrop,
-        data: {
-          thing1: fuelName(rule.fuelId),
-          thing2: rule.regionName || rule.regionCode,
-          amount3: Math.abs(fDelta).toFixed(2) + ' 元/升',
-          time4: forecastNotice.executeAt || ''
-        }
+        template: TEMPLATE_FIELDS.forecastDrop,
+        data: buildData({
+          fuel: fuelName(rule.fuelId),
+          amount: Math.abs(fDelta),
+          direction: '预计下调',
+          date: forecastNotice.executeAt,
+          tip: regionName + '预测仅供参考，以官方为准'
+        })
       });
     }
   }
 
   return hits;
+}
+
+/**
+ * 按顺序找第一条没发过的事件发出去。
+ *
+ * ⚠️ 一次性订阅的授权额度只有 1 条：命中多条也只发第一条，
+ * 发完这条规则的额度就没了。
+ */
+function sendFirstHit(rule, hits, summary) {
+  var index = 0;
+
+  function step() {
+    if (index >= hits.length) {
+      summary.skipped++;
+      return Promise.resolve(null);
+    }
+    var hit = hits[index++];
+    return alreadySent(hit.dedupKey).then(function (sent) {
+      if (sent) return step();
+      summary.matched++;
+      return sendSubscribe(rule.userId, hit.template, hit.data).then(function (result) {
+        // 无论成败都要落库：失败了也要记，否则下次会重复尝试同一件事
+        return dao.logs.insert({
+          userId: rule.userId,
+          dedupKey: hit.dedupKey,
+          sent: !!result.sent,
+          failReason: result.sent ? null : (result.reason || 'UNKNOWN'),
+          payload: { type: hit.type, title: hit.title, price: hit.price, data: hit.data }
+        }).then(function () {
+          summary.details.push({
+            userId: rule.userId,
+            type: hit.type,
+            sent: !!result.sent,
+            reason: result.reason
+          });
+          if (!result.sent) {
+            summary.failed++;
+            // 43101 = 用户已无额度（授权用完或被拒）。这时候额度也没了，
+            // 继续显示「已开启」是骗人的，一并用掉。
+            if (String(result.reason || '').indexOf('43101') === 0) {
+              return dao.rules.consumeSubscribe(rule).then(function () { return null; });
+            }
+            return null;
+          }
+          summary.sent++;
+          // 一次性订阅：额度用掉，用户要再收必须重新授权
+          return dao.rules.consumeSubscribe(rule).then(function () { return null; });
+        });
+      });
+    });
+  }
+
+  return step();
 }
 
 function run() {
@@ -173,36 +306,7 @@ function run() {
         var hits = matchRule(rule, prices, latestNotice, forecastNotice);
         if (!hits.length) return null;
 
-        return hits.reduce(function (c2, hit) {
-          return c2.then(function () {
-            return alreadySent(hit.dedupKey).then(function (sent) {
-              if (sent) {
-                summary.skipped++;
-                return null;
-              }
-              summary.matched++;
-              return sendSubscribe(rule.userId, hit.template, hit.data).then(function (result) {
-                // 无论成败都要落库：失败了也要记，否则下次会重复尝试同一件事
-                return dao.logs.insert({
-                  userId: rule.userId,
-                  dedupKey: hit.dedupKey,
-                  sent: !!result.sent,
-                  failReason: result.sent ? null : (result.reason || 'UNKNOWN'),
-                  payload: { type: hit.type, title: hit.title, price: hit.price, data: hit.data }
-                }).then(function () {
-                  if (result.sent) summary.sent++;
-                  else summary.failed++;
-                  summary.details.push({
-                    userId: rule.userId,
-                    type: hit.type,
-                    sent: !!result.sent,
-                    reason: result.reason
-                  });
-                });
-              });
-            });
-          });
-        }, Promise.resolve());
+        return sendFirstHit(rule, hits, summary);
       });
     }, Promise.resolve());
   }).then(function () {
@@ -210,4 +314,11 @@ function run() {
   });
 }
 
-module.exports = { run: run, matchRule: matchRule, TEMPLATE_FIELDS: TEMPLATE_FIELDS };
+module.exports = {
+  run: run,
+  matchRule: matchRule,
+  buildData: buildData,
+  regionNameOf: regionNameOf,
+  todayCN: todayCN,
+  TEMPLATE_FIELDS: TEMPLATE_FIELDS
+};

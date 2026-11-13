@@ -80,6 +80,8 @@ DATABASE_URL=postgresql://postgres:密码@localhost:5432/oil_trend
 WX_APP_ID=wx你的AppID
 WX_APP_SECRET=你的AppSecret
 OIL_SUBSCRIBE_TEMPLATE_ID=你的模板ID
+# 开发版/体验版联调时改成 developer，正式发布留空
+OIL_MINIPROGRAM_STATE=formal
 OIL_TOKEN_SECRET=一串足够长的随机字符串
 OIL_API_BASE_URL=https://oil-trend.uwakeme.top
 PORT=3002
@@ -163,5 +165,6 @@ PM2 配置在 `server/oil-trend-pm2.json`，改端口改这个文件。
 | 健康检查 404 | Nginx 没配好，或 `OIL_API_BASE_URL` 写错 |
 | 小程序一直显示演示数据 | request 合法域名没配，或 `apiBaseUrl` 没填 |
 | 登录失败 | 服务器 `.env` 里缺 `WX_APP_ID` / `WX_APP_SECRET` |
-| 提醒不下发 | `.env` 缺 `OIL_SUBSCRIBE_TEMPLATE_ID`，或模板字段名对不上 |
+| 提醒不下发 | `.env` 缺 `OIL_SUBSCRIBE_TEMPLATE_ID`，或模板字段名对不上（看 `server/src/services/subscribe-templates.js`） |
+| 提醒发不出去但日志没报错 | 一次性授权额度用完了 —— 用户要重新授权才能再收 |
 | 服务启动就退 | `.env` 缺 `DATABASE_URL`，或数据库不存在 |

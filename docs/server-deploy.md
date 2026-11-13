@@ -39,7 +39,8 @@ cp .env.example .env
 | `PORT` | 服务端口，默认 3000；线上用 3002（避开同机的 lyric_lab） |
 | `WX_APP_ID` | 小程序 AppID（与 `project.private.config.json` 同一个） |
 | `WX_APP_SECRET` | 小程序 AppSecret，**只在服务器上** |
-| `OIL_SUBSCRIBE_TEMPLATE_ID` | 订阅消息模板 ID |
+| `OIL_SUBSCRIBE_TEMPLATE_ID` | 订阅消息模板 ID，默认用 `server/src/services/subscribe-templates.js` 里的主模板 |
+| `OIL_MINIPROGRAM_STATE` | 订阅消息跳转的小程序版本：`formal` 正式版（默认）/ `developer` 开发版 / `trial` 体验版 |
 | `OIL_TOKEN_SECRET` | 自签 token 的密钥，随便一串长随机字符 |
 | `OIL_API_BASE_URL` | 后端对外地址，部署流水线拿它做健康检查 |
 | `OIL_COLLECT_CRON` | 采集频率，默认 `0 */30 * * * *`（6 段：秒 分 时 日 月 周） |
@@ -99,16 +100,53 @@ HTTP。
 
 ## 八、订阅消息联调
 
-1. 公众平台申请订阅消息模板，把模板 ID 填进
-   `config/index.js` 的 `subscribeTemplateIds` 和服务端 `.env` 的
-   `OIL_SUBSCRIBE_TEMPLATE_ID`（两处同值）。
-2. 模板字段名要和 `server/src/services/alert.js` 的 `TEMPLATE_FIELDS`
-   一字不差。当前默认是 `thing1` / `thing2` / `amount3` / `time4`。
-3. 开发版/体验版联调时，服务端 `.env` 加：
-   ```
-   OIL_MINIPROGRAM_STATE=developer
-   ```
-   正式发布留空（默认 `formal`）。
+### 模板在哪、字段怎么填
+
+平台模板的**镜像**是 `server/src/services/subscribe-templates.js`，
+字段名和取值格式的唯一真源就在那里。当前用的是
+「油价调整提醒」（编号 1103，信息查询），5 个字段：
+
+| 字段 | 占位符 | 类型 | 约束 | 提醒里填什么 |
+| --- | --- | --- | --- | --- |
+| 油品种类 | `thing5` | thing | ≤20 字符 | `92# 汽油` |
+| 调整价格 | `amount2` | amount | ≤10 字符，`"0.13元"` | 降价幅度 / 目标价 |
+| 调整方向 | `phrase1` | phrase | ≤5 字符 | 下调 / 预计下调 / 已达目标 |
+| 调整日期 | `date3` | date | `"2026年11月24日"` | 执行日 / 命中当天 |
+| 温馨提示 | `thing4` | thing | ≤20 字符 | 地区与当前价 |
+
+模板里**没有**「地区」「当前价」「目标价」字段，
+所以地区和当前价只能塞进「温馨提示」。
+
+### 三处要同步
+
+换模板时这三处必须一起改，改漏了消息发不出去：
+
+1. `server/src/services/subscribe-templates.js` —— 字段契约与主模板 ID
+2. `config/index.js` 的 `subscribeTemplateIds` —— 小程序端发起授权用的 ID
+3. 服务端 `.env` 的 `OIL_SUBSCRIBE_TEMPLATE_ID` —— 服务端下发用的 ID
+
+服务端 `.env` 没配时会退回契约表里的主模板；
+配了一个**没登记在契约表里**的 ID，服务端会拒绝下发并在日志里写
+`TEMPLATE_NOT_REGISTERED`，不会拿猜的字段去撞平台。
+
+### 一次性授权
+
+微信的订阅消息是**一次性**的：用户每次点同意只够发一条。
+所以：
+
+- 命中多条提醒时只发第一条；
+- 发成功后服务端把这条规则的订阅额度置回「未授权」，并记下用掉时间；
+- 提醒页会显示「授权已用完」，用户重新授权才能再收。
+
+界面上不能一直显示「微信提醒已开启」——微信那边其实已经拒收了。
+
+### 开发版联调
+
+开发版/体验版联调时，服务端 `.env` 加：
+```
+OIL_MINIPROGRAM_STATE=developer
+```
+正式发布留空（默认 `formal`）。
 
 ## 九、验证清单
 

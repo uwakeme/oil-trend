@@ -48,7 +48,15 @@ module.exports = {
   appSecret: optional('WX_APP_SECRET', ''),
 
   // 订阅消息模板 ID（公众平台申请）
+  // ⚠️ 与 server/src/services/subscribe-templates.js 的契约表要同步：
+  //   .env 里配的模板 ID 必须登记在契约表里，否则字段对不上，消息发不出去。
   subscribeTemplateId: optional('OIL_SUBSCRIBE_TEMPLATE_ID', ''),
+
+  // 小程序版本状态：formal 正式版 / developer 开发版 / trial 体验版。
+  // 订阅消息下发时会写进 miniprogram_state：
+  //   给开发版发消息必须配 developer，否则用户点开跳不到开发版；
+  //   正式发布留空（默认 formal）。
+  miniprogramState: optional('OIL_MINIPROGRAM_STATE', 'formal'),
 
   // 自签 token 的密钥，只在服务端
   tokenSecret: optional('OIL_TOKEN_SECRET', ''),
