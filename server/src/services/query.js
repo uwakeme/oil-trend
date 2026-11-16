@@ -297,6 +297,63 @@ function priceAfterOf(history, executeAt, fallback) {
   return fallback;
 }
 
+/**
+ * 日期平移（天）。解析不出来返回 null。
+ */
+function shiftDate(dateStr, days) {
+  var t = Date.parse(dateStr + 'T00:00:00Z');
+  if (!isFinite(t)) return null;
+  return new Date(t + days * 86400000).toISOString().slice(0, 10);
+}
+
+/**
+ * 合并官方公告节点与历史推导节点。
+ *
+ * 同一次调价在两边的日期会差一天：公告写「11月12日24时起」，
+ * 挂牌价从次日 00:00 生效 —— 官方节点是 11-12，推导节点是 11-13。
+ * 只按精确日期合并的话，同一次调价会被数成两次：节点列表里挨着出现两条，
+ * 调价次数也多算一次。所以官方节点落地时，把前后一天内的推导节点收编：
+ * 保留官方节点（日期与公告一致、标题更权威），
+ * 官方测不出幅度时用被收编节点的实测幅度兜底。
+ *
+ * @param {Array} derived 历史推导节点（oil_adjust_events）
+ * @param {Array} official 官方公告节点
+ * @returns {Array} 按日期升序的合并结果
+ */
+function mergeAdjustNodes(derived, official) {
+  var merged = {};
+  (derived || []).forEach(function (e) {
+    merged[e.date] = e;
+  });
+  // 官方节点的日期集合：官方日期上的节点不许被别的官方节点收编
+  var officialDates = {};
+  (official || []).forEach(function (e) { officialDates[e.date] = true; });
+  (official || []).forEach(function (e) {
+    var fallback = null;
+    // 前后一天里的推导节点 = 同一次调价
+    var absorbed = null;
+    [-1, 1].forEach(function (d) {
+      var near = shiftDate(e.date, d);
+      if (!near || officialDates[near]) return;
+      var cand = merged[near];
+      if (!cand || cand.measured !== true) return;
+      if (!absorbed || near < absorbed) absorbed = near;
+    });
+    if (absorbed) {
+      fallback = merged[absorbed];
+      delete merged[absorbed];
+    } else {
+      var same = merged[e.date];
+      if (same) fallback = same;
+    }
+    if (!e.amountKnown && fallback && fallback.amountKnown) {
+      e = Object.assign({}, e, { amount: fallback.amount, amountKnown: true, measured: true });
+    }
+    merged[e.date] = e;
+  });
+  return Object.keys(merged).sort().map(function (d) { return merged[d]; });
+}
+
 function actionTrend(payload) {
   var regionCode = payload.regionCode || shared.DEFAULT_REGION_CODE;
   var fuelId = payload.fuelId || '92';
@@ -397,14 +454,14 @@ function actionTrend(payload) {
       // 现在按日期合并：同一个日期两边都有时以官方为准；
       // 官方测不出幅度时用实测推导值兜底（推导值是各省挂牌价实测差值，
       // 界面上要标「据各地挂牌价测算」，不能写成官方公布值）。
-      var merged = {};
-      events.forEach(function (e) {
+      // 历史推导节点：幅度是各省挂牌价的前后差值（实测），不是官方公布值
+      var derivedNodes = events.map(function (e) {
         var raw = (e.deltas || {})[fuelId];
         // ⚠️ 幅度解析不出来时不能直接置 0 —— 那会把「幅度未知」显示成「持平 0.00」。
         // 公告里没写这个油品，就是没有，不是零调整。
         var known = typeof raw === 'number';
         var delta = known ? raw : 0;
-        merged[e.date] = {
+        return {
           date: e.date,
           title: e.title,
           amount: known ? delta : null,
@@ -416,14 +473,8 @@ function actionTrend(payload) {
           priceAfter: priceByDate[e.date] !== undefined ? priceByDate[e.date] : priceMap[fuelId]
         };
       });
-      officialEvents.forEach(function (e) {
-        var der = merged[e.date];
-        if (der && !e.amountKnown && der.amountKnown) {
-          e = Object.assign({}, e, { amount: der.amount, amountKnown: true, measured: true });
-        }
-        merged[e.date] = e;
-      });
-      var finalEvents = Object.keys(merged).sort().map(function (d) { return merged[d]; });
+      // 官方节点与推导节点合并：同一次调价两边日期差一天，要收编成一个
+      var finalEvents = mergeAdjustNodes(derivedNodes, officialEvents);
 
       return {
         region: { code: region.code, fullName: region.name + ' · ' + region.city },
@@ -459,5 +510,6 @@ module.exports = {
   getAdjustEvents: getAdjustEvents,
   getHistoryByRegion: getHistoryByRegion,
   buildWindow: buildWindow,
+  mergeAdjustNodes: mergeAdjustNodes,
   todayStr: todayStr
 };

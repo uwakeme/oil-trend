@@ -762,10 +762,25 @@ async function main() {
   var noticeDates = (await dao.notices.listPublic('official', 60, 0))
     .map(function (n) { return n.executeAt; })
     .filter(inRange);
-  var missingSeed = seedEventDates.filter(function (d) { return !trendDates[d]; });
+  // ⚠️ 推导节点可能被**邻日的官方节点收编**：同一次调价，公告写「X日24时起」，
+  // 挂牌价次日 00:00 生效 —— 官方节点是 X，推导节点是 X+1。
+  // 这时推导节点不再单独出现（那一次调价由官方节点代表），不算「丢节点」。
+  var dayDiff = function (a, b) {
+    var ta = Date.parse(a + 'T00:00:00Z');
+    var tb = Date.parse(b + 'T00:00:00Z');
+    if (!isFinite(ta) || !isFinite(tb)) return 9999;
+    return Math.round((ta - tb) / 86400000);
+  };
+  var absorbedSeed = seedEventDates.filter(function (d) {
+    if (trendDates[d]) return false;
+    return noticeDates.some(function (nd) { return Math.abs(dayDiff(nd, d)) === 1; });
+  });
+  var missingSeed = seedEventDates.filter(function (d) {
+    return !trendDates[d] && absorbedSeed.indexOf(d) < 0;
+  });
   var missingNotice = noticeDates.filter(function (d) { return !trendDates[d]; });
-  check('trend 1y：历史推导的节点一个不少', missingSeed.length === 0,
-    '推导 ' + seedEventDates.length + ' 个，缺 ' + JSON.stringify(missingSeed.slice(0, 5)));
+  check('trend 1y：历史推导的节点一个不少（被邻日官方节点收编的不算丢）', missingSeed.length === 0,
+    '推导 ' + seedEventDates.length + ' 个，收编 ' + absorbedSeed.length + ' 个，缺 ' + JSON.stringify(missingSeed.slice(0, 5)));
   check('trend 1y：官方公告的节点都在', missingNotice.length === 0,
     '官方 ' + noticeDates.length + ' 个，缺 ' + JSON.stringify(missingNotice.slice(0, 5)));
   check('trend 1y：节点是两者并集（二选一的话会少一半）',
@@ -776,6 +791,57 @@ async function main() {
   check('trend 1y：source.note 如实写来源与覆盖范围',
     typeof trend1y.source.note === 'string' && trend1y.source.note.indexOf('历史价来自') >= 0,
     String(trend1y.source.note));
+
+  console.log('\n--- 同一次调价：官方日期与挂牌价生效日差一天，要合成一个节点 ---');
+  // 公告写「11月12日24时起」→ 官方节点 11-12；挂牌价次日 00:00 生效 → 推导节点 11-13。
+  // 只按精确日期合并的话，同一次调价会被数成两次：节点列表挨着出现两条，
+  // 调价次数也多算一次（线上实测 26 个节点里实际只有 23 次调价）。
+  var merge = query.mergeAdjustNodes;
+  var derivedOne = [{ date: '2026-11-13', title: '国内成品油价格调整', amount: -0.52, amountKnown: true, direction: 'down', measured: true }];
+  var officialOne = [{ date: '2026-11-12', title: '2026年11月12日国内成品油价格调整', amount: -0.52, amountKnown: true, direction: 'down' }];
+
+  var m1 = merge(derivedOne, officialOne);
+  check('邻日的官方节点与推导节点合成一个', m1.length === 1, '实际 ' + m1.length + ' 个');
+  check('合成后保留官方日期', m1.length === 1 && m1[0].date === '2026-11-12',
+    JSON.stringify(m1.map(function (e) { return e.date; })));
+  check('合成后保留官方标题', m1.length === 1 && m1[0].title.indexOf('2026年11月12日') >= 0,
+    m1.length ? m1[0].title : '');
+  check('合成后幅度取官方值', m1.length === 1 && m1[0].amount === -0.52, m1.length ? String(m1[0].amount) : '');
+
+  var m2 = merge(derivedOne, [{ date: '2026-11-12', title: '官方', amount: null, amountKnown: false, direction: 'down' }]);
+  check('官方测不出幅度时用邻日推导值兜底', m2.length === 1 && m2[0].amountKnown === true && m2[0].amount === -0.52,
+    JSON.stringify(m2));
+
+  var m3 = merge(
+    derivedOne.concat([{ date: '2026-12-10', title: '推导', amount: 0.2, amountKnown: true, direction: 'up', measured: true }]),
+    officialOne
+  );
+  check('离得远的推导节点不被误并', m3.length === 2,
+    '实际 ' + m3.length + ' 个：' + JSON.stringify(m3.map(function (e) { return e.date; })));
+
+  var m4 = merge(
+    [{ date: '2026-11-10', title: '推导', amount: 0.2, amountKnown: true, direction: 'up', measured: true }],
+    officialOne
+  );
+  check('差两天的推导节点不被误并', m4.length === 2,
+    '实际 ' + m4.length + ' 个：' + JSON.stringify(m4.map(function (e) { return e.date; })));
+
+  var m5 = merge(
+    [{ date: '2026-11-12', title: '推导', amount: -0.52, amountKnown: true, direction: 'down', measured: true }],
+    officialOne
+  );
+  check('同日的官方节点直接覆盖推导节点', m5.length === 1 && m5[0].title.indexOf('2026年11月12日') >= 0,
+    JSON.stringify(m5));
+
+  var m6 = merge(
+    derivedOne,
+    [
+      { date: '2026-11-12', title: '官方A', amount: -0.52, amountKnown: true, direction: 'down' },
+      { date: '2026-11-13', title: '官方B', amount: -0.52, amountKnown: true, direction: 'down' }
+    ]
+  );
+  check('官方节点不许收编别的官方节点', m6.length === 2,
+    '实际 ' + m6.length + ' 个：' + JSON.stringify(m6.map(function (e) { return e.date; })));
 
   console.log('\n--- 订阅消息请求体：必须是 {value} 包装 ---');
   // ⚠️ 微信 message/subscribe/send 要求每个字段是 {"value": "..."} 对象。
