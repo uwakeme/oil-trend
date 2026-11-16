@@ -69,7 +69,7 @@
 
 </div>
 
-<p align="center"><sub>截图由开发者工具自动化服务抓取，含 Canvas 图表图层，见 <a href="./docs/verification.md">验证记录</a>。</sub></p>
+<p align="center"><sub>截图由开发者工具自动化服务抓取，含 Canvas 图表图层。</sub></p>
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -195,7 +195,7 @@ module.exports = {
 
 经纬度换省份走 `/api/locate`。省界数据内置在服务端（`server/src/data/provinces.json`），不依赖第三方逆地理编码服务，也没有配额限制。坐标系统一 GCJ-02，与 `wx.getLocation` 的 `type: 'gcj02'` 对齐。
 
-响应外壳统一：成功是 `{ ok: true, data }`，失败是 `{ ok: false, message, code }`。完整契约见 [自建后端方案](./docs/self-hosted-backend.md)。
+响应外壳统一：成功是 `{ ok: true, data }`，失败是 `{ ok: false, message, code }`。完整契约见 [`server/openapi.json`](./server/openapi.json)。
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -259,7 +259,7 @@ node scripts/verify-in-devtools.js
 | `OIL_COLLECT_CRON` | 采集频率，六段 cron | `0 */30 * * * *` |
 | `OIL_ALERT_CRON` | 提醒频率，六段 cron | `0 */10 * * * *` |
 
-完整步骤和排查表都在[部署指南](./docs/server-deploy.md)里。
+建表结构在 [`server/schema.sql`](./server/schema.sql)，环境变量样例在 [`server/.env.example`](./server/.env.example)，流水线每一步在 [`.github/workflows/deploy-backend.yml`](./.github/workflows/deploy-backend.yml)。
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -279,11 +279,12 @@ MIT，见 [LICENSE](./LICENSE)。
 
 ## 参考资料
 
-- [数据源接入说明](./docs/data-sources.md)：每个来源怎么解析、怎么验证
-- [自建后端方案](./docs/self-hosted-backend.md)：接口契约与认证流程
-- [部署指南](./docs/server-deploy.md)：建表、配置与验证清单
-- [部署流水线](./docs/server-deploy-ci.md)：GitHub Actions 的每一步
-- [验证记录](./docs/verification.md)：抓出来的真 bug 与踩过的坑
+- [采集源解析实现](./server/src/services/sources.js)：每个来源怎么解析、怎么验证
+- [接口契约](./server/openapi.json)：接口清单与响应结构
+- [数据库结构](./server/schema.sql)：建表、索引与老库补列语句
+- [部署流水线](./.github/workflows/deploy-backend.yml)：GitHub Actions 的每一步
+- [订阅消息模板契约](./server/src/services/subscribe-templates.js)：字段名与取值格式的唯一真源
+- [已知坑](./AGENTS.md)：小程序与后端踩过并记下来的陷阱
 - [产品与页面设计](./design/product-design.md)：设计真源
 - [汽油价格网](http://www.qiyoujiage.com/)：当前唯一启用的采集来源
 - [aalavender/OilPrice](https://github.com/aalavender/OilPrice) 与 [vikiboss/60s](https://github.com/vikiboss/60s)：采集写法参考

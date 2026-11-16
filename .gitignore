@@ -5,8 +5,9 @@ miniprogram_npm/
 .DS_Store
 *.log
 
-# 预览二维码的原始终端文本（PNG 由脚本生成）
+# 预览二维码的原始终端文本与 PNG（都是脚本生成的产物）
 docs/preview-qr.txt
+docs/preview-qr.png
 
 # 本地个人配置：真实 AppID 放这里，不入库
 project.private.config.json

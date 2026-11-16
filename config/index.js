@@ -2,7 +2,7 @@
  * 全局配置
  *
  * 接入真实数据前，在这里填入：
- *   1. apiBaseUrl            —— 自建后端地址（见 server/ 与 docs/server-deploy.md）
+ *   1. apiBaseUrl            —— 自建后端地址（见 server/ 与 README.md 的「部署」一节）
  *   2. subscribeTemplateIds  —— 订阅消息模板 ID（从微信公众平台申请）
  *
  * dataSource 说明：

@@ -1,6 +1,6 @@
 -- 油价势 · 自建后端数据库结构
 --
--- PostgreSQL。集合与表的对应见 docs/self-hosted-backend.md。
+-- PostgreSQL。部署时整份执行即可，老库靠文件末尾的 ALTER TABLE 补列。
 --
 -- 命名约定：库里用 snake_code，业务层用 camelCase，转换集中在 DAO 层。
 -- 唯一索引同时承担去重职责：通知靠 dedup_key，提醒记录也靠 dedup_key。

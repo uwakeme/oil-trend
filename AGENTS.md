@@ -42,7 +42,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
   - `server/src/data/provinces.json` 是**生成产物**（省界数据，脚本产出），手改会被覆盖
 - `scripts/` — 检查与构建脚本
 - `design/` — 产品设计稿与高保真原型
-- `docs/` — 部署指南、数据源说明、验证记录、截图
+- `docs/` — 只放截图（`docs/screenshots/`）；部署与数据源说明直接看 `server/` 与 `README.md`
 
 ## 代码风格
 
@@ -82,7 +82,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | `wx:for` 里写 `{{path}}` | 应为 `{{item.path}}`，否则 `switchTab` 拿到 undefined |
 | 动态 `src` 漏 `.png` 后缀 | 图标显示成白方块 |
 | 国际行情日期是 `MM-DD HH:mm:ss` | 时间轴正则要的是 `YYYY-MM-DD`，解析全返回 0 会把曲线叠成一根竖线 |
-| `App.captureScreenshot` 只截 DOM 层 | **仅 2.01.x 如此**；2.02 已会合成 canvas 图层，截图里没曲线才是真没画出来。判定见 `docs/verification.md` |
+| `App.captureScreenshot` 只截 DOM 层 | **仅 2.01.x 如此**；2.02 已会合成 canvas 图层，截图里没曲线才是真没画出来 |
 | `miniprogram-automator` 0.13 与本机 IDE 不兼容 | 2.01.x 的 `Tool.getInfo` 只返回 `{ version }`，automator 读 `SDKVersion` 直接崩；`scripts/verify-in-devtools.js` 自己实现了协议，只依赖 `ws` |
 | 自定义 tabBar 的 `position: fixed` 真机不生效 | 组件被排进文档流末尾，要滚到底才看得到；改用**原生 tabBar**：`app.json` 去掉 `"custom": true`，`list` 里配 `iconPath` / `selectedIconPath` |
 | 主包超 2MB，上传预览包被拒 | `.gitignore` 管不了上传包，要在 `project.config.json` 的 `packOptions.ignore` 里排除 `.tooling` / `docs` / `design` / `scripts` / `server` |
@@ -170,7 +170,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 
 五个页面已写完并逐页验证过。**后端已上线**：`server/`（Node + Express + PostgreSQL）
 部署在 `oil-trend.uwakeme.top`，采集器每 30 分钟从**汽油价格网**（qiyoujiage）抓
-31 省挂牌价 + 下次调价预测，页面显示的是真实挂牌价（解析与验证见 `docs/data-sources.md`）。
+31 省挂牌价 + 下次调价预测，页面显示的是真实挂牌价（解析规则见 `server/src/services/sources.js`）。
 ndrc 公告与国际行情两个来源仍未启用。
 
 订阅消息链路还没走通到底（需正式 AppID + 模板 ID），未配置时「提醒」页要明说未配置，不假装授权成功。
