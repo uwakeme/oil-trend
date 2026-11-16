@@ -258,6 +258,25 @@ async function main() {
   check('合规数据能通过契约', templates.validate(templateId, baseData).ok,
     templates.validate(templateId, baseData).errors.join(','));
 
+  // 模板 ID 三处同步：服务端契约表、小程序端 config、.env。
+  // ⚠️ 模板 ID 手抄错一个字符（小写 l / 大写 I 长得一样）平台就拒收，
+  // 日志里只写「参数无效」—— 所以这里钉死前两处必须一致。
+  var miniConfig = require(path.join(ROOT, '..', 'config', 'index.js'));
+  check('小程序端与服务端契约表用的是同一个模板 ID',
+    miniConfig.subscribeTemplateIds[0] === templates.PRIMARY_TEMPLATE_ID,
+    miniConfig.subscribeTemplateIds[0] + ' vs ' + templates.PRIMARY_TEMPLATE_ID);
+
+  // .env 里配的模板 ID 没登记在契约表 → 回退契约表默认模板，
+  // 不能拿一个平台不认的 ID 去发
+  var configModule = require(path.join(ROOT, 'src', 'config.js'));
+  var subscribeService = require(path.join(ROOT, 'src', 'services', 'subscribe.js'));
+  var savedTemplateId = configModule.subscribeTemplateId;
+  configModule.subscribeTemplateId = 'OaHgjTXIxhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg';
+  check('手抄错的模板 ID 会回退到契约表默认模板',
+    subscribeService.templateId() === templates.PRIMARY_TEMPLATE_ID,
+    subscribeService.templateId());
+  configModule.subscribeTemplateId = savedTemplateId;
+
   console.log('\n--- 三类提醒的模板取值 ---');
   var tHits = alert.matchRule(
     { userId: 'u1', regionCode: '440000', fuelId: '92',
@@ -863,6 +882,32 @@ async function main() {
   var measuredTiny = await measure.measureOne('2028-02-10', { gasoline: -645, diesel: -625 });
   check('与官方吨价明显不符的降幅不采信',
     Object.keys(measuredTiny).length === 0, JSON.stringify(measuredTiny));
+
+  // 跨省离散：各省的值都在官方吨价能解释的区间里，但彼此差很多
+  // → 中位数也不可信，这个油品不摆数值
+  await pushHistory(buildRows(shared.REGIONS, [
+    ['2028-03-09', 8.91], ['2028-03-10', 8.91], ['2028-03-11', 8.44]
+  ]));
+  await pushHistory(buildRows(shared.REGIONS.slice(0, 10), [
+    ['2028-03-09', 8.91], ['2028-03-10', 8.91], ['2028-03-11', 8.60]
+  ]));
+  await pushHistory(buildRows(shared.REGIONS.slice(10, 20), [
+    ['2028-03-09', 8.91], ['2028-03-10', 8.91], ['2028-03-11', 8.28]
+  ]));
+  var measuredScatter = await measure.measureOne('2028-03-10', { gasoline: -645, diesel: -625 });
+  check('各省数据离散时该油品不摆测算值',
+    measuredScatter['92'] === undefined, JSON.stringify(measuredScatter));
+
+  // 对照：有多数支撑的中位数不该被误伤
+  await pushHistory(buildRows(shared.REGIONS, [
+    ['2028-04-09', 8.91], ['2028-04-10', 8.91], ['2028-04-11', 8.44]
+  ]));
+  await pushHistory(buildRows(shared.REGIONS.slice(0, 11), [
+    ['2028-04-09', 8.91], ['2028-04-10', 8.91], ['2028-04-11', 8.60]
+  ]));
+  var measuredTight = await measure.measureOne('2028-04-10', { gasoline: -645, diesel: -625 });
+  check('各省基本一致时不误伤（多数支撑的中位数照常给出）',
+    Math.abs(measuredTight['92'] - (-0.47)) < 0.0001, JSON.stringify(measuredTight));
 
   // 官方吨价折算出的理论每升幅度（标准品：89 号汽油 0.725、0 号柴油 0.835）
   check('645 元/吨折成每升约 0.47 元',

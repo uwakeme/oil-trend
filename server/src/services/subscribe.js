@@ -142,10 +142,18 @@ module.exports = {
   /**
    * 当前使用的模板 ID。
    *
-   * 优先用 .env 的 OIL_SUBSCRIBE_TEMPLATE_ID（部署时可以覆盖），
-   * 没配就用契约表里的主模板 —— 契约表是平台模板的镜像，
+   * .env 的 OIL_SUBSCRIBE_TEMPLATE_ID 只有在**契约表里登记过**才用；
+   * 没配或者没登记，就用契约表里的主模板 —— 契约表是平台模板的镜像，
    * 平台换了模板必须同步改 subscribe-templates.js，
    * 否则字段对不上，消息会被平台拒收。
+   *
+   * ⚠️ 模板 ID 手抄错一个字符（小写 l 与大写 I 长得一模一样）平台就拒收，
+   * 日志里只写「参数无效」，看不出是 ID 错了 —— 没登记就回退，
+   * 不能拿一个平台不认的 ID 去发（config.validate() 会给警告）。
    */
-  templateId: function () { return config.subscribeTemplateId || templates.PRIMARY_TEMPLATE_ID; }
+  templateId: function () {
+    var fromEnv = config.subscribeTemplateId;
+    if (fromEnv && templates.templateOf(fromEnv)) return fromEnv;
+    return templates.PRIMARY_TEMPLATE_ID;
+  }
 };

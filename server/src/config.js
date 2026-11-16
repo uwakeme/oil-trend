@@ -78,6 +78,15 @@ function validate() {
   // 微信凭据只影响登录与订阅消息，缺了不至于让服务起不来 —— 用警告而不是致命错误
   if (!appId) warnings.push('未配置 WX_APP_ID：登录与订阅消息不可用');
   if (!appSecret) warnings.push('未配置 WX_APP_SECRET：登录与订阅消息不可用');
+  // 订阅消息模板 ID：.env 里配的必须在契约表里登记过。
+  // ⚠️ 模板 ID 手抄错一个字符（小写 l / 大写 I 长得一样）平台就拒收，
+  // 而且日志里只写「参数无效」，看不出是 ID 错了 —— 部署前先喊一声。
+  if (subscribeTemplateId) {
+    var templates = require('./services/subscribe-templates');
+    if (!templates.templateOf(subscribeTemplateId)) {
+      warnings.push('OIL_SUBSCRIBE_TEMPLATE_ID (' + subscribeTemplateId + ') 不在契约表里，将回退到契约表默认模板 ' + templates.PRIMARY_TEMPLATE_ID);
+    }
+  }
 
   return { errors: errors, warnings: warnings };
 }

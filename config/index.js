@@ -18,7 +18,7 @@ module.exports = {
   // ⚠️ 必须是**正式** AppID 申请的模板，测试号拿不到。
   // 模板字段与取值格式见 server/src/services/subscribe-templates.js（平台模板的镜像），
   // 换模板时这两处 + 服务端 .env 的 OIL_SUBSCRIBE_TEMPLATE_ID 要同步改。
-  subscribeTemplateIds: ['OaHgjTXlhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg'],
+  subscribeTemplateIds: ['OaHgjTXIhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg'],
 
   // 后端地址：自建服务器（server/ 部署的那台）。
   // 留空则一律使用本地演示数据。

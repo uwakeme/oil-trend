@@ -26,7 +26,7 @@
  *   一次性订阅消息 —— 用户每次授权只够发一条，发完要重新授权
  */
 var TEMPLATES = {
-  'OaHgjTXlhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg': {
+  'OaHgjTXIhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg': {
     name: '油价调整提醒',
     kind: 'once',
     fields: {
@@ -40,7 +40,7 @@ var TEMPLATES = {
 };
 
 /** 当前在用的模板 ID（与服务端 .env 的 OIL_SUBSCRIBE_TEMPLATE_ID 一致） */
-var PRIMARY_TEMPLATE_ID = 'OaHgjTXlhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg';
+var PRIMARY_TEMPLATE_ID = 'OaHgjTXIhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg';
 
 /** 取模板定义；模板 ID 没登记过就返回 null */
 function templateOf(templateId) {
