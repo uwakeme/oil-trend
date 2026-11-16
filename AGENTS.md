@@ -110,7 +110,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 位置隐私协议没弹 | `wx.getLocation` 报隐私未授权 | 先调 `wx.requirePrivacyAuthorize()`，用户同意后再取位置 |
 | `wx.getLocation` 拿 wgs84 坐标 | 与省界数据差 300~600 米，江苏/河北这种贴着的省会判错 | 固定传 `type: 'gcj02'`，服务端省界数据也是 GCJ-02，两边不换算 |
 | 定位失败弹错误提示 | 用户被反复打扰，而且定位本来就是可选增强 | 失败一律静默返回 null，只在用户明确拒绝过权限时给一个「开启定位」入口 |
-| `<button>` 在 flex 容器里被撑成宽条 | 小程序 button 的 UA 默认样式带 `margin: auto`，放进 flex 行里就被自动外边距顶开 | 钉死 `flex: 0 0 <宽>` 和 `margin: 0`，别只写 `width` |
+| `<button>` 在 flex 容器里被撑成宽条 / 停在行中间 | 小程序 button 的 UA 默认样式带 `margin-left/right: auto`，放进 flex 行后自动外边距会**吸收剩余空间**（`space-between` 的自由空间被它平分吃掉）—— 作者写 `margin: 0` **压不住**。实测弹层关闭按钮停在屏幕 62% 处，不贴右 | `margin: 0 !important` 钉死外边距 + `flex: 0 0 <宽>`；再让同行的标题 `flex: 1` 把剩余空间吃掉，`space-between` 才有意义（见 `styles/components.wxss` 的 `.sheet-head-title`）。**别只写 `width`** |
 | 前端读 `latestNotice`、后端只给 `notice` | 字段契约漂一个名字，首页通知在真实后端下整块失真（标题空白、金额 0.00、日期 `--`），而 `expectKeys` 不含通知字段所以照样判 live | 两个名字都给（`notice` 与 `latestNotice` 同源），前端读 `payload.latestNotice \|\| payload.notice`；`scripts/verify-contract.js` 把后端真实响应喂给页面的 `applyXxx()` 钉住 |
 | `Number(null) === 0`，空价格会显示成 `0.00` | 后端没给价格时，前端渲染「92# 0.00 元/升」—— 0.00 是真实价格，`--` 才是没有数据 | `fmt.price(null/undefined/'')` 统一返回 `'--'`；要继续算数的用 `fmt.priceValue()`（返回 null，区别于 0） |
 | 「空数据」不能整包回落演示源 | 通知列表为空是合法的（后端确实还没有正式公告），回落演示会凭空造出假通知；而行情曲线为空是真的没数据 | `utils/api.js` 分开「字段存在」与「字段有值」两套校验：通知只查存在，行情/价格要查非空 |

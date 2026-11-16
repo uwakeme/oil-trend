@@ -209,6 +209,17 @@
   font-size: 34rpx;
   font-family: var(--font-title);
   font-weight: 700;
+  /*
+   * 标题吃掉全部剩余空间，关闭按钮才被顶到最右边。
+   *
+   * ⚠️ 小程序 button 的 UA 默认样式带 margin-left/right: auto，
+   *  自由空间会被这两个 auto 外边距平分吃掉 —— 即使作者写了 margin: 0
+   *  也压不住（实测按钮停在屏幕 62% 处，不贴右）。
+   *  标题 flex: 1 之后自由空间为 0，auto 外边距分不到空间，
+   *  按钮自然落在内容区右缘。
+   */
+  flex: 1;
+  min-width: 0;
 }
 .sheet-close {
   border: none;
@@ -216,13 +227,16 @@
   width: 56rpx;
   height: 56rpx;
   flex: 0 0 56rpx;
-  margin: 0;
+  /* !important：UA 的 margin-left/right: auto 压不住，会把按钮顶到中间 */
+  margin: 0 !important;
   border-radius: 50%;
   font-size: 32rpx;
   line-height: 52rpx;
   color: var(--ink);
   padding: 0;
 }
+/* app.wxss 的 button::after 复位在组件里不生效（样式隔离），这里补上 */
+.sheet-close::after { border: none; }
 .sheet-body { font-size: 22rpx; line-height: 1.8; color: var(--muted); }
 
 /* ---------- 来源提示条 ---------- */
