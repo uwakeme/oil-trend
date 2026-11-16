@@ -653,6 +653,25 @@ async function main() {
       noticePage.data.sync.statusText === '等待人工核对', noticePage.data.sync.statusText);
     check('调价页渲染里没有 undefined', hasBadToken(allText(noticePage.data)) === false);
 
+    // 详情弹层：幅度未知的油品要显示 '--'，不能显示 0.00（那是「持平」，不是「不知道」）
+    noticePage.data.notices = [{
+      id: 'probe', kind: 'official', title: '幅度未知的油品',
+      raw: {
+        title: '幅度未知的油品',
+        publishedAt: '2026-11-16T03:30:00.000Z',
+        source: { name: '探针', url: '' },
+        prices: {
+          '92': { before: 8.91, after: 8.39, delta: -0.52 },
+          '98': { before: null, after: 11.09, delta: null }
+        }
+      }
+    }];
+    noticePage.onOpenNotice({ currentTarget: { dataset: { id: 'probe', kind: 'official' } } });
+    check('详情里幅度未知的油品显示 -- 而不是 0.00',
+      noticePage.data.detail.prices.every(function (p) { return p.deltaText !== '0.00'; }) &&
+      noticePage.data.detail.prices.some(function (p) { return p.deltaText === '--'; }),
+      JSON.stringify(noticePage.data.detail.prices));
+
     // 走势页
     var trendPage = makeInstance(loadPageDef('pages/trend/trend.js'));
     await trendPage.load();

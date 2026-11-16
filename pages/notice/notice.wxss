@@ -298,6 +298,8 @@
 /* 原文链接：小程序打不开外部网页，点一下把链接复制到剪贴板 */
 .source-link {
   display: inline-block;
+  /* 上一行的来源文字是 inline 的，不给左边距就跟文字粘在一起 */
+  margin-left: 16rpx;
   margin-top: 10rpx;
   font-size: 20rpx;
   color: var(--green);

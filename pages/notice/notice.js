@@ -3,7 +3,12 @@ const store = require('../../utils/store');
 const fmt = require('../../utils/format');
 
 function changeMeta(amount) {
-  var value = Number(amount) || 0;
+  // ⚠️ 幅度缺失 ≠ 幅度为零。
+  // Number(null) 是 0，不先挡掉空值，「幅度待公布」会显示成「持平 0.00」。
+  if (amount === undefined || amount === null || amount === '' || !isFinite(Number(amount))) {
+    return { text: '幅度待公布', direction: 'flat', verb: '待公布', value: '--' };
+  }
+  var value = Number(amount);
   if (!value) return { text: '持平', direction: 'flat', verb: '持平', value: '0.00' };
   var down = value < 0;
   return {
@@ -217,7 +222,10 @@ Page({
         id: key,
         name: fuelNameOf(key),
         afterText: fmt.price(item.after),
-        deltaText: (item.delta > 0 ? '+' : item.delta < 0 ? '-' : '') + Math.abs(item.delta).toFixed(2),
+        // 幅度未知就写 '--'，不能写成 0.00（那是「持平」，不是「不知道」）
+        deltaText: (typeof item.delta === 'number' && isFinite(item.delta))
+          ? ((item.delta > 0 ? '+' : item.delta < 0 ? '-' : '') + Math.abs(item.delta).toFixed(2))
+          : '--',
         direction: meta.direction
       });
     });

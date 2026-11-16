@@ -32,10 +32,15 @@ function noticePricesOf(notice, priceMap, today, deltas) {
   // 优先用官方公布的每升幅度，没有就用挂牌价测算值
   var source = deltas || notice.changes || {};
   Object.keys(priceMap).forEach(function (fuelId) {
-    var delta = source[fuelId];
-    if (typeof delta !== 'number') return;
     var after = Number(priceMap[fuelId]);
     if (!isFinite(after)) return;
+    var delta = source[fuelId];
+    // 幅度算不出来也要把这个油品列出来（delta 为 null）——
+    // 少列一个油品，用户会以为这个油品这轮没有调价。
+    if (typeof delta !== 'number' || !isFinite(delta)) {
+      out[fuelId] = { before: null, after: after, delta: null };
+      return;
+    }
     out[fuelId] = {
       before: Math.round((after - delta) * 100) / 100,
       after: after,

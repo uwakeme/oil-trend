@@ -52,6 +52,19 @@ var FUEL_GROUP = { '92': 'gasoline', '95': 'gasoline', '98': 'gasoline', '0': 'd
 /** 至少要有几个省的数据才给结论 —— 样本太少时中位数不可信 */
 var MIN_REGIONS = 3;
 
+/**
+ * 跨省一致性的两个上限。
+ *
+ * 区间定界挡的是「这个省的值离谱」（源站快照陈旧、被剔）；
+ * 这里挡的是「整体都乱」—— 比如源站改了页面结构、或者大半省的快照是陈旧值，
+ * 这种情况下中位数本身也不可信，不能拿一个看着合理的数字当结论。
+ *
+ * ⚠️ 2026-11-12 那轮 98# 各省实测 -0.36 ~ -0.97（河南、海南的调价前快照是陈旧值），
+ * 剔掉脏值后 28 省的 MAD 只有 0.010 —— 门槛定太紧会把正常的轮次也毙掉。
+ */
+var MAX_MAD = 0.08;
+var MAX_MAD_RATIO = 0.15;
+
 /** 往前看多少天找「提前挂出新价」的情况 */
 var BEFORE_DAYS = 40;
 
@@ -184,7 +197,16 @@ async function measureMany(executeAtList, tonByDate) {
     var measured = {};
     Object.keys(byFuel).forEach(function (fuelId) {
       if (byFuel[fuelId].length < MIN_REGIONS) return;
-      measured[fuelId] = median(byFuel[fuelId]);
+      var list = byFuel[fuelId];
+      var med = median(list);
+      // 跨省离散太大 → 中位数也不可信，这个油品不摆数值
+      var mad = median(list.map(function (v) { return Math.abs(v - med); }));
+      if (mad > MAX_MAD && mad > Math.abs(med) * MAX_MAD_RATIO) {
+        console.warn('[measure] ' + date + ' ' + fuelId + ' 各省数据离散（MAD=' + mad +
+          '，中位=' + med + '），不采用测算值');
+        return;
+      }
+      measured[fuelId] = med;
     });
     if (Object.keys(measured).length) out[date] = measured;
   });
@@ -232,6 +254,8 @@ module.exports = {
   DENSITY: DENSITY,
   TOL_RATIO: TOL_RATIO,
   TOL_FLOOR: TOL_FLOOR,
+  MAX_MAD: MAX_MAD,
+  MAX_MAD_RATIO: MAX_MAD_RATIO,
   FUEL_GROUP: FUEL_GROUP,
   MIN_REGIONS: MIN_REGIONS,
   EARLY_DAYS: EARLY_DAYS,
