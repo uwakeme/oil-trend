@@ -157,6 +157,29 @@ function actionRegions() {
 
 /* ---------------- 首页 ---------------- */
 
+/**
+ * 本地区最近一次调价：从历史序列里找最后一次价格变化。
+ *
+ * 口径与价格行的 changeAmount 一致：**本地区**挂牌价的前后差值。
+ * 不用各省中位数 —— 那是通知卡的口径，两边混了会对不上账。
+ *
+ * @param {Array} rows 历史价行（按日期升序）
+ * @param {string} fuelId
+ * @returns {object} { amount, date } 或 null
+ */
+function lastAdjustmentOf(rows, fuelId) {
+  var list = (rows || []).filter(function (h) { return h.fuelId === fuelId; });
+  for (var i = list.length - 1; i > 0; i--) {
+    var now = Number(list[i].price);
+    var prev = Number(list[i - 1].price);
+    if (!isFinite(now) || !isFinite(prev)) continue;
+    if (now !== prev) {
+      return { amount: Math.round((now - prev) * 100) / 100, date: list[i].date };
+    }
+  }
+  return null;
+}
+
 function actionHome(payload) {
   var regionCode = payload.regionCode || shared.DEFAULT_REGION_CODE;
   var region = resolveRegion(regionCode);
@@ -206,10 +229,29 @@ function actionHome(payload) {
     return Promise.all([
       getHistoryByRegion(regionCode, from30),
       // 挂牌价测算：公告只给吨价，每升四油品幅度靠各地挂牌价的前后快照差值
-      notice ? measure.measureOne(notice.executeAt, notice.tonChanges) : Promise.resolve({})
+      notice ? measure.measureOne(notice.executeAt, notice.tonChanges) : Promise.resolve({}),
+      // 全量历史：给价格行补基线用（见下面的补基线逻辑）
+      dao.history.listByRegion(regionCode)
     ]).then(function (r1) {
       var historyByFuel = r1[0];
       var measuredRaw = r1[1];
+      var fullHistory = r1[2];
+
+      // 价格行没有基线（changeAt 为空）时，用本地区历史序列补出最近一次调价。
+      // 换源那一轮同源基线取不到，采集器会把它清空；采集器已改成从本源历史表重建，
+      // 但采集有 6 小时新鲜期，最长要等下一轮真抓才生效 —— 这里先兜住，
+      // 免得首页四个油品长时间显示「暂无调价对比」。
+      // ⚠️ 口径必须是**本地区**前后差值，不能拿各省中位数来充。
+      if (fullHistory && fullHistory.length) {
+        priceList.forEach(function (item) {
+          if (item.changeAt) return;
+          var adj = lastAdjustmentOf(fullHistory, item.id);
+          if (!adj) return;
+          item.changeAmount = adj.amount;
+          item.changeAt = adj.date;
+          item.direction = adj.amount < 0 ? 'down' : (adj.amount > 0 ? 'up' : 'flat');
+        });
+      }
       var trend30 = {};
       for (var i = 0; i < shared.FUELS.length; i++) {
         var f = shared.FUELS[i];
@@ -511,5 +553,6 @@ module.exports = {
   getHistoryByRegion: getHistoryByRegion,
   buildWindow: buildWindow,
   mergeAdjustNodes: mergeAdjustNodes,
+  lastAdjustmentOf: lastAdjustmentOf,
   todayStr: todayStr
 };

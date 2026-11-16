@@ -499,6 +499,35 @@ function referenceCheck(region, fuelId, price) {
  *   1. 与库里上一次真实价比 —— 落差超 JUMP_LIMIT 就不入库，转人工核对；
  *   2. 与各省基准价比 —— 偏差超 1.5 元只记告警，不阻断。
  */
+/**
+ * 本地区最近一次调价：从**本源自己的历史表**算。
+ *
+ * 为什么要有这条兜底：价格行里的 changeAt/changeAmount 记的是「最近一次调价」，
+ * 但它们只在「同源且价格变了」时才写。换源那一轮同源基线取不到 → 被清空 →
+ * 首页四个油品全变成「暂无调价对比」，一直持续到下一次真调价（可能好几周）。
+ * 而本源的历史表本来就写着每一期的挂牌价，最近一次变化就是最近一次调价。
+ *
+ * ⚠️ 用本源历史表而不是各省中位数：首页小卡要的是**本地区**的前后差值，
+ * 跟通知卡（各省中位数）不是一个口径，别混。
+ *
+ * @param {object} parsed 来源解析结果（含 history，日期升序）
+ * @param {string} fuelId
+ * @returns {object} { amount, date } 或 null
+ */
+function lastAdjustmentFromHistory(parsed, fuelId) {
+  if (!parsed || !parsed.history || parsed.history.length < 2) return null;
+  var rows = parsed.history;
+  for (var i = rows.length - 1; i > 0; i--) {
+    var now = rows[i].prices ? rows[i].prices[fuelId] : undefined;
+    var prev = rows[i - 1].prices ? rows[i - 1].prices[fuelId] : undefined;
+    if (typeof now !== 'number' || typeof prev !== 'number') continue;
+    if (now !== prev) {
+      return { amount: shared.round2(now - prev), date: rows[i].date };
+    }
+  }
+  return null;
+}
+
 async function saveRegionPrices(source, region, parsed, existing) {
   var today = todayStr();
   var priceDocs = [];
@@ -536,15 +565,37 @@ async function saveRegionPrices(source, region, parsed, existing) {
       });
     }
 
-    var changed = !oldReal || oldReal.price !== price;
+    // 本轮是否发生了新的调价：同源且价格变了才算。
+    // 换了源不能当成「调价了」—— 两个源的挂牌价口径可能有零点零几的差，
+    // 拿它算涨跌等于凭空造一次调价。
+    var changed = !!(oldReal && oldReal.price !== price);
+    var amount = 0;
+    var at = null;
+    if (changed) {
+      amount = shared.round2(price - oldReal.price);
+      at = today;
+    } else if (old && old.price === price) {
+      // 价格没动 → 上次调价的信息仍然成立。
+      // 库里已有基线就原样留着；没有就从本源历史表重建一次。
+      if (old.changeAt) {
+        amount = old.changeAmount;
+        at = old.changeAt;
+      } else {
+        var lastAdj = lastAdjustmentFromHistory(parsed, fuel.id);
+        if (lastAdj) {
+          amount = lastAdj.amount;
+          at = lastAdj.date;
+        }
+      }
+    }
     priceDocs.push({
       regionCode: region.code,
       regionName: region.name + ' · ' + region.city,
       fuelId: fuel.id,
       fuelName: fuel.name,
       price: price,
-      changeAmount: oldReal && changed ? shared.round2(price - oldReal.price) : (oldReal ? oldReal.changeAmount : 0),
-      changeAt: oldReal && changed ? today : (oldReal ? oldReal.changeAt : null),
+      changeAmount: amount,
+      changeAt: at,
       source: source.id
     });
     // 历史价记的是「当天生效的挂牌价」，所以每轮都写：

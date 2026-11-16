@@ -663,6 +663,42 @@ async function main() {
   check('价格没变就不改调价日', histPriceRow.changeAt === '2026-11-01', String(histPriceRow.changeAt));
   check('价格没变就不改调价幅度', histPriceRow.changeAmount === 0.3, String(histPriceRow.changeAmount));
 
+  console.log('\n--- 价格行的调价基线：换源不能把「上次调价」清空 ---');
+  // 换源那一轮同源基线取不到，原来会把 changeAt 清空 →
+  // 首页四个油品全变成「暂无调价对比」，一直持续到下一次真调价（可能好几周）。
+  // 现在：库里没基线时，从**本源自己的历史表**重建最近一次调价。
+  var blSource = { id: 'test-bl-src', name: '基线源' };
+  var blRegion = { code: '990010', name: '基线省', city: '基线市' };
+  var blParsed = {
+    prices: { '92': 8.39, '95': 9.09, '98': 11.09, '0': 8.06 },
+    history: [
+      { date: '2026-10-30', prices: { '92': 8.91, '95': 9.64, '98': 11.64, '0': 8.6 } },
+      { date: '2026-11-13', prices: { '92': 8.39, '95': 9.09, '98': 11.09, '0': 8.06 } }
+    ]
+  };
+  var blSave = async function (existing) {
+    await collector.saveRegionPrices(blSource, blRegion, blParsed, existing || {});
+    var rows = await dao.prices.listByRegion(blRegion.code);
+    return rows.filter(function (p) { return p.fuelId === '92'; })[0];
+  };
+
+  var bl1 = await blSave({ '990010': { '92': { price: 8.39, changeAmount: 0, changeAt: null, source: 'test-old-src' } } });
+  check('换源且价格没变：从本源历史表重建最近一次调价幅度', bl1 && Number(bl1.changeAmount) === -0.52,
+    bl1 ? String(bl1.changeAmount) : '没写进去');
+  check('换源且价格没变：重建出调价日', bl1 && bl1.changeAt === '2026-11-13', bl1 ? String(bl1.changeAt) : '');
+
+  var bl2 = await blSave({ '990010': { '92': { price: 8.39, changeAmount: -0.52, changeAt: '2026-11-12', source: 'test-old-src' } } });
+  check('换源且价格没变：库里已有基线就原样留着', bl2 && bl2.changeAt === '2026-11-12' && Number(bl2.changeAmount) === -0.52,
+    bl2 ? (bl2.changeAt + ' / ' + bl2.changeAmount) : '');
+
+  var bl3 = await blSave({ '990010': { '92': { price: 9.5, changeAmount: 0.2, changeAt: '2026-10-01', source: 'test-old-src' } } });
+  check('换源且价格不一样：不凭空造一次调价', bl3 && !bl3.changeAt && Number(bl3.changeAmount) === 0,
+    bl3 ? (bl3.changeAt + ' / ' + bl3.changeAmount) : '');
+
+  var bl4 = await blSave({});
+  check('首次采集：没有基线就留空（界面显示「暂无调价对比」）', bl4 && !bl4.changeAt && Number(bl4.changeAmount) === 0,
+    bl4 ? (bl4.changeAt + ' / ' + bl4.changeAmount) : '');
+
   console.log('\n--- 历史价入库的五道闸门 ---');
   // 历史是**一次性回填**的（库里没有旧值可比），所以不能用「与上次采集价落差」
   // 那套逻辑，得单独设闸门。这组用例用构造数据把 5 道闸门逐条钉住。
@@ -791,6 +827,43 @@ async function main() {
   check('trend 1y：source.note 如实写来源与覆盖范围',
     typeof trend1y.source.note === 'string' && trend1y.source.note.indexOf('历史价来自') >= 0,
     String(trend1y.source.note));
+
+  console.log('\n--- 首页卡片：价格行没基线时用历史序列补 ---');
+  // 换源那一轮同源基线取不到 → changeAt 被清空 →
+  // 首页四个油品全变成「暂无调价对比」。采集器已改成从本源历史表重建，
+  // 但采集有 6 小时新鲜期，最长要等下一轮真抓才生效 —— 读侧再兜一层。
+  var laRows = [
+    { fuelId: '92', date: '2026-10-30', price: 8.91 },
+    { fuelId: '92', date: '2026-11-13', price: 8.39 },
+    { fuelId: '95', date: '2026-11-13', price: 9.64 }
+  ];
+  var la = query.lastAdjustmentOf(laRows, '92');
+  check('lastAdjustmentOf：算出最近一次调价的幅度与日期', la && la.amount === -0.52 && la.date === '2026-11-13',
+    JSON.stringify(la));
+  check('lastAdjustmentOf：没有变化时给 null',
+    query.lastAdjustmentOf([{ fuelId: '92', date: '2026-11-13', price: 8.39 }], '92') === null);
+  check('lastAdjustmentOf：不串别的油品',
+    query.lastAdjustmentOf([{ fuelId: '95', date: '2026-11-13', price: 9.09 }], '92') === null);
+
+  // 集成：抹掉一个地区的价格行基线，首页卡片应该用历史序列补回来
+  var blHomeRegion = '510000';
+  var blHomeRows = await dao.prices.listByRegion(blHomeRegion);
+  var blHomeBackup = blHomeRows.map(function (p) {
+    return { regionCode: p.regionCode, regionName: p.regionName, fuelId: p.fuelId, fuelName: p.fuelName,
+      price: p.price, changeAmount: p.changeAmount, changeAt: p.changeAt, source: p.source };
+  });
+  await dao.prices.upsertMany(blHomeBackup.map(function (p) {
+    return { regionCode: p.regionCode, regionName: p.regionName, fuelId: p.fuelId, fuelName: p.fuelName,
+      price: p.price, changeAmount: 0, changeAt: null, source: p.source };
+  }));
+  var homeBl = await query.actionHome({ regionCode: blHomeRegion });
+  var cardBl = (homeBl.prices || []).filter(function (p) { return p.id === '92'; })[0];
+  check('首页卡片：价格行没基线时补出调价日', cardBl && !!cardBl.changeAt, JSON.stringify(cardBl));
+  var expectBl = query.lastAdjustmentOf(await dao.history.listByRegion(blHomeRegion), '92');
+  check('首页卡片：补出来的幅度与历史序列一致',
+    cardBl && expectBl && Number(cardBl.changeAmount) === expectBl.amount,
+    JSON.stringify({ card: cardBl && cardBl.changeAmount, expect: expectBl && expectBl.amount }));
+  await dao.prices.upsertMany(blHomeBackup);
 
   console.log('\n--- 同一次调价：官方日期与挂牌价生效日差一天，要合成一个节点 ---');
   // 公告写「11月12日24时起」→ 官方节点 11-12；挂牌价次日 00:00 生效 → 推导节点 11-13。
