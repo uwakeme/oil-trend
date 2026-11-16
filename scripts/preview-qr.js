@@ -22,6 +22,9 @@
  *      否则会把上一份过期二维码当成新的用（换 AppID 时最容易中招）。
  *   2. 开发者工具的服务端口会变，重启 IDE 后常换一个。端口不对时 CLI 会
  *      回「IDE 已启动并在监听 http://127.0.0.1:XXXXX」，按它说的端口重试。
+ *   3. IDE 2.02 的 --qr-output 直接写**图片文件**（JPEG），不是终端字符二维码 ——
+ *      按字符去解析会报「没有解析出二维码模块，文件格式不对」。
+ *      脚本会先看文件头，是图片就直接转成 PNG。
  */
 const fs = require('fs');
 const path = require('path');
@@ -130,6 +133,26 @@ function main() {
     console.error('如果上面的输出里有「使用 AppID: xxx」，确认那是当前账号的 AppID；');
     console.error('常见原因：开发者工具未登录、AppID 不合法（测试号会被拒绝）、服务端口不对。');
     process.exit(1);
+  }
+  // ⚠️ IDE 2.02 的 --qr-output 直接写**图片文件**（JPEG），不再是终端字符二维码。
+  // 老逻辑只会按字符解析 → 报「没有解析出二维码模块，文件格式不对」。
+  // 先看文件头：JPEG / PNG 就直接转成 PNG 交付。
+  const head = fs.readFileSync(qrText).slice(0, 4);
+  const isJpeg = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+  const isPng = head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e && head[3] === 0x47;
+  if (isJpeg || isPng) {
+    try {
+      const conv = spawnSync('python', ['-c',
+        'import sys;from PIL import Image;Image.open(sys.argv[1]).save(sys.argv[2])',
+        qrText, qrFile], { encoding: 'utf8', stdio: 'pipe' });
+      if (conv.status !== 0) throw new Error(conv.stderr || 'PIL 转换失败');
+      console.log('二维码文件：' + qrFile + '（开发者工具直接输出的图片，已转 PNG）');
+      return;
+    } catch (err) {
+      console.error('二维码图片转 PNG 失败：' + (err.stderr || err.message));
+      console.log('原始图片：' + qrText);
+      return;
+    }
   }
   // 终端字符二维码 → 可扫码的 PNG
   try {
