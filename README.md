@@ -201,14 +201,18 @@ module.exports = {
 
 ## 数据采集
 
-采集器每 30 分钟从**汽油价格网**抓 31 个省级行政区的挂牌价（92#、95#、98#、0#），6 小时新鲜期内不重复抓，31 省 3 并发。
+采集器每 30 分钟从**油价网**（[xmgcn.com](https://www.xmgcn.com/)，HTTPS）抓 31 个省级行政区的挂牌价（92#、95#、98#、0#）**和最近 30 期历史**，6 小时新鲜期内不重复抓，31 省 3 并发。一次请求同时拿到现价与整段历史，走势图因此能铺满近一年。
+
+**下次调价预测**由**汽油价格网**（[qiyoujiage.com](http://www.qiyoujiage.com/)，HTTP）提供 —— 这是全网唯一给预测的地方。它还兼两个角色：主源某省抓失败时的现价兜底，以及交叉校核（抽广东/山东/新疆 3 省，现价偏差超过 0.02 元/升就告警）。
 
 两条硬约束一直守着：
 
 1. 解析不出结构化字段就返回空，进人工核对队列，绝不把猜测值发布成正式结果
 2. 预测类信息一律标非官方，来源只说方向没给幅度时，幅度留空而不是填 0
 
-另外两个采集源（国家发改委调价公告、国际行情接口）配置已经写好，默认关闭，启用前要先单独验证可访问性、字段稳定性、更新频率和授权条款。
+历史价入库还有**五道闸门**（价格区间 / 时序去重 / 首尾自洽 / 跨省一致性 / 幂等）。跨省离群值**保留源站原值只告警**，不擅自改写 —— 擅自改才是替来源编数字。
+
+国家发改委调价公告源已启用（列表页 → 详情页两步抓取）；国际行情接口仍未启用，启用前要先单独验证可访问性、字段稳定性、更新频率和授权条款。
 
 > [!NOTE]
 > 各站 98# 的数据口径本身不统一，和 `data/reference-prices.js` 的个别省份对不上属于口径差异，不是解析 bug。回归测试只对北京、陕西、云南三省做逐值比对。
@@ -266,8 +270,8 @@ node scripts/verify-in-devtools.js
 ## 已知限制
 
 - 订阅消息的模板已对齐（模板 ID `OaHgjTXlhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg`，5 个字段），但线上还要补服务端 `.env` 的 `OIL_SUBSCRIBE_TEMPLATE_ID`；而且微信的订阅消息是**一次性**授权，用户每次同意只够收一条，用完要重新授权
-- 国家发改委公告与国际行情两个采集源还没启用（公告的解析器与「机器判定可信度」规则已就绪，启用前还要验证可访问性与使用条款），调价窗口的预测目前来自汽油价格网
-- **汽油价格网没有 HTTPS**（证书是 CDN 通用证书，不含该域名），价格只能走明文 HTTP 抓取 —— 抓取层已做重定向白名单、总时限与价格交叉校验（与上次真实价、与各省基准价），但明文链路本身的风险消不掉
+- 国际行情采集源还没启用（解析器已就绪，启用前还要验证可访问性与使用条款）
+- 现价与历史走 **HTTPS 的油价网**；**汽油价格网没有 HTTPS**（证书是 CDN 通用证书，不含该域名），只有「下次调价预测」走明文 HTTP —— 抓取层已做重定向白名单、总时限与价格交叉校验，但明文链路本身的风险消不掉
 - 服务端启动前会强校验 `OIL_TOKEN_SECRET`（≥32 位）与 `DATABASE_URL`，缺一直接拒绝启动；健康检查分两个：`/health` 只说明进程活着，`/ready` 才真的连库
 - 页面 WXSS 里还有 42 处硬编码色值（26 处 hex + 16 处 rgba 阴影/边框）没走 `styles/tokens.wxss` 的设计令牌，纯样式一致性问题，不影响功能
 - 小程序主包有 2MB 上限，`project.config.json` 的 `packOptions.ignore` 已经排除了 `docs`、`design`、`scripts`、`server`、`.github` 这些非运行文件
@@ -286,7 +290,9 @@ MIT，见 [LICENSE](./LICENSE)。
 - [订阅消息模板契约](./server/src/services/subscribe-templates.js)：字段名与取值格式的唯一真源
 - [已知坑](./AGENTS.md)：小程序与后端踩过并记下来的陷阱
 - [产品与页面设计](./design/product-design.md)：设计真源
-- [汽油价格网](http://www.qiyoujiage.com/)：当前唯一启用的采集来源
+- [油价网](https://www.xmgcn.com/)：现价与历史的主源
+- [汽油价格网](http://www.qiyoujiage.com/)：下次调价预测的来源，兼兜底与交叉校核
+- [国家发改委](https://www.ndrc.gov.cn/)：正式调价公告
 - [aalavender/OilPrice](https://github.com/aalavender/OilPrice) 与 [vikiboss/60s](https://github.com/vikiboss/60s)：采集写法参考
 - [微信订阅消息文档](https://developers.weixin.qq.com/miniprogram/dev/api/open-api/subscribe-message/wx.requestSubscribeMessage.html)
 
