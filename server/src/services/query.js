@@ -11,6 +11,7 @@ const dao = require('../dao');
 const shared = require('../shared/shared');
 // 挂牌价测算：公告只给吨价，每升四油品幅度靠各地挂牌价的前后快照差值
 const measure = require('./measure');
+const sources = require('./sources');
 
 /* ---------------- 时间辅助 ---------------- */
 
@@ -62,6 +63,28 @@ function getLatestNotice() {
 
 function getAdjustEvents() {
   return dao.events.listAll();
+}
+
+/**
+ * 历史价的来源说明。
+ *
+ * ⚠️ 必须如实写清数据的来源与覆盖范围：走势图画的是**各省公布的挂牌价**，
+ * 不是官方公告。写「官方数据」是把实测值说成官方公布值，口径就错了。
+ * 调价幅度也是各省挂牌价的前后差值（实测），不是官方公布的每升幅度。
+ */
+function historyNote(history) {
+  if (!history || !history.length) return '';
+  var ids = {};
+  history.forEach(function (h) { if (h.source) ids[h.source] = 1; });
+  var names = Object.keys(ids).map(function (id) {
+    var s = sources.SOURCES.filter(function (x) { return x.id === id; })[0];
+    return s ? s.name : id;
+  });
+  var dates = {};
+  history.forEach(function (h) { dates[h.date] = 1; });
+  var periods = Object.keys(dates).length;
+  return '历史价来自' + names.join('、') +
+    '，覆盖 ' + history[0].date + ' 起 ' + periods + ' 期 · 调价幅度据各省挂牌价实测';
 }
 
 /**
@@ -199,6 +222,14 @@ function actionHome(payload) {
         };
       }
 
+      // 首页的来源说明：四个油品的历史合起来算覆盖范围
+      var homeHistory = [];
+      shared.FUELS.forEach(function (f) {
+        (historyByFuel[f.id] || []).forEach(function (h) { homeHistory.push(h); });
+      });
+      homeHistory.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+      var homeNote = historyNote(homeHistory);
+
       var changes = {};
       if (notice && notice.changes) {
         shared.FUELS.forEach(function (f) { changes[f.id] = notice.changes[f.id]; });
@@ -246,7 +277,7 @@ function actionHome(payload) {
         latestNotice: noticePayload,
         publishedAt: notice ? notice.publishedAt : '',
         updatedAt: updatedAt,
-        source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
+        source: { mode: 'server', name: '服务端定时采集', note: homeNote }
       };
     });
   });
@@ -356,14 +387,24 @@ function actionTrend(payload) {
           };
         });
 
-      // 没有官方公告时退回老表（历史夹具写入的调价节点）
-      var finalEvents = officialEvents.length ? officialEvents : events.map(function (e) {
+      // 合并两类调价节点：
+      //   官方公告 —— 覆盖最近几轮，有权威标题与方向；
+      //   历史推导 —— 从各省挂牌价的前后差值推导，补齐全年节点
+      //                （oil_adjust_events，采集器写）。
+      //
+      // ⚠️ 以前是二选一（officialEvents.length ? 官方 : 推导），
+      // 公告只覆盖最近几轮 → 一年视图只有几个节点，其余全空。
+      // 现在按日期合并：同一个日期两边都有时以官方为准；
+      // 官方测不出幅度时用实测推导值兜底（推导值是各省挂牌价实测差值，
+      // 界面上要标「据各地挂牌价测算」，不能写成官方公布值）。
+      var merged = {};
+      events.forEach(function (e) {
         var raw = (e.deltas || {})[fuelId];
         // ⚠️ 幅度解析不出来时不能直接置 0 —— 那会把「幅度未知」显示成「持平 0.00」。
         // 公告里没写这个油品，就是没有，不是零调整。
         var known = typeof raw === 'number';
         var delta = known ? raw : 0;
-        return {
+        merged[e.date] = {
           date: e.date,
           title: e.title,
           amount: known ? delta : null,
@@ -371,9 +412,18 @@ function actionTrend(payload) {
           // 三态：幅度为 0 是「持平」，不是「上涨」。
           // 原来写成 < 0 ? 'down' : 'up'，持平的节点会被染成上涨色。
           direction: known ? (delta < 0 ? 'down' : (delta > 0 ? 'up' : 'flat')) : 'flat',
+          measured: true,
           priceAfter: priceByDate[e.date] !== undefined ? priceByDate[e.date] : priceMap[fuelId]
         };
       });
+      officialEvents.forEach(function (e) {
+        var der = merged[e.date];
+        if (der && !e.amountKnown && der.amountKnown) {
+          e = Object.assign({}, e, { amount: der.amount, amountKnown: true, measured: true });
+        }
+        merged[e.date] = e;
+      });
+      var finalEvents = Object.keys(merged).sort().map(function (d) { return merged[d]; });
 
       return {
         region: { code: region.code, fullName: region.name + ' · ' + region.city },
@@ -392,7 +442,7 @@ function actionTrend(payload) {
         ],
         points: points,
         events: finalEvents,
-        source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
+        source: { mode: 'server', name: '服务端定时采集', note: historyNote(history) }
       };
     });
   });

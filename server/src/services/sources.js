@@ -2,11 +2,17 @@
  * 采集源配置
  *
  * 来源启用状态：
- *   - qiyoujiage（汽油价格网）：已启用。2026-11-12 完成真实抓取验证 ——
- *     省级地区页结构一致（北京/陕西/云南抽查），解析出的挂牌价与
- *     data/reference-prices.js（独立来源）逐值核对一致；页面 utf-8，
- *     无需 Referer/Cookie。站点声明价格仅供参考，展示侧必须保留来源标注。
- *   - ndrc-notice / market-quote：仍默认关闭。启用前需单独验证
+ *   - xmgcn（油价网）：已启用，**现价与历史的主源**。2026-11-16 实测 31 省
+ *     页面结构完全一致，一次请求同时给当前价与最近 30 期历史挂牌价
+ *     （2025-09-10 → 2026-11-13）；31 省最新价与线上现价逐值比对差异 0.00。
+ *     站点有 HTTPS，历史表行序是降序（解析后必须按日期升序重排）。
+ *   - qiyoujiage（汽油价格网）：已启用，改任**预测源 + 兜底 + 交叉校核**。
+ *     全网唯一给「下次调价预测」的源，但它没有 HTTPS、没有历史；
+ *     2026-11-12 完成真实抓取验证 —— 省级地区页结构一致（北京/陕西/云南抽查），
+ *     解析出的挂牌价与 data/reference-prices.js（独立来源）逐值核对一致；
+ *     页面 utf-8，无需 Referer/Cookie。站点声明价格仅供参考，展示侧必须保留来源标注。
+ *   - xmgcn-timeline（官方调价时间表）：已启用，**只做口径互校**，不对外展示。
+ *   - market-quote：仍默认关闭。启用前需单独验证
  *     可访问性、字段稳定性、更新频率和授权条款。
  *
  * 硬约束（所有来源一致）：解析不出结构化字段就进人工核对队列，
@@ -17,14 +23,39 @@
  */
 const SOURCES = [
   {
-    id: 'qiyoujiage',
-    name: '汽油价格网',
+    id: 'xmgcn',
+    name: '油价网',
     kind: 'price',
     enabled: true,
+    // 降级链顺序：数字小的先试。前一个源成功的省，不再问后面的源。
+    priority: 1,
+    provides: ['price', 'history'],
+    url: 'https://www.xmgcn.com/',
+    // 地区页 = urlTemplate 里的 {slug} 换成该省在这个站的路径名（真源在 data/regions.js 的 slugs）
+    urlTemplate: 'https://www.xmgcn.com/{slug}/',
+    // 允许跳转的主机：跳去别处就拒绝（避免请求被引到不可控的服务器）
+    allowedHosts: ['www.xmgcn.com'],
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+    },
+    parser: 'xmgcnRegion',
+    // 价格只在调价日变化：freshHours 内抓过的地区跳过，不每 30 分钟打一遍全站
+    freshHours: 6,
+    note: '各省历史挂牌价表（最近 30 期）与当前价。HTTPS，一次请求同时给现价与整段历史。'
+  },
+  {
+    id: 'qiyoujiage',
+    name: '汽油价格网',
+    kind: 'forecast',
+    enabled: true,
+    // 降级链里排第二：主源某个省抓不到时，它补那一省的现价
+    priority: 2,
+    provides: ['forecast', 'price'],
     // ⚠️ 这个站**没有** HTTPS：证书是腾讯 CDN 的通用证书，
     // altnames 里没有 qiyoujiage.com，https 握手直接失败（2026-11-13 实测）。
     // 只能走 HTTP —— 所以抓取层必须做交叉校验兜底（见 collector.js 的 saveRegionPrices）。
     url: 'http://www.qiyoujiage.com/',
+    urlTemplate: 'http://www.qiyoujiage.com/{slug}.shtml',
     // 允许跳转的主机：站点改版跳到 CDN 域名时还能跟上，
     // 跳去别处就拒绝（避免请求被引到不可控的服务器）。
     allowedHosts: ['www.qiyoujiage.com'],
@@ -33,10 +64,25 @@ const SOURCES = [
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
     },
     parser: 'qiyoujiageRegion',
-    // 地区页 = url + 地区 slug + '.shtml'，slug 真源在 data/regions.js
-    // 价格只在调价日变化：freshHours 内抓过的地区跳过，不每 30 分钟打一遍全站
+    // 交叉校核抽查这几个省：南（广东）/ 东（山东）/ 西（新疆）。
+    // 各省价差各异，异常更容易露出来。只抓 3 个，别每轮打一遍全站 —— 这站会限流。
+    verifyRegions: ['440000', '370000', '650000'],
     freshHours: 6,
-    note: '各省挂牌价 + 下次调价预测（非官方）。地区页为 utf-8 HTML'
+    note: '下次调价预测（非官方，全网唯一）；现价只作主源失败时的兜底与交叉校核。'
+  },
+  {
+    id: 'xmgcn-timeline',
+    name: '油价网·官方调价时间表',
+    kind: 'timeline',
+    enabled: true,
+    provides: ['timeline'],
+    url: 'https://www.xmgcn.com/tiaozheng/',
+    allowedHosts: ['www.xmgcn.com'],
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+    },
+    parser: 'xmgcnTimeline',
+    note: '全国调价时间表（各省最高零售价元/吨与涨跌）。只做口径互校，不对外展示。'
   },
   {
     id: 'ndrc-notice',
@@ -77,6 +123,161 @@ const SOURCES = [
  * 绝不用默认值或猜测值填充正式结果。
  */
 const PARSERS = {
+  /**
+   * 解析油价网省份页（https://www.xmgcn.com/{slug}/）。
+   *
+   * 页面结构（2026-11-16 实测，31 省完全一致）：
+   *   当前价区  <div class="price-card n92">
+   *                <div class="oil-name">92号汽油</div>
+   *                <span class="price-value">8.39</span>
+   *                <span class="price-change down"> -0.52 </span>
+   *              </div>
+   *   历史表    <div class="history-table"><table>
+   *                <thead><tr><th>日期</th><th>89号汽油</th><th>92号汽油</th>…</tr></thead>
+   *                <tbody><tr><td>2026-11-13</td>
+   *                  <td class="price-cell"><div>7.79</div><div class="change-cell change-down">-0.48</div></td>…
+   *
+   * ⚠️ 三个必须记住的点：
+   *   1. 表格行序是**降序**（最新在前），入库前必须按日期升序重排 ——
+   *      顺序搞反，「相邻期变化」会全部反号，测出来的涨跌额也跟着反。
+   *   2. 列与油品的对应靠**表头**（89/92/95/98/0 号）解析，别按位置硬编码。
+   *   3. 89 号汽油在部分省是「-」（内蒙古/吉林/新疆/河南/湖北/辽宁/黑龙江不供 89#），
+   *      本项目不做 89#，直接跳过。
+   *
+   * 密集请求时站点会返回**残页**（表格 tbody 为空），所以行数不足直接返回 null，
+   * 让采集器重试 —— 半张表比没有表更危险。
+   *
+   * @param {string} raw 页面 HTML
+   * @returns {{prices:object, changes:object, history:Array}|null}
+   *   history 按日期**升序**，每项 { date, prices:{92,95,98,0}, changes:{} }
+   */
+  xmgcnRegion(raw) {
+    var html = String(raw || '');
+
+    // ---- 1. 当前价 ----
+    var prices = {};
+    var changes = {};
+    var parts = html.split(/<div class="price-card n/);
+    for (var i = 1; i < parts.length; i++) {
+      var seg = parts[i];
+      var idM = seg.match(/^(\d+)"/);
+      if (!idM) continue;
+      var fuelId = { '92': '92', '95': '95', '98': '98', '0': '0' }[idM[1]];
+      if (!fuelId) continue;
+      var pm = seg.match(/<span class="price-value">\s*([0-9]+(?:\.[0-9]+)?)\s*<\/span>/);
+      if (!pm) continue;
+      var price = Number(pm[1]);
+      // 挂牌价的合理区间：超出说明页面结构变了或解析错位，整体转人工
+      if (!isFinite(price) || price < 3 || price > 20) return null;
+      prices[fuelId] = price;
+      var cm = seg.match(/<span class="price-change[^"]*">\s*([+-]?[0-9]+(?:\.[0-9]+)?)\s*<\/span>/);
+      if (cm) changes[fuelId] = Number(cm[1]);
+    }
+    if (!prices['92'] || !prices['95'] || !prices['98'] || !prices['0']) return null;
+
+    // ---- 2. 历史表 ----
+    var tb = html.indexOf('<div class="history-table">');
+    if (tb < 0) return null;
+    var end = html.indexOf('</table>', tb);
+    if (end < 0) return null;
+    var tableHtml = html.slice(tb, end);
+    var trs = tableHtml.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+    if (trs.length < 2) return null;
+
+    // 表头驱动列映射：第 0 列是日期，其余按表头的标号对应油品
+    var headerIdx = -1;
+    for (var ti = 0; ti < trs.length; ti++) {
+      if (/<th[\s>]/i.test(trs[ti])) { headerIdx = ti; break; }
+    }
+    if (headerIdx < 0) return null;
+    var headerCells = (trs[headerIdx].match(/<th[^>]*>[\s\S]*?<\/th>/gi) || []).map(stripTags);
+    var colFuel = [];
+    for (var h = 0; h < headerCells.length; h++) {
+      var num = headerCells[h].match(/(\d{1,3})号/);
+      colFuel[h] = num ? ({ '92': '92', '95': '95', '98': '98', '0': '0' }[num[1]] || null) : null;
+    }
+
+    var history = [];
+    for (var r = headerIdx + 1; r < trs.length; r++) {
+      var cells = trs[r].match(/<td[^>]*>[\s\S]*?<\/td>/gi) || [];
+      if (cells.length < 2) continue;
+      var dm = cells[0].match(/(\d{4})-(\d{2})-(\d{2})/);
+      if (!dm) continue;
+      var row = { date: dm[1] + '-' + dm[2] + '-' + dm[3], prices: {}, changes: {} };
+      for (var c = 1; c < cells.length && c < colFuel.length; c++) {
+        var fid = colFuel[c];
+        if (!fid) continue;
+        // ⚠️ 价格必须从**原始 HTML** 里取，不能先把标签和空白全去掉再取：
+        //   去掉空白后「价格 10」+「涨跌 0」会粘成「100」——
+        //   内蒙古 98# 在 2026-09-25 / 2026-10-16 正好是整数 10，
+        //   粘成 100 之后那两期的涨跌会变成 +90 / -89.68，整条序列全乱，
+        //   还会把跨省一致性闸门误报成「偏离 89.98」。
+        var pv = cells[c].match(/<div>\s*([0-9]+(?:\.[0-9]+)?)\s*<\/div>/);
+        if (!pv) continue;
+        row.prices[fid] = Number(pv[1]);
+        // 涨跌的正负号写在 **class** 上（change-up / change-down / change-unchanged），
+        // 文本里的数字没有符号（「0」就是持平），所以符号要从 class 取。
+        var cv = cells[c].match(/change-(up|down|unchanged)/);
+        if (cv) {
+          var magM = cells[c].match(/change-(?:up|down|unchanged)[^>]*>\s*([+-]?[0-9]+(?:\.[0-9]+)?)?/);
+          var mag = magM && magM[1] !== undefined ? Math.abs(Number(magM[1])) : 0;
+          row.changes[fid] = cv[1] === 'down' ? -mag : (cv[1] === 'up' ? mag : 0);
+        }
+      }
+      // 四个油品缺一个就不是完整的一期，跳过（残缺的行不能拿去算涨跌）
+      if (!row.prices['92'] || !row.prices['95'] || !row.prices['98'] || !row.prices['0']) continue;
+      history.push(row);
+    }
+    // 残页：站点在密集请求下会返回空 tbody 或半张表
+    if (history.length < 20) return null;
+
+    // 页面行序是降序（最新在前），必须按日期升序重排
+    history.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+
+    return { prices: prices, changes: changes, history: history };
+  },
+
+  /**
+   * 解析油价网的官方调价时间表（https://www.xmgcn.com/tiaozheng/）。
+   *
+   * 表格结构（2026-11-16 实测，51 行）：
+   *   排名 | 调整日期 | 汽油价格(元/吨) | 汽油涨跌 | 柴油价格(元/吨) | 柴油涨跌
+   *   48 | 2024-06-28 | 9220 | +210 (+2.28%) | 8175 | +200 (+2.45%)
+   *
+   * 这是**官方公布的各省最高零售价（元/吨）**，与「每升挂牌价」是不同口径：
+   * 元/升 = 元/吨 ÷ 1000 × 密度（89# 汽油 0.725、0# 柴油 0.835 kg/L）。
+   * 它只用来做**口径互校**（见 collector.js 的 timelineCrossCheck），
+   * 不作为对外展示的每升幅度。
+   *
+   * @param {string} raw 页面 HTML
+   * @returns {{items:Array}|null} items 按日期升序
+   */
+  xmgcnTimeline(raw) {
+    var html = String(raw || '');
+    var trs = html.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+    var items = [];
+    for (var i = 0; i < trs.length; i++) {
+      var cells = (trs[i].match(/<t[dh][\s\S]*?<\/t[dh]>/gi) || []).map(stripTags);
+      if (cells.length < 6) continue;
+      var dm = cells[1].match(/(\d{4})-(\d{2})-(\d{2})/);
+      if (!dm) continue;
+      var gTon = cells[2].match(/([0-9]+(?:\.[0-9]+)?)/);
+      var gDelta = cells[3].match(/([+-][0-9]+)/);
+      var dTon = cells[4].match(/([0-9]+(?:\.[0-9]+)?)/);
+      var dDelta = cells[5].match(/([+-][0-9]+)/);
+      items.push({
+        date: dm[1] + '-' + dm[2] + '-' + dm[3],
+        gasolineTon: gTon ? Number(gTon[1]) : null,
+        gasolineDelta: gDelta ? Number(gDelta[1]) : null,
+        dieselTon: dTon ? Number(dTon[1]) : null,
+        dieselDelta: dDelta ? Number(dDelta[1]) : null
+      });
+    }
+    if (items.length < 10) return null;
+    items.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+    return { items: items };
+  },
+
   /**
    * 解析汽油价格网地区页（如 /beijing.shtml）。
    *
@@ -381,12 +582,22 @@ function qyjTrend(html, now) {
   // 区块里有 document.writeln 的 script，先剥掉再去标签
   var text = stripTags(m[1].replace(/<script[\s\S]*?<\/script>/gi, ''));
 
-  var dateM = text.match(/下次油价(\d{1,2})月(\d{1,2})日(\d{1,2})时调整/);
-  var dirM = text.match(/预计(?:将)?(上调|下调|搁浅|不作调整)/);
+  // ⚠️ 站点有两种写法（2026-11-16 实测）：
+  //   轮次前（预测）：「下次油价11月12日24时调整 … 目前预计上调油价90元/吨(0.07元/升-0.08元/升)」
+  //   轮次后（结果）：「油价11月12日24时调整 … 下跌0.51元/升-0.63元/升」
+  // 「下次」「预计」这两个词**只在预测写法里出现**，是区分二者的唯一依据。
+  // 轮次一过，站点就改成公布结果；那时候还把它当「下次窗口」，
+  // 页面就会显示一个已经过去的预测。
+  var dateM = text.match(/(?:下次)?油价(\d{1,2})月(\d{1,2})日(\d{1,2})时调整/);
+  var forecastM = text.match(/预计(?:将)?(上调|下调|搁浅|不作调整)/);
+  var resultM = text.match(/(上涨|下跌|搁浅|不作调整)/);
   // 只有日期没有方向（或反过来）都不算可发布的预测，不猜
-  if (!dateM || !dirM) return null;
+  if (!dateM || (!forecastM && !resultM)) return null;
 
-  var direction = dirM[1] === '上调' ? 'up' : dirM[1] === '下调' ? 'down' : 'flat';
+  var isForecast = !!forecastM;
+  var dirWord = forecastM ? forecastM[1] : resultM[1];
+  var direction = (dirWord === '上调' || dirWord === '上涨') ? 'up'
+    : ((dirWord === '下调' || dirWord === '下跌') ? 'down' : 'flat');
   var sign = direction === 'down' ? -1 : 1;
 
   var changeTon = null;
@@ -426,6 +637,8 @@ function qyjTrend(html, now) {
     changeTon: changeTon,
     literMin: literMin,
     literMax: literMax,
+    // true = 来源在预测下一轮；false = 来源公布的是某一轮的结果
+    isForecast: isForecast,
     text: text.slice(0, 200)
   };
 }

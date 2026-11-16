@@ -663,6 +663,120 @@ async function main() {
   check('价格没变就不改调价日', histPriceRow.changeAt === '2026-11-01', String(histPriceRow.changeAt));
   check('价格没变就不改调价幅度', histPriceRow.changeAmount === 0.3, String(histPriceRow.changeAmount));
 
+  console.log('\n--- 历史价入库的五道闸门 ---');
+  // 历史是**一次性回填**的（库里没有旧值可比），所以不能用「与上次采集价落差」
+  // 那套逻辑，得单独设闸门。这组用例用构造数据把 5 道闸门逐条钉住。
+  var gateSource = { id: 'test-gate-src', name: '测试源' };
+  var gateRegion = { code: '990002', name: '闸门省', city: '闸门市' };
+  var outlierRegion = { code: '990007', name: '离群省', city: '离群市' };
+  var GDATES = ['2026-01-01', '2026-01-15', '2026-02-01'];
+
+  function mkParsed(base, deltas) {
+    var rows = [];
+    var p = base;
+    GDATES.forEach(function (d, i) {
+      if (i > 0) p = Math.round((p + deltas[i]) * 100) / 100;
+      rows.push({
+        date: d,
+        prices: {
+          '92': p,
+          '95': Math.round((p + 1) * 100) / 100,
+          '98': Math.round((p + 2) * 100) / 100,
+          '0': Math.round((p + 0.5) * 100) / 100
+        },
+        changes: {}
+      });
+    });
+    // 当前价要与历史末行一致（首尾自洽），这里给一份**拷贝**，
+    // 免得改当前价时把历史末行也一起改了，测不出不自洽的情况。
+    return { prices: Object.assign({}, rows[rows.length - 1].prices), changes: {}, history: rows };
+  }
+
+  var goodParsed = mkParsed(8, [0, -0.5, -0.5]);
+  var outlierParsed = mkParsed(8, [0, 0.5, -0.5]);
+
+  // 跨省统计要够多的省才成立（实测是 31 省，阈值取 5）
+  var statSeries = {};
+  ['990002', '990003', '990004', '990005', '990006'].forEach(function (code) {
+    statSeries[code] = collector.historySeries(goodParsed);
+  });
+  statSeries[outlierRegion.code] = collector.historySeries(outlierParsed);
+  var gateStats = collector.crossProvinceStats(statSeries);
+
+  // G1 区间：价格超合理区间的点丢掉
+  var overParsed = mkParsed(8, [0, -0.5, -0.5]);
+  overParsed.history[1].prices['92'] = 99;
+  var g1 = await collector.saveHistory(gateSource, gateRegion, overParsed, gateStats);
+  check('G1 价格超区间：丢点', g1.dropped.some(function (d) { return d.reason === 'PRICE_OUT_OF_RANGE'; }),
+    JSON.stringify(g1.dropped));
+  check('G1 价格超区间：该点没入库（3 期 × 4 油品 - 1 = 11 行）', g1.saved === 11, '实际 ' + g1.saved + ' 行');
+
+  // G2/G5 同日期重复：只留一行
+  var dupParsed = mkParsed(8, [0, -0.5, -0.5]);
+  dupParsed.history.push({ date: GDATES[2], prices: dupParsed.history[2].prices, changes: {} });
+  var g2 = await collector.saveHistory(gateSource, gateRegion, dupParsed, gateStats);
+  check('G2 同日期重复：丢重复行', g2.dropped.some(function (d) { return d.reason === 'DUPLICATE_DATE'; }),
+    JSON.stringify(g2.dropped));
+  check('G2 同日期重复：入库仍是 12 行', g2.saved === 12, '实际 ' + g2.saved + ' 行');
+
+  // G3 首尾自洽：历史末行 ≠ 同页现价 → 整省历史丢弃
+  var mismatchParsed = mkParsed(8, [0, -0.5, -0.5]);
+  mismatchParsed.prices['92'] = 7.77;
+  var g3 = await collector.saveHistory(gateSource, gateRegion, mismatchParsed, gateStats);
+  check('G3 首尾自洽不符：整省历史丢弃', g3.saved === 0 && g3.skipped === 'PRICE_MISMATCH',
+    'saved=' + g3.saved + ' skipped=' + g3.skipped);
+  check('G3 首尾自洽不符：记告警', g3.advisories.some(function (a) {
+    return a.reason === 'HISTORY_PRICE_MISMATCH';
+  }));
+
+  // G4 跨省一致性：离群省要告警，但**保留源站原值**
+  var g4 = await collector.saveHistory(gateSource, outlierRegion, outlierParsed, gateStats);
+  check('G4 跨省离群：记告警', g4.advisories.some(function (a) {
+    return a.reason === 'CROSS_PROVINCE_DEVIATION';
+  }), JSON.stringify(g4.advisories));
+  check('G4 跨省离群：保留源站原值（只告警，不擅自改写）', g4.saved === 12, '实际 ' + g4.saved + ' 行');
+
+  // 调价节点推导：全年节点靠它
+  var deriveSeries = {};
+  ['990002', '990003', '990004', '990005', '990006'].forEach(function (code) {
+    deriveSeries[code] = collector.historySeries(goodParsed);
+  });
+  var deriveEvents = collector.deriveAdjustEvents(deriveSeries);
+  check('调价节点推导：两轮调价各一个节点', deriveEvents.length === 2, '实际 ' + deriveEvents.length + ' 个');
+  check('调价节点推导：幅度取跨省中位数', deriveEvents.length === 2 && deriveEvents[1].deltas['92'] === -0.5,
+    JSON.stringify(deriveEvents.map(function (e) { return e.deltas; })));
+
+  console.log('\n--- 走势页调价节点：官方公告与历史推导要合并（不是二选一） ---');
+  // 以前是二选一：officialEvents.length ? 官方 : 推导。
+  // 官方公告只覆盖最近几轮 → 一年视图只有几个节点，其余全空。
+  var trendToday = query.todayStr();
+  var trendFrom = new Date(new Date(trendToday + 'T00:00:00Z').getTime() - 12 * 30 * 86400000)
+    .toISOString().slice(0, 10);
+  var inRange = function (d) { return d && d >= trendFrom && d <= trendToday; };
+  var trend1y = await query.actionTrend({ regionCode: '440000', fuelId: '92', period: '1y' });
+  var trendDates = {};
+  trend1y.events.forEach(function (e) { trendDates[e.date] = true; });
+  var seedEventDates = (await dao.events.listAll())
+    .map(function (e) { return e.date; })
+    .filter(inRange);
+  var noticeDates = (await dao.notices.listPublic('official', 60, 0))
+    .map(function (n) { return n.executeAt; })
+    .filter(inRange);
+  var missingSeed = seedEventDates.filter(function (d) { return !trendDates[d]; });
+  var missingNotice = noticeDates.filter(function (d) { return !trendDates[d]; });
+  check('trend 1y：历史推导的节点一个不少', missingSeed.length === 0,
+    '推导 ' + seedEventDates.length + ' 个，缺 ' + JSON.stringify(missingSeed.slice(0, 5)));
+  check('trend 1y：官方公告的节点都在', missingNotice.length === 0,
+    '官方 ' + noticeDates.length + ' 个，缺 ' + JSON.stringify(missingNotice.slice(0, 5)));
+  check('trend 1y：节点是两者并集（二选一的话会少一半）',
+    trend1y.events.length >= Math.max(seedEventDates.length, noticeDates.length),
+    '节点数 ' + trend1y.events.length + '，推导 ' + seedEventDates.length + '，官方 ' + noticeDates.length);
+  check('trend 1y：节点日期不重复', Object.keys(trendDates).length === trend1y.events.length,
+    '去重后 ' + Object.keys(trendDates).length + '，总数 ' + trend1y.events.length);
+  check('trend 1y：source.note 如实写来源与覆盖范围',
+    typeof trend1y.source.note === 'string' && trend1y.source.note.indexOf('历史价来自') >= 0,
+    String(trend1y.source.note));
+
   console.log('\n--- 订阅消息请求体：必须是 {value} 包装 ---');
   // ⚠️ 微信 message/subscribe/send 要求每个字段是 {"value": "..."} 对象。
   // 传扁平字符串平台一律拒收（errcode 47003）。

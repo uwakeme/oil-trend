@@ -67,13 +67,38 @@ const EXPECTED_TREND = {
 function runSuite(label, sources) {
   const parse = (html, now) => sources.PARSERS.qiyoujiageRegion(html, now === undefined ? NOW : now);
 
-  check(label + ' 来源配置：qiyoujiage 已启用且为 price 类型', () => {
+  check(label + ' 来源配置：qiyoujiage 改为预测源（保留兜底 + 交叉校核）', () => {
     const s = sources.SOURCES.find(x => x.id === 'qiyoujiage');
     assert(s, '缺少 qiyoujiage 来源');
     assert.strictEqual(s.enabled, true);
-    assert.strictEqual(s.kind, 'price');
+    // 2026-11-16 起主源换成 xmgcn（现价+历史），它只留三件事：
+    // 下次调价预测（全网唯一）、主源失败时兜底现价、交叉校核。
+    assert.strictEqual(s.kind, 'forecast');
+    assert.strictEqual(s.priority, 2, '降级链里排第二');
+    assert(s.provides.includes('forecast'), '要提供预测');
+    assert(s.provides.includes('price'), '仍要能兜底现价');
+    assert.strictEqual(s.verifyRegions.length, 3, '交叉校核抽 3 个省');
     assert.strictEqual(typeof sources.PARSERS[s.parser], 'function');
-    assert(s.url.endsWith('/'), 'url 要以 / 结尾，拼接地区页用');
+    assert(s.urlTemplate.indexOf('{slug}') > 0, 'urlTemplate 要带 {slug} 占位');
+  });
+
+  check(label + ' 来源配置：xmgcn 是现价+历史主源，且有 HTTPS', () => {
+    const s = sources.SOURCES.find(x => x.id === 'xmgcn');
+    assert(s, '缺少 xmgcn 来源');
+    assert.strictEqual(s.enabled, true);
+    assert.strictEqual(s.kind, 'price');
+    assert.strictEqual(s.priority, 1, '主源优先');
+    assert(s.provides.includes('price') && s.provides.includes('history'));
+    assert(s.urlTemplate.startsWith('https://'), 'xmgcn 有 HTTPS');
+    assert.strictEqual(typeof sources.PARSERS[s.parser], 'function');
+  });
+
+  check(label + ' 来源配置：官方调价时间表源只做口径互校', () => {
+    const s = sources.SOURCES.find(x => x.id === 'xmgcn-timeline');
+    assert(s, '缺少 xmgcn-timeline 来源');
+    assert.strictEqual(s.kind, 'timeline');
+    assert.deepStrictEqual(s.provides, ['timeline']);
+    assert.strictEqual(typeof sources.PARSERS[s.parser], 'function');
   });
 
   for (const [regionName, slug] of [['北京', 'beijing'], ['陕西', 'shanxi-3'], ['云南', 'yunnan']]) {
@@ -92,6 +117,133 @@ function runSuite(label, sources) {
       }
     });
   }
+
+  /* ---------- 油价网（xmgcn）：现价 + 历史 ---------- */
+
+  const xmgcnFixture = () =>
+    fs.readFileSync(path.join(ROOT, 'scripts', 'fixtures', 'xmgcn-guangdong.html'), 'utf8');
+  const parseXmgcn = (html) => sources.PARSERS.xmgcnRegion(html);
+  /** 把历史表 tbody 裁到只剩前 keep 行，用来造残页 */
+  function truncateHistoryRows(html, keep) {
+    return html.replace(/(<tbody>)[\s\S]*?(<\/tbody>)/, function (m, a, b) {
+      const rows = m.match(/<tr[\s\S]*?<\/tr>/gi) || [];
+      return a + rows.slice(0, keep).join('') + b;
+    });
+  }
+
+  check(label + ' xmgcnRegion 真实快照：现价 + 30 期历史，日期升序', () => {
+    const r = parseXmgcn(xmgcnFixture());
+    assert(r, '解析为 null');
+    assert.deepStrictEqual(r.prices, { '92': 8.39, '95': 9.09, '98': 11.09, '0': 8.06 });
+    assert.strictEqual(r.history.length, 30);
+    // ⚠️ 页面行序是**降序**（最新在前），解析器必须按日期升序重排。
+    // 顺序搞反的话「相邻期变化」会全部反号，测出来的涨跌额也跟着反。
+    for (let i = 1; i < r.history.length; i++) {
+      assert(r.history[i].date > r.history[i - 1].date, '历史必须升序：' + r.history[i].date);
+    }
+    assert.strictEqual(r.history[0].date, '2025-09-10');
+    assert.strictEqual(r.history[r.history.length - 1].date, '2026-11-13');
+  });
+
+  check(label + ' xmgcnRegion 历史末行价格 == 同页现价（首尾自洽闸门的前提）', () => {
+    const r = parseXmgcn(xmgcnFixture());
+    const last = r.history[r.history.length - 1];
+    for (const f of ['92', '95', '98', '0']) {
+      assert.strictEqual(last.prices[f], r.prices[f], f + '# 历史末行与现价不符');
+    }
+  });
+
+  check(label + ' xmgcnRegion 站点涨跌列与相邻期价差一致（零偏差）', () => {
+    const r = parseXmgcn(xmgcnFixture());
+    let n = 0;
+    for (let i = 1; i < r.history.length; i++) {
+      for (const f of ['92', '95', '98', '0']) {
+        const prev = r.history[i - 1].prices[f];
+        const cur = r.history[i].prices[f];
+        const ch = r.history[i].changes[f];
+        if (typeof prev !== 'number' || typeof cur !== 'number' || typeof ch !== 'number') continue;
+        n++;
+        assert(Math.abs(ch - (cur - prev)) <= 0.005,
+          r.history[i].date + ' ' + f + '# 涨跌列 ' + ch + ' ≠ 实际 ' + (cur - prev).toFixed(2));
+      }
+    }
+    assert(n >= 100, '样本太少：' + n);
+  });
+
+  check(label + ' xmgcnRegion 残页（tbody 空 / 行数不足）→ null，让采集器重试', () => {
+    // 密集请求时站点会返回半张表 —— 半张表比没有表更危险，必须判失败重试
+    assert.strictEqual(parseXmgcn(truncateHistoryRows(xmgcnFixture(), 10)), null);
+    assert.strictEqual(parseXmgcn(
+      xmgcnFixture().replace(/<tbody>[\s\S]*?<\/tbody>/, '<tbody></tbody>')
+    ), null);
+  });
+
+  check(label + ' xmgcnRegion 缺油品 / 超区间 / 空页面 → null（转人工）', () => {
+    assert.strictEqual(parseXmgcn(''), null);
+    // 98# 卡片改个 class → 凑不齐四油品
+    assert.strictEqual(parseXmgcn(xmgcnFixture().replace('price-card n98', 'price-card x98')), null);
+    // 价格超区间 → 结构变了或解析错位
+    assert.strictEqual(parseXmgcn(xmgcnFixture().replace('>8.39<', '>99<')), null);
+  });
+
+  check(label + ' xmgcnRegion 整数价格不与涨跌粘连（价格 10 + 涨跌 0 ≠ 100）', () => {
+    // ⚠️ 这是真踩过的坑：去掉空白后「10」+「0」粘成「100」。
+    // 内蒙古 98# 在 2026-09-25 / 2026-10-16 正好是整数 10，
+    // 粘成 100 之后那两期的涨跌变成 +90 / -89.68，整条序列全乱，
+    // 跨省一致性闸门还会误报「偏离 89.98」。
+    const html = xmgcnFixture().replace(
+      /<td class="price-cell">\s*<div>\s*7\.13\s*<\/div>\s*<div class="change-cell change-unchanged">\s*0\s*<\/div>\s*<\/td>/,
+      '<td class="price-cell"> <div> 10 </div> <div class="change-cell change-unchanged"> 0 </div> </td>'
+    );
+    const r = parseXmgcn(html);
+    assert(r, '解析为 null');
+    const row = r.history.filter(function (h) { return h.date === '2025-09-24'; })[0];
+    assert(row, '找不到 2025-09-24 那期');
+    assert.strictEqual(row.prices['92'], 10, '整数价格应解析成 10，不是 100');
+    assert.strictEqual(row.changes['92'], 0, '持平的涨跌是 0');
+    assert(r.history.every(function (h) { return h.prices['92'] !== 100; }), '不应出现 100');
+  });
+
+  check(label + ' qiyoujiage 新文案：轮次后的「结果」写法能解析，但标记为非预测', () => {
+    // 2026-11-16 实测：轮次一过，站点把区块从
+    //   「下次油价X月X日24时调整 … 目前预计上调油价90元/吨(0.07元/升-0.08元/升)」
+    // 改成
+    //   「油价X月X日24时调整 … 下跌0.51元/升-0.63元/升」
+    // 「下次」「预计」这两个词只在预测写法里出现，是区分二者的唯一依据。
+    const t = parse(page(trendDiv('油价11月12日24时调整<br/><span>下跌0.51元/升-0.63元/升,大家相互转告油价大跌了 。</span>'))).trend;
+    assert(t, 'trend 为 null');
+    assert.strictEqual(t.direction, 'down');
+    assert.strictEqual(t.date, '2026-11-12');
+    assert.strictEqual(t.literMin, 0.51);
+    assert.strictEqual(t.literMax, 0.63);
+    assert.strictEqual(t.isForecast, false, '没有「预计」二字 → 是已发生轮次的结果');
+    assert.strictEqual(t.changeTon, null, '结果写法没给吨价，不猜');
+  });
+
+  check(label + ' qiyoujiage 预测写法仍标记为 isForecast', () => {
+    const t = parse(page(trendDiv('下次油价11月24日24时调整<br/><span>目前预计上调油价90元/吨(0.07元/升-0.08元/升)，大家相互提醒油价又涨了 。</span>'))).trend;
+    assert(t, 'trend 为 null');
+    assert.strictEqual(t.isForecast, true);
+    assert.strictEqual(t.direction, 'up');
+    assert.strictEqual(t.changeTon, 90);
+  });
+
+  check(label + ' xmgcnTimeline 真实快照：全国调价时间表（吨价口径）', () => {
+    const html = fs.readFileSync(path.join(ROOT, 'scripts', 'fixtures', 'xmgcn-tiaozheng.html'), 'utf8');
+    const t = sources.PARSERS.xmgcnTimeline(html);
+    assert(t, '解析为 null');
+    assert.strictEqual(t.items.length, 50);
+    assert.strictEqual(t.items[0].date, '2024-05-16');
+    const last = t.items[t.items.length - 1];
+    assert.strictEqual(last.date, '2026-11-13');
+    // 最后一轮就是发改委 2026-11-12 公告的那一轮：汽油下调 645、柴油下调 625
+    assert.strictEqual(last.gasolineDelta, -645);
+    assert.strictEqual(last.dieselDelta, -625);
+    // 升序
+    for (let i = 1; i < t.items.length; i++) {
+      assert(t.items[i].date > t.items[i - 1].date, '时间表必须升序');
+    }
+  });
 
   check(label + ' 空页面 / 缺油品 / 坏价格 / 超区间 → null（转人工）', () => {
     assert.strictEqual(parse(''), null);
@@ -276,13 +428,26 @@ function runSuite(label, sources) {
 /* ---------- 主流程 ---------- */
 
 console.log('--- 采集源配置 ---');
-check('31 个地区都有 slug 且唯一（陕西 shanxi-3 / 山西 shanxi）', () => {
+check('31 个地区每个来源各有一套 slug 且唯一（拼音撞名省份两套不同）', () => {
   assert.strictEqual(REGIONS.length, 31);
-  const slugs = REGIONS.map(r => r.slug);
-  assert(slugs.every(s => typeof s === 'string' && s.length > 0), '有地区缺 slug');
-  assert.strictEqual(new Set(slugs).size, 31, 'slug 有重复');
-  assert.strictEqual(REGIONS.find(r => r.name === '陕西').slug, 'shanxi-3');
-  assert.strictEqual(REGIONS.find(r => r.name === '山西').slug, 'shanxi');
+  for (const sourceId of ['qiyoujiage', 'xmgcn']) {
+    const slugs = REGIONS.map(r => r.slugs[sourceId]);
+    assert(slugs.every(s => typeof s === 'string' && s.length > 0), sourceId + ' 有地区缺 slug');
+    assert.strictEqual(new Set(slugs).size, 31, sourceId + ' 的 slug 有重复');
+  }
+  // ⚠️ 两个站点的 slug 不一样，按拼音猜必错：
+  //   陕西 qiyoujiage=shanxi-3 / xmgcn=shanxi2
+  //   内蒙古 qiyoujiage=neimenggu / xmgcn=namenggu
+  //   西藏 qiyoujiage=xizang / xmgcn=xicang
+  //   山西 两边都是 shanxi（山西跟陕西不撞，撞的是「陕」）
+  assert.strictEqual(REGIONS.find(r => r.name === '陕西').slugs.qiyoujiage, 'shanxi-3');
+  assert.strictEqual(REGIONS.find(r => r.name === '陕西').slugs.xmgcn, 'shanxi2');
+  assert.strictEqual(REGIONS.find(r => r.name === '山西').slugs.qiyoujiage, 'shanxi');
+  assert.strictEqual(REGIONS.find(r => r.name === '山西').slugs.xmgcn, 'shanxi');
+  assert.strictEqual(REGIONS.find(r => r.name === '内蒙古').slugs.qiyoujiage, 'neimenggu');
+  assert.strictEqual(REGIONS.find(r => r.name === '内蒙古').slugs.xmgcn, 'namenggu');
+  assert.strictEqual(REGIONS.find(r => r.name === '西藏').slugs.qiyoujiage, 'xizang');
+  assert.strictEqual(REGIONS.find(r => r.name === '西藏').slugs.xmgcn, 'xicang');
 });
 
 

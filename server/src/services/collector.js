@@ -8,7 +8,22 @@
  *   2. 通知按 dedupKey 去重，重复抓取不会重复入库；
  *   3. 每次运行都写 collector_runs，前端据此展示「同步状态」。
  *
- * 地区价格源（qiyoujiage）：价格只在调价日变化，默认 6 小时新鲜期，
+ * ⚠️ 2026-11-16 起改成**多源协作**（见 server/docs/data-source-design.md）：
+ *
+ *   价格源降级链（按 provides 含 price 排 priority）
+ *     xmgcn（油价网，HTTPS）—— 现价 + 近 30 期历史，主源
+ *       ↓ 某省抓不到才轮到
+ *     qiyoujiage（汽油价格网，HTTP）—— 兜底现价
+ *
+ *   预测源 qiyoujiage —— 全网唯一给「下次调价预测」的源；
+ *                        抓抽样省份时顺带跟主源现价交叉校核。
+ *
+ *   口径互校 xmgcn-timeline —— 官方公布的每吨涨跌换算成每升，
+ *                               跟各省实测的跨省中位数比一比，两套独立数据互证。
+ *
+ *   公告源 ndrc-notice —— 正式调价公告。
+ *
+ * 地区价格源：价格只在调价日变化，默认 6 小时新鲜期，
  * 31 省 3 并发抓取；run({ regionCode, force }) 可单地区强制采集。
  */
 const dao = require('../dao');
@@ -26,6 +41,14 @@ function todayStr() {
   var m = d.getUTCMonth() + 1;
   var day = d.getUTCDate();
   return d.getUTCFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
+}
+
+/** 中位数。跨省统计要用它 —— 均值会被个别离群省拉偏，中位数不会。 */
+function median(list) {
+  if (!list || !list.length) return 0;
+  var s = list.slice().sort(function (a, b) { return a - b; });
+  var m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
 /* ---------------- 抓取 ---------------- */
@@ -66,6 +89,28 @@ function fetchSource(source) {
   });
 }
 
+/* ---------------- 地区路径名 ---------------- */
+
+/**
+ * 某个来源站点的地区页路径名。
+ *
+ * ⚠️ 各站点的 slug **不一样**，按拼音猜必错：
+ *   陕西   qiyoujiage=shanxi-3   xmgcn=shanxi2
+ *   内蒙古 qiyoujiage=neimenggu  xmgcn=namenggu
+ *   西藏   qiyoujiage=xizang     xmgcn=xicang
+ * 真源在 data/regions.js 的 slugs。
+ */
+function regionSlug(source, region) {
+  var slugs = region.slugs || {};
+  return slugs[source.id] || '';
+}
+
+/** 拼出地区页地址：urlTemplate 里的 {slug} 换成该省在这个站的路径名 */
+function regionUrl(source, region) {
+  var tpl = source.urlTemplate || (source.url + '{slug}');
+  return tpl.replace('{slug}', regionSlug(source, region));
+}
+
 /* ---------------- 入库 ---------------- */
 
 /**
@@ -73,7 +118,7 @@ function fetchSource(source) {
  *
  * 对外可见的只有 approved，文案里不能出现「待复核」这种自相矛盾的说法。
  *
- * ⚠ 发改委公告只给吨价、只分汽/柴油两类，不给四油品每升幅度 ——
+ * ⚠️ 发改委公告只给吨价、只分汽/柴油两类，不给四油品每升幅度 ——
  * 所以摘要里写「官方公告：上调，汽油 345 元/吨、柴油 335 元/吨」，
  * 绝不写成「每升下调 0.13 元」这种官方没说过的话。
  */
@@ -105,7 +150,7 @@ function noticeSummary(parsed) {
  *
  * ⚠️ oil_adjust_events 这张表以前只有测试夹具在写，生产库一直是空的，
  * 走势页的调价节点恒不显示（count 恒 0）。
- * 这里在公告入库的同时补一条，靠 dedup_key 保证不重复。
+ * 现在节点主要由历史实测推导（见 deriveAdjustEvents），这里保留公告口径的补充。
  */
 async function saveAdjustEvent(source, parsed) {
   if (!parsed.executeAt) return null;
@@ -162,7 +207,7 @@ function saveNotice(source, parsed) {
       // 旧的那条 pending 会永远留在库里。所以按 (来源, 标题) 再回退查一次。
       return dao.notices.findPendingBySourceTitle(source.id, parsed.title).then(function (pendingRow) {
         // ⚠️ 存疑的通知必须**原地覆盖**，不能每次都插一条新的。
-        // 以前只在「新的可信、旧的存疑」时才覆盖，存疑→仍存疑会插重复行 ——
+        // 以前只在「新的可信、旧的存疑」时覆盖，存疑→仍存疑会插重复行 ——
         // 公告源启用后每 30 分钟重跑一次，重复行会按天堆积。
         if (pendingRow) {
           return dao.notices.update(
@@ -250,101 +295,141 @@ function regionFresh(docs, sourceId, freshHours) {
 }
 
 /**
- * 逐地区抓取价格页。
- * options.regionCode 只采一个地区（手动触发/联调用）；options.force 忽略新鲜期。
- * 价格只在调价日变化，默认 freshHours 内抓过的地区跳过。
+ * 逐省抓一个价格源。
+ *
+ * 3 并发 + 每请求间隔 + **解析失败重试 1 次**：
+ * 油价网在密集请求下会返回**残页**（历史表 tbody 为空）。
+ * 残页必须重试 —— 半张表比没有表危险，残页写进库会画出一条假台阶线。
+ *
+ * @param {object} source 价格源配置
+ * @param {Array} regions 要抓的地区
+ * @param {object} cache 本轮请求缓存（同一轮里多个流程共用，避免重复打站点）
+ * @returns {Promise<object>} { regionCode: { ok, parsed } | { ok:false, reason, message } }
  */
-async function collectPriceSource(source, options) {
+async function fetchRegionPages(source, regions, cache) {
+  var out = {};
+  var queue = regions.slice();
+  var parser = sources.PARSERS[source.parser];
+  async function worker() {
+    while (queue.length) {
+      var region = queue.shift();
+      var key = source.id + '|' + region.code;
+      if (cache && Object.prototype.hasOwnProperty.call(cache, key)) {
+        out[region.code] = cache[key];
+        continue;
+      }
+      var parsed = null;
+      var fail = { reason: 'PARSE_FAILED', message: '页面抓取成功但解析不出四油品价格' };
+      for (var attempt = 0; attempt < 2; attempt++) {
+        var fetched = await fetchSource({
+          url: regionUrl(source, region),
+          headers: source.headers,
+          allowedHosts: source.allowedHosts
+        });
+        if (!fetched.ok) {
+          fail = { reason: fetched.reason, message: fetched.message };
+          break;
+        }
+        try {
+          parsed = parser ? parser(fetched.body) : null;
+        } catch (err) {
+          parsed = null;
+        }
+        if (parsed) { fail = null; break; }
+        fail = { reason: 'PARSE_FAILED', message: '页面抓取成功但解析不出四油品价格（可能是残页）' };
+        if (attempt < 1) await delay(1500);
+      }
+      var result = parsed
+        ? { ok: true, parsed: parsed }
+        : { ok: false, reason: fail.reason, message: fail.message };
+      if (cache) cache[key] = result;
+      out[region.code] = result;
+      await delay(800);
+    }
+  }
+  await Promise.all([worker(), worker(), worker()]);
+  return out;
+}
+
+/**
+ * 价格源降级链。
+ *
+ * 按 priority 顺序逐省尝试：**前一个源成功的省不再问后面的源**；
+ * 前一个源失败的省交给下一个源补。两个源都失败的省进人工核对队列，
+ * 不写任何猜测值。
+ *
+ * @param {Array} priceSources provides 含 price 的源，按 priority 升序
+ * @param {object} options { regionCode, force, cache }
+ */
+async function collectPriceChain(priceSources, options) {
   var opts = options || {};
-  var regions = shared.REGIONS.filter(function (r) { return r.slug; });
+  var cache = opts.cache || {};
+  var result = { adopted: {}, failures: [], degraded: [], fresh: 0, stale: 0 };
+  if (!priceSources.length) {
+    result.failures.push({ regionCode: '', reason: 'NO_PRICE_SOURCE', message: '没有可用的价格源' });
+    return result;
+  }
+  var primary = priceSources[0];
+  var regions = shared.REGIONS.filter(function (r) { return !!regionSlug(primary, r); });
   if (opts.regionCode) {
     regions = regions.filter(function (r) { return r.code === opts.regionCode; });
     if (!regions.length) {
-      return { sourceId: source.id, status: 'failed', reason: 'UNKNOWN_REGION', message: '地区代码不存在：' + opts.regionCode };
+      result.failures.push({
+        regionCode: opts.regionCode,
+        reason: 'UNKNOWN_REGION',
+        message: '地区代码不存在：' + opts.regionCode
+      });
+      return result;
     }
   }
 
   var existing = await loadPricesByRegion();
-  var freshHours = source.freshHours || 6;
-  var stale = regions.filter(function (r) {
-    return opts.force || !regionFresh(existing[r.code], source.id, freshHours);
+  var freshHours = primary.freshHours || 6;
+  var pending = regions.filter(function (r) {
+    return opts.force || !regionFresh(existing[r.code], primary.id, freshHours);
   });
-  if (!stale.length) {
-    // 数据仍是真实且新鲜的，报 ok 而不是 idle —— idle 的文案是「真实数据源尚未接入」
-    return { sourceId: source.id, status: 'ok', saved: 0, fresh: regions.length, message: '全部地区价格仍在新鲜期内' };
-  }
+  result.fresh = regions.length - pending.length;
+  result.stale = pending.length;
 
-  var saved = 0;
-  var failures = [];
-  var advisories = [];
-  var trend = null;
-  // 3 个并发 worker：31 个省页一次全开对对方站点不友好
-  var queue = stale.slice();
-  async function worker() {
-    while (queue.length) {
-      var region = queue.shift();
-      // ⚠️ allowedHosts 必须透传：地区页抓取是唯一在跑的来源，
-      // 不传的话重定向白名单形同虚设（站点跳到哪儿就跟到哪儿）。
-      var fetched = await fetchSource({
-        url: source.url + region.slug + '.shtml',
-        headers: source.headers,
-        allowedHosts: source.allowedHosts
-      });
-      if (!fetched.ok) {
-        failures.push({ regionCode: region.code, regionName: region.name, reason: fetched.reason, message: fetched.message });
-        continue;
-      }
-      var parsed = null;
-      try {
-        parsed = sources.PARSERS[source.parser](fetched.body);
-      } catch (err) {
-        parsed = null;
-      }
-      if (!parsed) {
-        failures.push({ regionCode: region.code, regionName: region.name, reason: 'PARSE_FAILED', message: '页面抓取成功但解析不出四油品价格，转人工核对' });
-        continue;
-      }
-      var saveResult = await saveRegionPrices(source, region, parsed, existing);
-      if (!saveResult.ok) {
-        failures.push({
+  var lastFailure = {};
+  for (var si = 0; si < priceSources.length && pending.length; si++) {
+    var src = priceSources[si];
+    var fetched = await fetchRegionPages(src, pending, cache);
+    var stillPending = [];
+    pending.forEach(function (region) {
+      var r = fetched[region.code];
+      if (r && r.ok) {
+        result.adopted[region.code] = { source: src, parsed: r.parsed };
+        // 主源失败、被备源接管的，要留一条告警（不阻断，但要看得到）
+        if (si > 0) {
+          result.degraded.push({
+            regionCode: region.code,
+            regionName: region.name,
+            sourceId: src.id,
+            message: '主源 ' + primary.name + ' 抓取失败，已由备源 ' + src.name + ' 接管'
+          });
+        }
+      } else {
+        stillPending.push(region);
+        lastFailure[region.code] = {
           regionCode: region.code,
           regionName: region.name,
-          reason: saveResult.reason,
-          message: saveResult.message
-        });
-        continue;
+          reason: r ? r.reason : 'UNKNOWN',
+          message: r ? r.message : ''
+        };
       }
-      if (saveResult.advisory && saveResult.advisory.length) {
-        advisories.push({
-          regionCode: region.code,
-          regionName: region.name,
-          items: saveResult.advisory
-        });
-      }
-      saved++;
-      // 各省页面的预测是全国统一的，取第一个解析成功的即可
-      if (!trend && parsed.trend) trend = parsed.trend;
-    }
+    });
+    pending = stillPending;
   }
-  await Promise.all([worker(), worker(), worker()]);
-
-  var windowSaved = null;
-  if (trend) windowSaved = await saveWindow(source, trend);
-
-  var result = {
-    sourceId: source.id,
-    status: failures.length ? 'needsReview' : 'ok',
-    saved: saved,
-    fresh: regions.length - stale.length,
-    failed: failures,
-    // 与基准价偏差偏大的地区：只记告警，不影响价格入库
-    advisories: advisories,
-    window: windowSaved
-  };
-  if (failures.length) {
-    result.reason = 'REGION_FAILED';
-    result.message = failures.length + ' 个地区采集失败，已转人工核对';
-  }
+  pending.forEach(function (region) {
+    var f = lastFailure[region.code] || {
+      regionCode: region.code,
+      regionName: region.name,
+      reason: 'REGION_FAILED',
+      message: ''
+    };
+    result.failures.push(f);
+  });
   return result;
 }
 
@@ -378,10 +463,13 @@ var REFERENCE_TOLERANCE = 1.5;
 /**
  * 与上一次真实价的最大落差（超出即阻断入库）。
  *
- * 正常一轮调价在 0.3 元以内。跳超过 1 元，基本只有两种可能：
+ * ⚠️ 阈值要容得下**一整轮真实调价**：2026-03-24 那轮 98# 全国普涨，
+ * 实测最大单期变化 1.13 元/升（92# 0.93、95# 1.01、98# 1.13）。
+ * 卡在 1.0 会把这种大轮调价整个挡掉 —— 挡掉的是真数据，不是脏数据。
+ * 再往上留 30% 余量，1.5 元以上基本只有两种可能：
  * 页面结构变了导致解析错位，或者链路被动手脚注入了假价。
  */
-var JUMP_LIMIT = 1.0;
+var JUMP_LIMIT = 1.5;
 
 /**
  * 抓到的价格与基准价对不对得上。
@@ -401,14 +489,14 @@ function referenceCheck(region, fuelId, price) {
 }
 
 /**
- * 入库一个地区的四油品价格。
+ * 入库一个地区的四油品当前价。
+ *
  * 涨跌只跟同来源旧价比：seed 演示价不是真实旧价，差值没有意义。
  * 首次真实采集 changeAmount 记 0、changeAt 留空（不知道上次调价日），
  * 界面据此显示「暂无调价对比」，不假装成持平。
- * 历史价每轮都写当天生效的挂牌价（按日期幂等覆盖）。
  *
- * ⚠️ 入库前要过两道校验（价格源只能走 HTTP，链路上能被动手脚）：
- *   1. 与库里上一次真实价比 —— 落差超 1 元就不入库，转人工核对；
+ * ⚠️ 入库前要过两道校验：
+ *   1. 与库里上一次真实价比 —— 落差超 JUMP_LIMIT 就不入库，转人工核对；
  *   2. 与各省基准价比 —— 偏差超 1.5 元只记告警，不阻断。
  */
 async function saveRegionPrices(source, region, parsed, existing) {
@@ -424,8 +512,6 @@ async function saveRegionPrices(source, region, parsed, existing) {
     var oldReal = old && old.source === source.id ? old : null;
 
     // 校验一：与库里上一次真实价的落差。
-    // 正常一轮调价在 0.3 元以内，跳超过 1 元基本只有两种可能：
-    // 页面结构变了导致解析错位，或者链路被动手脚注入了假价。
     // 这种价不能进库 —— 继续用旧价，并转人工核对。
     if (oldReal) {
       var jump = Math.abs(price - oldReal.price);
@@ -465,7 +551,18 @@ async function saveRegionPrices(source, region, parsed, existing) {
     // 按 (地区, 油品, 日期) 唯一索引幂等覆盖，一天最多一行。
     // 以前只在价格变化时写，30 天没调价就只剩起点的 1 个点，
     // 走势图连一条横线都画不出来 —— 阶梯线的横段本来就该是平的。
-    historyDocs.push({ regionCode: region.code, fuelId: fuel.id, date: today, price: price, source: source.id });
+    //
+    // ⚠️ 这与 saveHistory 写的「来源自己的历史表」是**两回事**：
+    //   这里记的是「今天这个价仍然有效」（保证走势线延伸到今天）；
+    //   那里记的是「每个调价日的生效价」（给阶梯线拐点）。
+    // 两者日期可能重合（调价当天），值相同，幂等 upsert 不会打架。
+    historyDocs.push({
+      regionCode: region.code,
+      fuelId: fuel.id,
+      date: today,
+      price: price,
+      source: source.id
+    });
   });
   if (blocked.length) {
     return {
@@ -482,6 +579,431 @@ async function saveRegionPrices(source, region, parsed, existing) {
   await dao.history.upsertMany(historyDocs);
   return { ok: true, advisory: advisory };
 }
+
+/* ---------------- 历史价入库（带五道闸门） ---------------- */
+
+/**
+ * 把来源给的历史表摊成 { date: { fuelId: price } }，按日期升序。
+ */
+function historySeries(parsed) {
+  var out = {};
+  if (!parsed || !parsed.history || !parsed.history.length) return out;
+  parsed.history.forEach(function (row) {
+    var byFuel = {};
+    Object.keys(row.prices || {}).forEach(function (f) { byFuel[f] = row.prices[f]; });
+    out[row.date] = byFuel;
+  });
+  return out;
+}
+
+/**
+ * 跨省一致性统计。
+ *
+ * 对每个 (日期, 油品)：算各省相对**自己上一期**的变化幅度，取跨省中位数与 MAD。
+ *
+ * ⚠️ 必须用「变化幅度」而不是「绝对价」：
+ * 98# 的跨省**绝对价差**天然可达 1.4 元/升（各省 98# 相对 92# 的溢价差 1.3），
+ * 拿绝对价判离群会误伤一大片（实测甘肃 98# 天然比中位数低 1.39，属正常）。
+ * 变化幅度才是全国统一调价下应当一致的量。
+ */
+function crossProvinceStats(seriesByCode) {
+  var stats = {};
+  var codes = Object.keys(seriesByCode);
+  var dates = {};
+  codes.forEach(function (c) {
+    Object.keys(seriesByCode[c]).forEach(function (d) { dates[d] = 1; });
+  });
+  Object.keys(dates).sort().forEach(function (d) {
+    var byFuel = {};
+    codes.forEach(function (c) {
+      var ser = seriesByCode[c];
+      var prevDate = null;
+      Object.keys(ser).sort().forEach(function (dd) { if (dd < d) prevDate = dd; });
+      if (!prevDate) return;
+      shared.FUELS.forEach(function (fuel) {
+        var a = ser[prevDate][fuel.id];
+        var b = ser[d][fuel.id];
+        if (typeof a !== 'number' || typeof b !== 'number') return;
+        if (!byFuel[fuel.id]) byFuel[fuel.id] = [];
+        byFuel[fuel.id].push({ code: c, change: shared.round2(b - a) });
+      });
+    });
+    stats[d] = {};
+    Object.keys(byFuel).forEach(function (f) {
+      var list = byFuel[f];
+      if (list.length < 5) return;
+      var vals = list.map(function (x) { return x.change; });
+      stats[d][f] = {
+        median: median(vals),
+        mad: median(vals.map(function (v) { return Math.abs(v - median(vals)); })),
+        changes: list
+      };
+    });
+  });
+  return stats;
+}
+
+/**
+ * 跨省偏离判定。
+ * 偏离 > max(CROSS_MIN_LIMIT, CROSS_MAD_FACTOR × MAD) → 该点与全国节奏对不上。
+ */
+var CROSS_MIN_LIMIT = 0.15;
+var CROSS_MAD_FACTOR = 4;
+
+function crossDeviation(stats, date, fuelId, regionCode) {
+  var st = stats[date] && stats[date][fuelId];
+  if (!st) return null;
+  var item = null;
+  for (var i = 0; i < st.changes.length; i++) {
+    if (st.changes[i].code === regionCode) { item = st.changes[i]; break; }
+  }
+  if (!item) return null;
+  var limit = Math.max(CROSS_MIN_LIMIT, CROSS_MAD_FACTOR * st.mad);
+  var deviation = Math.abs(item.change - st.median);
+  return {
+    change: item.change,
+    median: st.median,
+    mad: st.mad,
+    deviation: Math.round(deviation * 100) / 100,
+    limit: Math.round(limit * 100) / 100,
+    over: deviation > limit
+  };
+}
+
+/**
+ * 历史价入库（五道闸门）。
+ *
+ * 历史是**一次性回填**的 —— 库里没有旧值可比，
+ * 所以不能用「与上次采集价落差」那套逻辑，要单独设闸门：
+ *
+ *   G1 区间        3 ≤ price ≤ 20，超出即丢点 + 告警
+ *   G2 时序        日期必须升序且不重复（重复的按后一条覆盖）
+ *   G3 首尾自洽    历史末行价格必须等于同页现价；
+ *                  不等 → **该省历史整省丢弃** + 告警
+ *                  （说明解析错位或页面结构变了，半张表比没有表危险）
+ *   G4 跨省一致性  同日期同油品，各省变化幅度相对跨省中位数的偏离超限
+ *                  → 标记 + 告警，**保留原值**
+ *                  ⚠️ 离群点是源站给的值，不是我们猜的 —— 擅自改写才是替来源编数字。
+ *                  该丢的是解析错误，不是源站的错。
+ *   G5 时序去重    同一 (地区, 油品, 日期) 只留一行（幂等 upsert 兜着）
+ *
+ * @returns {{ok:boolean, saved:number, dropped:Array, advisories:Array}}
+ */
+async function saveHistory(source, region, parsed, stats) {
+  var dropped = [];
+  var advisories = [];
+  if (!parsed || !parsed.history || !parsed.history.length) {
+    return { ok: true, saved: 0, dropped: dropped, advisories: advisories, skipped: 'NO_HISTORY' };
+  }
+
+  // ---- G3 首尾自洽 ----
+  var rows = parsed.history.slice();
+  var last = rows[rows.length - 1];
+  var selfOk = true;
+  var mismatchFuel = '';
+  shared.FUELS.forEach(function (fuel) {
+    if (!selfOk) return;
+    if (last.prices[fuel.id] !== parsed.prices[fuel.id]) {
+      selfOk = false;
+      mismatchFuel = fuel.id;
+    }
+  });
+  if (!selfOk) {
+    advisories.push({
+      regionCode: region.code,
+      regionName: region.name,
+      fuelId: mismatchFuel,
+      reason: 'HISTORY_PRICE_MISMATCH',
+      message: '历史表末行价格与同页现价不符（可能解析错位），该省历史整体丢弃'
+    });
+    return { ok: true, saved: 0, dropped: dropped, advisories: advisories, skipped: 'PRICE_MISMATCH' };
+  }
+
+  // ---- G2 时序 + G5 去重 ----
+  var seen = {};
+  var docs = [];
+  rows.forEach(function (row) {
+    if (seen[row.date]) {
+      dropped.push({ regionCode: region.code, date: row.date, reason: 'DUPLICATE_DATE', message: '同一天重复的历史价' });
+      return;
+    }
+    seen[row.date] = 1;
+    shared.FUELS.forEach(function (fuel) {
+      var price = row.prices[fuel.id];
+      if (typeof price !== 'number') return;
+      // ---- G1 区间 ----
+      if (!isFinite(price) || price < 3 || price > 20) {
+        dropped.push({
+          regionCode: region.code,
+          date: row.date,
+          fuelId: fuel.id,
+          price: price,
+          reason: 'PRICE_OUT_OF_RANGE',
+          message: '历史价超出合理区间，已丢弃'
+        });
+        return;
+      }
+      docs.push({
+        regionCode: region.code,
+        fuelId: fuel.id,
+        date: row.date,
+        price: price,
+        source: source.id
+      });
+    });
+  });
+
+  // ---- G4 跨省一致性 ----
+  // 同一个 (省, 油品) 只报最严重的一条，别一次刷几十条告警
+  var worst = {};
+  docs.forEach(function (doc) {
+    var dev = crossDeviation(stats, doc.date, doc.fuelId, doc.regionCode);
+    if (!dev || !dev.over) return;
+    var key = doc.regionCode + '|' + doc.fuelId;
+    if (!worst[key] || worst[key].deviation < dev.deviation) {
+      worst[key] = {
+        regionCode: doc.regionCode,
+        regionName: region.name,
+        fuelId: doc.fuelId,
+        date: doc.date,
+        deviation: dev.deviation,
+        limit: dev.limit,
+        median: dev.median,
+        change: dev.change
+      };
+    }
+  });
+  Object.keys(worst).forEach(function (key) {
+    advisories.push({
+      regionCode: worst[key].regionCode,
+      regionName: worst[key].regionName,
+      fuelId: worst[key].fuelId,
+      date: worst[key].date,
+      reason: 'CROSS_PROVINCE_DEVIATION',
+      deviation: worst[key].deviation,
+      limit: worst[key].limit,
+      message: '该期变化幅度与跨省中位数差 ' + worst[key].deviation +
+        '（限 ' + worst[key].limit + '），已保留源站原值待人工核对'
+    });
+  });
+
+  await dao.history.upsertMany(docs);
+  return { ok: true, saved: docs.length, dropped: dropped, advisories: advisories };
+}
+
+/* ---------------- 调价节点推导 ---------------- */
+
+/**
+ * 从历史价推导调价节点。
+ *
+ * 官方公告只覆盖最近几轮，走势页要显示全年节点就得从历史推。
+ *
+ * 每个调价日 = 来源历史表里的一行（来源按调价日给价，日期本身就是调价日）；
+ * 四油品幅度取各省变化幅度的**中位数** —— 这是实测值，不是官方公布值。
+ *
+ * ⚠️ 幅度口径：写进 oil_adjust_events 的 deltas 是「各省挂牌价实测差值」，
+ * 展示层必须标「据各地挂牌价测算」，不能写成官方公布值。
+ */
+function deriveAdjustEvents(seriesByCode) {
+  var codes = Object.keys(seriesByCode);
+  if (!codes.length) return [];
+  var dates = {};
+  codes.forEach(function (c) {
+    Object.keys(seriesByCode[c]).forEach(function (d) { dates[d] = 1; });
+  });
+  var out = [];
+  Object.keys(dates).sort().forEach(function (d) {
+    var byFuel = {};
+    codes.forEach(function (c) {
+      var ser = seriesByCode[c];
+      var prevDate = null;
+      Object.keys(ser).sort().forEach(function (dd) { if (dd < d) prevDate = dd; });
+      if (!prevDate) return;
+      shared.FUELS.forEach(function (fuel) {
+        var a = ser[prevDate][fuel.id];
+        var b = ser[d][fuel.id];
+        if (typeof a !== 'number' || typeof b !== 'number') return;
+        if (!byFuel[fuel.id]) byFuel[fuel.id] = [];
+        byFuel[fuel.id].push(shared.round2(b - a));
+      });
+    });
+    // 92# 变化中位数为 0 → 这一轮全国都没动（搁浅），不是调价节点
+    var base = byFuel['92'] || [];
+    if (base.length < 5) return;
+    var baseMedian = median(base);
+    if (Math.abs(baseMedian) < 0.05) return;
+    var deltas = {};
+    shared.FUELS.forEach(function (fuel) {
+      var list = byFuel[fuel.id];
+      if (!list || list.length < 5) return;
+      deltas[fuel.id] = median(list);
+    });
+    out.push({
+      dedupKey: shared.dedupKey('xmgcn-history', '国内成品油价格调整', d),
+      date: d,
+      title: '国内成品油价格调整',
+      deltas: deltas,
+      source: 'xmgcn'
+    });
+  });
+  return out;
+}
+
+/* ---------------- 预测源（kind = forecast） ---------------- */
+
+/**
+ * 交叉校核容差（元/升）。
+ *
+ * 两个源给的是同一套官方挂牌价（四舍五入到分），正常应该**完全一致**。
+ * 差 0.02 以上说明其中一个源的值是旧的或错的 → 告警，但不阻断。
+ */
+var CROSS_CHECK_TOLERANCE = 0.02;
+
+/**
+ * 预测源流程：抓抽样省份 → 取下次调价预测 + 与主源现价交叉校核。
+ *
+ * 预测是全国统一的，取第一个解析成功的即可；
+ * 顺带把这几个省的现价跟库里主源写的现价比一比 —— **零额外请求完成一次互校**。
+ */
+async function collectForecastSource(source, options) {
+  var opts = options || {};
+  var cache = opts.cache || {};
+  var codes = (source.verifyRegions || []).slice();
+  if (opts.regionCode) codes = [opts.regionCode];
+  if (!codes.length) {
+    return { sourceId: source.id, status: 'skipped', reason: 'NO_VERIFY_REGIONS', message: '未配置校核省份' };
+  }
+  var regions = shared.REGIONS.filter(function (r) {
+    return codes.indexOf(r.code) >= 0 && !!regionSlug(source, r);
+  });
+  if (!regions.length) {
+    return { sourceId: source.id, status: 'failed', reason: 'UNKNOWN_REGION', message: '校核省份不存在' };
+  }
+
+  var fetched = await fetchRegionPages(source, regions, cache);
+  var existing = await loadPricesByRegion();
+  var trend = null;
+  var advisories = [];
+  var failures = [];
+  var checked = 0;
+
+  regions.forEach(function (region) {
+    var r = fetched[region.code];
+    if (!r || !r.ok) {
+      failures.push({
+        regionCode: region.code,
+        regionName: region.name,
+        reason: r ? r.reason : 'UNKNOWN',
+        message: r ? r.message : ''
+      });
+      return;
+    }
+    if (!trend && r.parsed.trend) trend = r.parsed.trend;
+    // 交叉校核：这一源的现价 vs 库里主源写的现价
+    shared.FUELS.forEach(function (fuel) {
+      var mine = r.parsed.prices[fuel.id];
+      if (typeof mine !== 'number') return;
+      var theirs = existing[region.code] && existing[region.code][fuel.id];
+      if (!theirs) return;
+      if (theirs.source === source.id) return;
+      checked++;
+      var diff = Math.abs(mine - theirs.price);
+      if (diff > CROSS_CHECK_TOLERANCE) {
+        advisories.push({
+          regionCode: region.code,
+          regionName: region.name,
+          fuelId: fuel.id,
+          price: mine,
+          other: theirs.price,
+          otherSource: theirs.source,
+          diff: Math.round(diff * 100) / 100,
+          reason: 'CROSS_SOURCE_MISMATCH',
+          message: '两源现价差 ' + Math.round(diff * 100) / 100 + ' 元/升，需人工核对'
+        });
+      }
+    });
+  });
+
+  // 调价窗口只收「还没发生的轮次」。
+  // ⚠️ 站点在轮次一过就把区块改成公布**结果**（「油价11月12日24时调整 下跌0.51元/升…」），
+  // 那个日期已经过去了 —— 拿它当「下次窗口」会让页面显示一个过期预测。
+  var windowSaved = null;
+  if (trend) {
+    var today = todayStr();
+    if (trend.date >= today) {
+      windowSaved = await saveWindow(source, trend);
+    } else {
+      advisories.push({
+        reason: 'WINDOW_EXPIRED',
+        date: trend.date,
+        direction: trend.direction,
+        message: '来源公布的是 ' + trend.date + ' 那一轮的' +
+          (trend.direction === 'down' ? '下调' : trend.direction === 'up' ? '上调' : '搁浅') +
+          '结果，不是下次窗口，未写入'
+      });
+    }
+  }
+
+  var result = {
+    sourceId: source.id,
+    status: failures.length ? 'needsReview' : 'ok',
+    saved: regions.length - failures.length,
+    checked: checked,
+    window: windowSaved,
+    advisories: advisories,
+    failed: failures
+  };
+  if (failures.length) {
+    result.reason = 'REGION_FAILED';
+    result.message = failures.length + ' 个校核省份抓取失败';
+  }
+  return result;
+}
+
+/* ---------------- 口径互校（kind = timeline） ---------------- */
+
+/**
+ * 官方调价时间表 → 口径互校。
+ *
+ * 官方公布的是「每吨涨跌」，挂牌价是「每升」。换算关系：
+ *   元/升 = 元/吨 ÷ 1000 × 密度（89# 汽油 0.725、0# 柴油 0.835 kg/L）
+ * 92# 相对 89# 标准品还有质量差额，所以实测 ÷ 预期的比值稳定在 1.05~1.25。
+ *
+ * 比值稳定 → 两套**独立**数据互证通过（实测数据没被污染）；
+ * 比值跑偏 → 历史数据有问题，要告警。
+ */
+var TON_DENSITY = { gasoline: 0.725, diesel: 0.835 };
+var RATIO_MIN = 0.9;
+var RATIO_MAX = 1.4;
+
+function timelineCrossCheck(timeline, stats) {
+  var advisories = [];
+  var checked = 0;
+  (timeline || []).forEach(function (item) {
+    if (!item.gasolineDelta) return;
+    var st = stats[item.date];
+    if (!st || !st['92']) return;
+    var expected = item.gasolineDelta / 1000 * TON_DENSITY.gasoline;
+    if (!expected) return;
+    var ratio = st['92'].median / expected;
+    checked++;
+    if (ratio < RATIO_MIN || ratio > RATIO_MAX) {
+      advisories.push({
+        date: item.date,
+        reason: 'TON_RATIO_OUT_OF_RANGE',
+        ratio: Math.round(ratio * 100) / 100,
+        expected: Math.round(expected * 1000) / 1000,
+        measured: st['92'].median,
+        ton: item.gasolineDelta,
+        message: '官方吨价换算与各省实测对不上（比值 ' + Math.round(ratio * 100) / 100 +
+          '），历史数据口径可能漂了'
+      });
+    }
+  });
+  return { checked: checked, advisories: advisories };
+}
+
+/* ---------------- 调价窗口 ---------------- */
 
 /**
  * 把解析出的下次调价预测写成调价窗口。
@@ -500,6 +1022,8 @@ async function saveWindow(source, trend) {
   var forecast = {};
   var basis;
   var dirText = trend.direction === 'up' ? '上调' : trend.direction === 'down' ? '下调' : '搁浅';
+  // 来源公布的是「已发生轮次的结果」时，文案要说结果，不能说预测
+  var isForecast = trend.isForecast !== false;
   if (trend.direction === 'flat') {
     forecast = { direction: 'flat', literMin: 0, literMax: 0, estimated: true };
     basis = source.name + '预测（非官方）：本轮预计搁浅不作调整，以正式公告为准。';
@@ -511,7 +1035,7 @@ async function saveWindow(source, trend) {
       literMax: trend.literMax,
       estimated: true
     };
-    basis = source.name + '预测（非官方）：预计' + dirText +
+    basis = source.name + (isForecast ? '预测（非官方）：预计' : '公布的调整结果（非官方）：') + dirText +
       (trend.changeTon !== null ? ' ' + Math.abs(trend.changeTon) + ' 元/吨' : '') +
       '，约 ' + trend.literMin + '–' + trend.literMax + ' 元/升；各油品幅度以正式公告为准。';
   } else {
@@ -663,9 +1187,13 @@ function collectFromSource(source, options) {
   if (!source.enabled) {
     return Promise.resolve({ sourceId: source.id, status: 'skipped', reason: 'SOURCE_DISABLED', message: '来源未启用' });
   }
-  // 地区价格源按地区逐个抓取，不走单 URL 流程
+  // 地区价格源按降级链逐省抓取
   if (source.kind === 'price') {
-    return collectPriceSource(source, options);
+    return collectPriceChain([source], options);
+  }
+  // 预测源：抓抽样省份取预测 + 交叉校核
+  if (source.kind === 'forecast') {
+    return collectForecastSource(source, options);
   }
   // 公告源是「列表页 → 详情页」两步抓取，也走自己的流程
   if (source.kind === 'notice') {
@@ -702,47 +1230,237 @@ function collectFromSource(source, options) {
 
 function run(options) {
   var startedAt = nowIso();
+  var opts = options || {};
+  // 本轮请求缓存：预测源抽样省份可能和价格链撞上，缓存省一次请求
+  var cache = opts.cache || {};
+  opts.cache = cache;
+
   var results = [];
   var needsReview = [];
 
-  return sources.SOURCES.reduce(function (chain, source) {
-    return chain.then(function () {
-      return collectFromSource(source, options).then(function (result) {
-        results.push(result);
-        if (result.status === 'needsReview' || result.status === 'failed') {
-          needsReview.push({
-            sourceId: result.sourceId,
-            reason: result.reason,
-            message: result.message,
-            at: nowIso()
-          });
-        }
+  function push(result) {
+    results.push(result);
+    if (result.status === 'needsReview' || result.status === 'failed') {
+      needsReview.push({
+        sourceId: result.sourceId,
+        reason: result.reason,
+        message: result.message,
+        at: nowIso()
       });
+    }
+  }
+
+  var enabled = sources.SOURCES.filter(function (s) { return s.enabled; });
+  var priceSources = enabled
+    .filter(function (s) { return (s.provides || []).indexOf('price') >= 0; })
+    .sort(function (a, b) { return (a.priority || 99) - (b.priority || 99); });
+  var forecastSources = enabled.filter(function (s) { return s.kind === 'forecast'; });
+  var timelineSources = enabled.filter(function (s) { return s.kind === 'timeline'; });
+  var noticeSources = enabled.filter(function (s) { return s.kind === 'notice'; });
+
+  var chain = null;
+  var series = {};
+  var stats = null;
+  var timelineItems = [];
+
+  return Promise.resolve()
+    .then(function () {
+      if (!priceSources.length) {
+        push({ sourceId: '-', status: 'skipped', reason: 'NO_PRICE_SOURCE', message: '没有启用的价格源' });
+        return null;
+      }
+      // ---- 1. 价格源降级链 ----
+      // 抓完先不写：历史入库的跨省闸门要等所有省都齐了才能算
+      return collectPriceChain(priceSources, opts).then(function (r) { chain = r; });
+    })
+    .then(function () {
+      if (!chain || !Object.keys(chain.adopted).length) return null;
+      // ---- 2. 现价入库（跳变闸门 + 基准价告警）----
+      var existing = null;
+      return loadPricesByRegion().then(function (ex) {
+        existing = ex;
+        var saved = 0;
+        var advisories = [];
+        var failures = [];
+        var codes = Object.keys(chain.adopted);
+        var promise = Promise.resolve();
+        codes.forEach(function (code) {
+          promise = promise.then(function () {
+            var region = shared.REGIONS.filter(function (r) { return r.code === code; })[0];
+            if (!region) return;
+            var item = chain.adopted[code];
+            return saveRegionPrices(item.source, region, item.parsed, existing).then(function (res) {
+              if (!res.ok) {
+                failures.push({
+                  regionCode: code,
+                  regionName: region.name,
+                  reason: res.reason,
+                  message: res.message
+                });
+                return;
+              }
+              saved++;
+              if (res.advisory && res.advisory.length) {
+                advisories.push({ regionCode: code, regionName: region.name, items: res.advisory });
+              }
+            });
+          });
+        });
+        return promise.then(function () {
+          chain.saved = saved;
+          chain.priceAdvisories = advisories;
+          chain.priceFailures = failures;
+        });
+      });
+    })
+    .then(function () {
+      if (!chain) return null;
+      // ---- 3. 历史入库（五道闸门）----
+      var series = {};
+      var codes = Object.keys(chain.adopted);
+      codes.forEach(function (code) {
+        var ser = historySeries(chain.adopted[code].parsed);
+        if (Object.keys(ser).length) series[code] = ser;
+      });
+      if (!Object.keys(series).length) return null;
+      var stats = crossProvinceStats(series);
+      var historyAdvisories = [];
+      var historyDropped = [];
+      var historySaved = 0;
+      var promise = Promise.resolve();
+      codes.forEach(function (code) {
+        promise = promise.then(function () {
+          var region = shared.REGIONS.filter(function (r) { return r.code === code; })[0];
+          if (!region) return;
+          var item = chain.adopted[code];
+          return saveHistory(item.source, region, item.parsed, stats).then(function (res) {
+            historySaved += res.saved || 0;
+            if (res.advisories && res.advisories.length) {
+              historyAdvisories = historyAdvisories.concat(res.advisories);
+            }
+            if (res.dropped && res.dropped.length) {
+              historyDropped = historyDropped.concat(res.dropped);
+            }
+          });
+        });
+      });
+      return promise.then(function () {
+        chain.historySaved = historySaved;
+        chain.historyAdvisories = historyAdvisories;
+        chain.historyDropped = historyDropped;
+        // ---- 4. 调价节点：从历史实测推导全年节点 ----
+        var events = deriveAdjustEvents(series);
+        return dao.events.upsertMany(events).then(function () {
+          chain.adjustEvents = events.length;
+          chain.stats = stats;
+        });
+      });
+    })
+    .then(function () {
+      // ---- 5. 官方调价时间表：口径互校 ----
+      if (!timelineSources.length) return null;
+      var src = timelineSources[0];
+      return fetchSource({ url: src.url, headers: src.headers, allowedHosts: src.allowedHosts })
+        .then(function (fetched) {
+          if (!fetched.ok) {
+            push({ sourceId: src.id, status: 'failed', reason: fetched.reason, message: fetched.message });
+            return null;
+          }
+          var parsed = null;
+          try {
+            parsed = sources.PARSERS[src.parser](fetched.body);
+          } catch (err) {
+            parsed = null;
+          }
+          if (!parsed) {
+            push({
+              sourceId: src.id,
+              status: 'needsReview',
+              reason: 'PARSE_FAILED',
+              message: '时间表抓取成功但解析不出调价轮次，已转人工核对'
+            });
+            return null;
+          }
+          var check = timelineCrossCheck(parsed.items, chain && chain.stats ? chain.stats : {});
+          push({
+            sourceId: src.id,
+            status: check.advisories.length ? 'needsReview' : 'ok',
+            rounds: parsed.items.length,
+            checked: check.checked,
+            advisories: check.advisories,
+            message: check.advisories.length
+              ? '官方吨价与各省实测口径对不上，待人工核对'
+              : '官方吨价与各省实测互证通过（' + check.checked + ' 轮）'
+          });
+          return null;
+        });
+    })
+    .then(function () {
+      // ---- 6. 预测源 + 交叉校核 ----
+      var promise = Promise.resolve();
+      forecastSources.forEach(function (src) {
+        promise = promise.then(function () {
+          return collectForecastSource(src, opts).then(push);
+        });
+      });
+      return promise;
+    })
+    .then(function () {
+      // ---- 7. 公告源 ----
+      var promise = Promise.resolve();
+      noticeSources.forEach(function (src) {
+        promise = promise.then(function () {
+          return collectNoticeSource(src, opts).then(push);
+        });
+      });
+      return promise;
+    })
+    .then(function () {
+      // ---- 8. 汇总价格链结果 ----
+      if (chain) {
+        var priceStatus = (chain.failures && chain.failures.length) ? 'needsReview' : 'ok';
+        push({
+          sourceId: chain.adopted && Object.keys(chain.adopted).length
+            ? (Object.keys(chain.adopted)[0] && chain.adopted[Object.keys(chain.adopted)[0]].source.id)
+            : '-',
+          status: priceStatus,
+          saved: chain.saved || 0,
+          fresh: chain.fresh || 0,
+          stale: chain.stale || 0,
+          historySaved: chain.historySaved || 0,
+          adjustEvents: chain.adjustEvents || 0,
+          failed: chain.failures || [],
+          degraded: chain.degraded || [],
+          advisories: (chain.priceAdvisories || []).concat(chain.historyAdvisories || []),
+          message: chain.failures && chain.failures.length
+            ? chain.failures.length + ' 个地区采集失败，已转人工核对'
+            : '历史价 ' + (chain.historySaved || 0) + ' 条、调价节点 ' + (chain.adjustEvents || 0) + ' 个'
+        });
+      }
+      // 真实来源一个都没启用时，状态是 idle —— 不能报「同步正常」，
+      // 否则前端会让人以为后台在真实采集。
+      var allSkipped = results.length > 0 && results.every(function (r) { return r.status === 'skipped'; });
+      var runDoc = {
+        startedAt: startedAt,
+        finishedAt: nowIso(),
+        status: allSkipped ? 'idle' : (needsReview.length ? 'partial' : 'ok'),
+        sourceName: '服务端定时采集',
+        results: results,
+        needsReview: needsReview
+      };
+      return dao.runs.insert(runDoc).then(function () { return runDoc; });
+    })
+    .catch(function (err) {
+      console.error('[collector] 运行失败', err);
+      return dao.runs.insert({
+        startedAt: startedAt,
+        finishedAt: nowIso(),
+        status: 'error',
+        sourceName: '服务端定时采集',
+        results: [],
+        needsReview: [{ sourceId: '-', reason: 'INTERNAL_ERROR', message: err.message || String(err), at: nowIso() }]
+      }).then(function () { throw err; });
     });
-  }, Promise.resolve()).then(function () {
-    // 真实来源一个都没启用时，状态是 idle —— 不能报「同步正常」，
-    // 否则前端会让人以为后台在真实采集。
-    var allSkipped = results.length > 0 && results.every(function (r) { return r.status === 'skipped'; });
-    var runDoc = {
-      startedAt: startedAt,
-      finishedAt: nowIso(),
-      status: allSkipped ? 'idle' : (needsReview.length ? 'partial' : 'ok'),
-      sourceName: '服务端定时采集',
-      results: results,
-      needsReview: needsReview
-    };
-    return dao.runs.insert(runDoc).then(function () { return runDoc; });
-  }).catch(function (err) {
-    console.error('[collector] 运行失败', err);
-    return dao.runs.insert({
-      startedAt: startedAt,
-      finishedAt: nowIso(),
-      status: 'error',
-      sourceName: '服务端定时采集',
-      results: [],
-      needsReview: [{ sourceId: '-', reason: 'INTERNAL_ERROR', message: err.message || String(err), at: nowIso() }]
-    }).then(function () { throw err; });
-  });
 }
 
 module.exports = {
@@ -750,6 +1468,16 @@ module.exports = {
   collectFromSource: collectFromSource,
   saveNotice: saveNotice,
   saveWindow: saveWindow,
-  // 导出给自检用：历史价「价格没变也要记」这条规则要被钉住
-  saveRegionPrices: saveRegionPrices
+  saveRegionPrices: saveRegionPrices,
+  saveHistory: saveHistory,
+  historySeries: historySeries,
+  crossDeviation: crossDeviation,
+  collectPriceChain: collectPriceChain,
+  collectForecastSource: collectForecastSource,
+  deriveAdjustEvents: deriveAdjustEvents,
+  crossProvinceStats: crossProvinceStats,
+  timelineCrossCheck: timelineCrossCheck,
+  regionSlug: regionSlug,
+  regionUrl: regionUrl,
+  todayStr: todayStr
 };
