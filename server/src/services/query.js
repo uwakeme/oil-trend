@@ -9,6 +9,8 @@
  */
 const dao = require('../dao');
 const shared = require('../shared/shared');
+// 挂牌价测算：公告只给吨价，每升四油品幅度靠各地挂牌价的前后快照差值
+const measure = require('./measure');
 
 /* ---------------- 时间辅助 ---------------- */
 
@@ -178,7 +180,13 @@ function actionHome(payload) {
       today.slice(5).replace('-', '月') + '日'
     ];
 
-    return getHistoryByRegion(regionCode, from30).then(function (historyByFuel) {
+    return Promise.all([
+      getHistoryByRegion(regionCode, from30),
+      // 挂牌价测算：公告只给吨价，每升四油品幅度靠各地挂牌价的前后快照差值
+      notice ? measure.measureOne(notice.executeAt) : Promise.resolve({})
+    ]).then(function (r1) {
+      var historyByFuel = r1[0];
+      var measuredRaw = r1[1];
       var trend30 = {};
       for (var i = 0; i < shared.FUELS.length; i++) {
         var f = shared.FUELS[i];
@@ -196,13 +204,28 @@ function actionHome(payload) {
         shared.FUELS.forEach(function (f) { changes[f.id] = notice.changes[f.id]; });
       }
 
+      // 测算值只有在方向与公告一致时才摆出来：方向矛盾说明用错了快照，
+      // 摆出来比不摆更糟。
+      var measuredChanges = (notice && measure.agreesWithDirection(measuredRaw, notice.direction))
+        ? measuredRaw
+        : {};
       var noticePayload = notice ? {
         id: notice.id,
         kind: notice.kind,
         title: notice.title,
         publishedAt: notice.publishedAt,
+        // 公告发布日
+        announcedAt: notice.announcedAt || '',
         executeAt: notice.executeAt,
+        // 官方方向 up/down/flat
+        direction: notice.direction || '',
+        // 官方吨价（汽/柴油，元/吨）
+        tonChanges: notice.tonChanges || {},
+        // 官方公布的每升四油品幅度（发改委公告不给这一项）
         changes: notice.changes || {},
+        // 挂牌价测算的每升四油品幅度 —— 不是官方公布值
+        measuredChanges: measuredChanges,
+        changesMeasured: Object.keys(measuredChanges).length > 0,
         summary: notice.summary || '',
         source: notice.source || {}
       } : null;
@@ -231,6 +254,18 @@ function actionHome(payload) {
 
 /* ---------------- 走势 ---------------- */
 
+/**
+ * 调价节点之后的挂牌价。
+ *
+ * 生效是「X月X日24时起」，所以新价从 X+1 开始 —— 取生效日之后的第一条历史价。
+ */
+function priceAfterOf(history, executeAt, fallback) {
+  for (var i = 0; i < history.length; i++) {
+    if (history[i].date > executeAt) return history[i].price;
+  }
+  return fallback;
+}
+
 function actionTrend(payload) {
   var regionCode = payload.regionCode || shared.DEFAULT_REGION_CODE;
   var fuelId = payload.fuelId || '92';
@@ -244,11 +279,13 @@ function actionTrend(payload) {
   return Promise.all([
     dao.history.listByRegionFuel(regionCode, fuelId, fromDate),
     getAdjustEvents(),
-    getPrices(regionCode)
+    getPrices(regionCode),
+    dao.notices.listPublic('official', 60, 0)
   ]).then(function (r0) {
     var history = r0[0];
     var allEvents = r0[1];
     var prices = r0[2];
+    var notices = r0[3];
 
     var events = allEvents.filter(function (e) {
       return e.date >= fromDate && e.date <= today;
@@ -290,23 +327,31 @@ function actionTrend(payload) {
     var priceByDate = {};
     history.forEach(function (h) { priceByDate[h.date] = h.price; });
 
-    return {
-      region: { code: region.code, fullName: region.name + ' · ' + region.city },
-      fuel: { id: fuelId, name: (shared.FUELS.filter(function (f) { return f.id === fuelId; })[0] || {}).name || fuelId },
-      price: last,
-      deltaPercent: deltaPercent,
-      direction: deltaPercent > 0 ? 'up' : (deltaPercent < 0 ? 'down' : 'flat'),
-      rangeLabel: { '3m': '近 3 个月', '6m': '近 6 个月', '1y': '近 1 年' }[period],
-      low: Math.min.apply(null, values),
-      high: Math.max.apply(null, values),
-      count: events.length,
-      axis: [
-        fromDate.slice(0, 7).replace('-', '/'),
-        new Date(new Date(fromDate + 'T00:00:00Z').getTime() + Math.floor((months * 30 * 86400000) / 2)).toISOString().slice(0, 7).replace('-', '/'),
-        today.slice(0, 7).replace('-', '/')
-      ],
-      points: points,
-      events: events.map(function (e) {
+    // 调价节点优先用官方公告：公告是权威来源，
+    // 每升四油品幅度由各地挂牌价的前后快照差值测算（measure.js）。
+    var execDates = notices.map(function (n) { return n.executeAt; });
+    return measure.measureMany(execDates).then(function (measuredByDate) {
+      var officialEvents = notices
+        .filter(function (n) { return n.executeAt && n.executeAt >= fromDate && n.executeAt <= today; })
+        .map(function (n) {
+          var measured = (measuredByDate[n.executeAt] || {})[fuelId];
+          var known = typeof measured === 'number';
+          // 幅度算不出来时用公告方向，界面显示「方向已知 · 幅度待公布」
+          var dir = known
+            ? (measured < 0 ? 'down' : (measured > 0 ? 'up' : 'flat'))
+            : (n.direction === 'up' ? 'up' : (n.direction === 'down' ? 'down' : 'flat'));
+          return {
+            date: n.executeAt,
+            title: n.title,
+            amount: known ? measured : null,
+            amountKnown: known,
+            direction: dir,
+            priceAfter: priceAfterOf(history, n.executeAt, priceMap[fuelId])
+          };
+        });
+
+      // 没有官方公告时退回老表（历史夹具写入的调价节点）
+      var finalEvents = officialEvents.length ? officialEvents : events.map(function (e) {
         var raw = (e.deltas || {})[fuelId];
         // ⚠️ 幅度解析不出来时不能直接置 0 —— 那会把「幅度未知」显示成「持平 0.00」。
         // 公告里没写这个油品，就是没有，不是零调整。
@@ -322,9 +367,28 @@ function actionTrend(payload) {
           direction: known ? (delta < 0 ? 'down' : (delta > 0 ? 'up' : 'flat')) : 'flat',
           priceAfter: priceByDate[e.date] !== undefined ? priceByDate[e.date] : priceMap[fuelId]
         };
-      }),
-      source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
-    };
+      });
+
+      return {
+        region: { code: region.code, fullName: region.name + ' · ' + region.city },
+        fuel: { id: fuelId, name: (shared.FUELS.filter(function (f) { return f.id === fuelId; })[0] || {}).name || fuelId },
+        price: last,
+        deltaPercent: deltaPercent,
+        direction: deltaPercent > 0 ? 'up' : (deltaPercent < 0 ? 'down' : 'flat'),
+        rangeLabel: { '3m': '近 3 个月', '6m': '近 6 个月', '1y': '近 1 年' }[period],
+        low: Math.min.apply(null, values),
+        high: Math.max.apply(null, values),
+        count: finalEvents.length,
+        axis: [
+          fromDate.slice(0, 7).replace('-', '/'),
+          new Date(new Date(fromDate + 'T00:00:00Z').getTime() + Math.floor((months * 30 * 86400000) / 2)).toISOString().slice(0, 7).replace('-', '/'),
+          today.slice(0, 7).replace('-', '/')
+        ],
+        points: points,
+        events: finalEvents,
+        source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
+      };
+    });
   });
 }
 

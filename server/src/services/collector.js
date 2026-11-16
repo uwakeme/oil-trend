@@ -30,6 +30,11 @@ function todayStr() {
 
 /* ---------------- 抓取 ---------------- */
 
+/** 等一会儿（抓多个页面时对来源站点友好一点） */
+function delay(ms) {
+  return new Promise(function (resolve) { setTimeout(resolve, ms); });
+}
+
 /**
  * 抓一个来源，把失败原因归一成固定的 reason 码。
  * 网络层交给 http-client，这里只做「响应 → 业务语义」的翻译。
@@ -64,38 +69,37 @@ function fetchSource(source) {
 /* ---------------- 入库 ---------------- */
 
 /**
- * 通知摘要：说清楚这条是怎么来的、还缺什么。
+ * 通知摘要：说清楚这条公告给了什么、还缺什么。
  *
  * 对外可见的只有 approved，文案里不能出现「待复核」这种自相矛盾的说法。
+ *
+ * ⚠ 发改委公告只给吨价、只分汽/柴油两类，不给四油品每升幅度 ——
+ * 所以摘要里写「官方公告：上调，汽油 345 元/吨、柴油 335 元/吨」，
+ * 绝不写成「每升下调 0.13 元」这种官方没说过的话。
  */
 function noticeSummary(parsed) {
-  var changes = parsed.deltas || {};
-  var count = Object.keys(changes).length;
+  var direction = parsed.direction || '';
+  var ton = parsed.tonChanges || {};
+  var dirText = direction === 'up' ? '上调' : direction === 'down' ? '下调' : direction === 'flat' ? '不作调整' : '';
   if (parsed.reviewStatus === 'approved') {
-    // 逐条数写出来：只解析出 1 个油品却说「逐项列明各油品」是反向错标
-    return '来源公告逐项列明 ' + count + ' 个油品的调整幅度，已按原文发布。';
+    if (direction === 'flat') {
+      return '官方公告：本轮汽、柴油价格不作调整。';
+    }
+    return '官方公告：' + dirText +
+      '，汽油 ' + Math.abs(ton.gasoline) + ' 元/吨、柴油 ' + Math.abs(ton.diesel) + ' 元/吨。';
   }
-  if (parsed.ambiguousDirection) {
-    return '来源公告只写「调整」，看不出上调还是下调，待人工核对。';
+  if (parsed.theoryOnly) {
+    return '来源公告只给出机制理论值（应' + (direction === 'down' ? '下调' : '上调') +
+      '），实际执行幅度待公布，待人工核对。';
   }
-  if (parsed.conflict) {
-    return '来源公告里同一个油品出现了两种不同幅度，待人工核对。';
-  }
-  if (parsed.mixedDirection) {
-    return '来源公告里各油品的调整方向不一致，待人工核对。';
-  }
-  if (count > 0 && count < 4) {
-    return '来源公告只解析出 ' + count + ' 个油品的幅度（四油品需齐全），待人工核对。';
+  if (!direction) {
+    return '来源公告未能解析出调整方向，待人工核对。';
   }
   if (!parsed.executeAt) {
     return '来源公告未解析出执行日期，待人工核对后发布。';
   }
-  if (parsed.delta !== null && parsed.delta !== undefined) {
-    return '来源公告只解析出总幅度（每升 ' + parsed.delta + ' 元/升），各油品幅度待人工核对。';
-  }
-  return '来源公告未能解析出结构化字段，待人工核对。';
+  return '来源公告未能解析出完整的汽、柴油吨价幅度，待人工核对。';
 }
-
 /**
  * 采集到一条可信的正式公告时，同步补写调价节点。
  *
@@ -134,14 +138,20 @@ function saveNotice(source, parsed) {
     kind: parsed.kind,
     title: parsed.title,
     publishedAt: nowIso(),
+    // 公告发布日（发改委公告在执行当天发布）
+    announcedAt: parsed.announcedAt || '',
     executeAt: parsed.executeAt || '',
-    // 只放逐项解析出来的幅度。没有就是没有，
-    // 不能拿总幅度复制给四个油品 —— 那是猜的，不能进正式结果。
+    // 调价方向 up/down/flat
+    direction: parsed.direction || '',
+    // 官方公布的吨价幅度（汽/柴油，元/吨）
+    tonChanges: parsed.tonChanges || {},
+    // 每升四油品幅度：公告不给，留空。
+    // 展示层另给「据挂牌价测算」的值 —— 测算值不能写进官方字段里。
     changes: parsed.deltas || {},
     reviewStatus: parsed.reviewStatus || 'pending',
     summary: noticeSummary(parsed),
     prices: {},
-    source: { sourceId: source.id, name: source.name, url: source.url, publishedAt: nowIso() },
+    source: { sourceId: source.id, name: source.name, url: parsed.url || source.url, publishedAt: nowIso() },
     raw: parsed.raw || ''
   };
 
@@ -151,13 +161,18 @@ function saveNotice(source, parsed) {
       // 「存疑 → 可信」的覆盖更新根本不触发（键不一样），
       // 旧的那条 pending 会永远留在库里。所以按 (来源, 标题) 再回退查一次。
       return dao.notices.findPendingBySourceTitle(source.id, parsed.title).then(function (pendingRow) {
-        if (pendingRow && doc.reviewStatus === 'approved') {
+        // ⚠️ 存疑的通知必须**原地覆盖**，不能每次都插一条新的。
+        // 以前只在「新的可信、旧的存疑」时才覆盖，存疑→仍存疑会插重复行 ——
+        // 公告源启用后每 30 分钟重跑一次，重复行会按天堆积。
+        if (pendingRow) {
           return dao.notices.update(
             pendingRow.id,
             Object.assign({}, doc, { publishedAt: pendingRow.publishedAt, dedupKey: key })
           ).then(function () {
-            return saveAdjustEvent(source, parsed).then(function () {
-              return { deduped: false, upgraded: true, id: pendingRow.id, reviewStatus: doc.reviewStatus, summary: doc.summary };
+            var upgraded = pendingRow.reviewStatus !== 'approved' && doc.reviewStatus === 'approved';
+            var follow = doc.reviewStatus === 'approved' ? saveAdjustEvent(source, parsed) : Promise.resolve(null);
+            return follow.then(function () {
+              return { deduped: false, upgraded: upgraded, id: pendingRow.id, reviewStatus: doc.reviewStatus, summary: doc.summary };
             });
           });
         }
@@ -528,6 +543,120 @@ async function saveWindow(source, trend) {
   return { deduped: false, date: trend.date };
 }
 
+/**
+ * 采集公告类来源：列表页 → 详情页两步抓取。
+ *
+ * 为什么两步：发改委的公告挂在「新闻发布」列表页上，每条只是一个链接，
+ * 真正的正文在详情页里。单 URL 模型抓到的只是列表页，解析不出任何字段。
+ *
+ * 省流量：已入库且已可信的公告不再重复抓详情页。
+ * 列表页每轮还是要看一眼 —— 不看就不知道有没有新公告。
+ */
+async function collectNoticeSource(source, options) {
+  var opts = options || {};
+  var listUrl = source.listUrl || source.url;
+  var fetched = await fetchSource({
+    url: listUrl,
+    headers: source.headers,
+    allowedHosts: source.allowedHosts
+  });
+  if (!fetched.ok) {
+    return { sourceId: source.id, status: 'failed', reason: fetched.reason, message: fetched.message };
+  }
+
+  var list = null;
+  try {
+    list = sources.PARSERS[source.listParser](fetched.body, listUrl);
+  } catch (err) {
+    list = null;
+  }
+  if (!list || !list.items || !list.items.length) {
+    return {
+      sourceId: source.id,
+      status: 'needsReview',
+      reason: 'PARSE_FAILED',
+      message: '列表页抓取成功但解析不出公告链接，已转人工核对'
+    };
+  }
+
+  // 只取关心的公告（其余是新闻发布会、答记者问，与油价无关）
+  var keywords = source.itemTitleKeywords || [];
+  var candidates = list.items.filter(function (it) {
+    if (!keywords.length) return true;
+    return keywords.some(function (kw) {
+      return String(it.title || '').indexOf(kw) !== -1;
+    });
+  });
+  var limit = source.maxItems || 5;
+  candidates = candidates.slice(0, limit);
+  if (!candidates.length) {
+    return { sourceId: source.id, status: 'ok', saved: 0, skipped: 0, message: '列表页没有新的调价公告' };
+  }
+
+  var saved = [];
+  var failures = [];
+  var skipped = 0;
+  for (var i = 0; i < candidates.length; i++) {
+    var item = candidates[i];
+    // 已入库且已可信 → 不再抓详情页
+    var exist = await dao.notices.findBySourceTitle(source.id, item.title);
+    if (exist && exist.reviewStatus === 'approved') {
+      skipped++;
+      continue;
+    }
+    var detail = await fetchSource({
+      url: item.url,
+      headers: source.headers,
+      allowedHosts: source.allowedHosts
+    });
+    if (!detail.ok) {
+      failures.push({ title: item.title, url: item.url, reason: detail.reason, message: detail.message });
+      continue;
+    }
+    var parsed = null;
+    try {
+      parsed = sources.PARSERS[source.parser](detail.body, { title: item.title, url: item.url });
+    } catch (err) {
+      parsed = null;
+    }
+    if (!parsed) {
+      failures.push({
+        title: item.title,
+        url: item.url,
+        reason: 'PARSE_FAILED',
+        message: '公告页抓取成功但解析不出结构化字段，已转人工核对'
+      });
+      continue;
+    }
+    parsed.url = item.url;
+    var res = await saveNotice(source, parsed);
+    saved.push(res);
+    // 对来源站点友好：两篇之间停一下，别把人家 WAF 打出火
+    await delay(800);
+  }
+
+  var hasPending = saved.some(function (s) { return s && s.reviewStatus !== 'approved'; });
+  var result = {
+    sourceId: source.id,
+    status: failures.length || hasPending ? 'needsReview' : 'ok',
+    saved: saved.length,
+    skipped: skipped,
+    candidates: candidates.length,
+    failed: failures,
+    messages: saved
+  };
+  if (failures.length) {
+    result.reason = 'NOTICE_FETCH_FAILED';
+    result.message = failures.length + ' 篇公告抓取或解析失败，已转人工核对';
+  } else if (hasPending) {
+    // ⚠️ 存疑的公告不能报「同步正常」—— 它必须出现在待核对队列里，
+    // 否则前端完全看不出「有条公告没解析出来」，以为一切正常。
+    result.reason = 'NOTICE_PENDING';
+    result.message = '公告已入库但可信度不足，待人工核对';
+  }
+  return result;
+}
+
 /* ---------------- 主流程 ---------------- */
 
 function collectFromSource(source, options) {
@@ -537,6 +666,10 @@ function collectFromSource(source, options) {
   // 地区价格源按地区逐个抓取，不走单 URL 流程
   if (source.kind === 'price') {
     return collectPriceSource(source, options);
+  }
+  // 公告源是「列表页 → 详情页」两步抓取，也走自己的流程
+  if (source.kind === 'notice') {
+    return collectNoticeSource(source, options);
   }
   return fetchSource(source).then(function (fetched) {
     if (!fetched.ok) {
@@ -557,21 +690,6 @@ function collectFromSource(source, options) {
         reason: 'PARSE_FAILED',
         message: '正文抓取成功但无法解析出结构化字段，已转人工核对'
       };
-    }
-    if (source.kind === 'notice') {
-      return saveNotice(source, parsed).then(function (saved) {
-        if (saved && saved.reviewStatus === 'approved') {
-          return { sourceId: source.id, status: 'ok', saved: saved };
-        }
-        // ⚠️ 存疑的公告不能报「同步正常」—— 它必须出现在待核对队列里，
-        // 否则前端完全看不出「有条公告没解析出来」，以为一切正常。
-        return {
-          sourceId: source.id,
-          status: 'needsReview',
-          reason: 'NOTICE_PENDING',
-          message: '公告已入库但可信度不足（' + ((saved && saved.summary) || '存疑') + '），待人工核对'
-        };
-      });
     }
     if (source.kind === 'market') {
       return saveMarket(source, parsed).then(function () {

@@ -137,6 +137,13 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 契约测试 stub `utils/api.js` 的 `module.exports` = 没测传输层 | `fetchWithFallback` / `hasExpected` / `stampSource` 一次都没跑，页面吃的是后端原始响应 —— 字段漂了也照样全绿 | 在 **`wx.request` 层**打本地测试服务，让 `utils/cloud.js` 与 `utils/api.js` 一行不改地真跑；通知用夹具正文驱动 `collectFromSource` 产出，**禁止手插 approved 夹具** |
 | 「合法为空」与「后端没给成」要分开 | 回落演示源会让用户看到假价格，还以为服务挂了 | 后端在合法为空时返回顶层 `empty:true`，前端 `hasExpected` 见到它就不回落演示源 |
 | `scroll-view` 光有 `max-height` 滚不动 | 项目自己的 AGENTS.md 就记着这条，但代码里只给了 `max-height` + `flex:1 1 auto` | 父容器给**确定高度**，滚动区 `flex: 1 1 0; min-height: 0`（basis 0 + min-height 0 才有确定高度） |
+| 发改委公告只给吨价，不给每升四油品幅度 | 正文写「国内汽、柴油（标准品）价格每吨分别下调645元、625元」—— 只有吨价、只分汽/柴油两类，附表还是 JPG 图片 | 每升四油品幅度靠各地挂牌价的**前后快照差值**测算（`server/src/services/measure.js`），界面必须标「据各地挂牌价测算，非官方公布」；测算值不能写进官方字段 |
+| 调控类公告同段有两个数 | 「每吨分别应上调440元、420元，……调控后实际上调345元、335元」—— 前者是机制理论值，后者才是实际执行值 | 只认「实际上调/下调」；只解析到「应上调」时方向明确但幅度存疑，判 pending 不发布 |
+| 发改委公告是「列表页 → 详情页」两步 | 列表页 `https://www.ndrc.gov.cn/xwdt/xwfb/` 里每条只是一个链接，正文在详情页的 `div.TRS_Editor` 里 | 采集器对 kind=notice 走 `listUrl` + `listParser` + `itemTitleKeywords` 两步；已入库的公告不再重复抓详情页 |
+| 列表页 href 是相对链接 | 形如 `./202611/t20261112_1408795.html`，手工拼会变成 `www.ndrc.gov.cn.` 带尾点的域名，证书 altnames 直接不匹配 | 必须 `new URL(href, base).href` |
+| 按生效日直接取历史价行算成 0 | 来源站可能提前几天挂出新价，生效日当天的行已经是新价 → 前后差 0，误判成「持平」 | 找**生效日附近最后一次价格变化**（变化点前一条 = 调价前、后一条 = 调价后），不要按日期取行 |
+| 存疑通知每轮插一条重复行 | 去重键里带执行日期，解析结果一变键就变 → 老逻辑只在「存疑→可信」时覆盖，存疑→仍存疑会一直插新行 | 存疑通知按 (来源, 标题) **原地覆盖**，不能每次 insert |
+| 测算方向与公告方向矛盾 | 用错了快照时算出来的方向跟公告反着来 | `measure.agreesWithDirection()` 不通过就不返回测算值 —— 摆出来比不摆更糟 |
 
 ## 验证要求
 
@@ -144,6 +151,9 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - 改数据层或算法，跑 `node scripts/verify-data.js` 对照输出值
 - **改了前后端之间的字段**，跑 `node scripts/verify-contract.js` —— 它在 `wx.request` 层打本地测试服务，让前端**真走** `fetchWithFallback`（不是 stub api 层），字段漂移、空值冒充 0.00、来源标错、回落与竞态都靠它挡
 - **改了服务端的解析器或可信度判定**，跑 `node scripts/verify-collector.js`（解析回归）与 `verify-contract.js`（采集链路 → 入库 `review_status` → 对外可见性）
+- **改了公告解析或测算**，拿 `scripts/fixtures/ndrc-*.html`（发改委真实公告原文）做回归；
+  改动公告解析器时必须覆盖三类：普通调价、调控类（取「实际上调」）、搁浅（不作调整）
+- **改了挂牌价测算**，必须覆盖：站点提前挂价、样本太少不给结论、测算方向与公告方向矛盾
 - 改渲染结果，在开发者工具模拟器里逐页核对，别只信静态检查 —— 上面那批 bug 静态检查查不出来
 - 截图类产物落在 `docs/screenshots/`，临时导出的 canvas 代码不要留在仓库里
 
@@ -171,7 +181,12 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 五个页面已写完并逐页验证过。**后端已上线**：`server/`（Node + Express + PostgreSQL）
 部署在 `oil-trend.uwakeme.top`，采集器每 30 分钟从**汽油价格网**（qiyoujiage）抓
 31 省挂牌价 + 下次调价预测，页面显示的是真实挂牌价（解析规则见 `server/src/services/sources.js`）。
-ndrc 公告与国际行情两个来源仍未启用。
+
+**发改委调价公告源已启用**（2026-11-16）：列表页 → 详情页两步抓取，拿到的是
+「方向 + 执行日期 + 汽/柴油吨价」。公告**不给**四油品每升幅度，
+那部分由 `server/src/services/measure.js` 拿各地挂牌价的前后快照差值测算，
+界面标注为「据各地挂牌价测算，非官方公布」。
+国际行情源仍未启用。
 
 订阅消息链路还没走通到底（需正式 AppID + 模板 ID），未配置时「提醒」页要明说未配置，不假装授权成功。
 

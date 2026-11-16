@@ -163,112 +163,113 @@ function runSuite(label, sources) {
     assert.strictEqual(t.date, '2027-01-05');
   });
 
-  check(label + ' ndrcNotice 回归：方向正负号', () => {
-    const up = sources.PARSERS.ndrcNotice('国内成品油价格按机制上调。自2026年11月12日24:00起，每升上调0.08元。');
-    assert.strictEqual(up.delta, 0.08);
-    assert.strictEqual(up.executeAt, '2026-11-12');
-    const down = sources.PARSERS.ndrcNotice('每升下调0.08元');
-    assert.strictEqual(down.delta, -0.08);
+  // ⚠️ 下面这组用例用的是**发改委公告的真实原文**（2026-11-16 抓取，
+  // 原文出处见下方注释）。发改委公告只给吨价、只分汽/柴油两类，
+  // **不给四油品每升幅度** —— 每升幅度由展示层拿挂牌价前后快照差值测算。
+  //
+  // 原文出处（国家发展和改革委员会 · 新闻发布）：
+  //   https://www.ndrc.gov.cn/xwdt/xwfb/202611/t20261112_1408795.html
+  //   https://www.ndrc.gov.cn/xwdt/xwfb/202610/t20261029_1408449.html
+  //   https://www.ndrc.gov.cn/xwdt/xwfb/202610/t20261015_1408170.html
+  //   https://www.ndrc.gov.cn/xwdt/xwfb/202609/t20260924_1407824.html
+  const ndrcParse = (file) => sources.PARSERS.ndrcNotice(
+    fs.readFileSync(path.join(ROOT, 'scripts', 'fixtures', file), 'utf8')
+  );
+  // 拼一个最小页面：解析器只认 meta / h2 / article_con / TRS_Editor 这几处
+  const ndrcPage = (body, title, pubDate) => '<html><head>' +
+    '<meta name="ArticleTitle" content="' + (title || '') + '">' +
+    '<meta name="PubDate" content="' + (pubDate || '') + '">' +
+    '</head><body><div class="article"><div class="article_l">' +
+    '<h2 class="article_title">' + (title || '') + '</h2>' +
+    '<div class="article_con article_con_title"><div class=TRS_Editor><div>' + body + '</div></div></div>' +
+    '</div><div class="article_r"></div></div></body></html>';
+
+  check(label + ' ndrcNotice 列表页：相对链接拼成绝对地址', () => {
+    const html = fs.readFileSync(path.join(ROOT, 'scripts', 'fixtures', 'ndrc-list.html'), 'utf8');
+    const list = sources.PARSERS.ndrcNoticeList(html, 'https://www.ndrc.gov.cn/xwdt/xwfb/');
+    assert(list.items.length > 0, '列表页应解析出公告链接');
+    const oil = list.items.filter((i) => /成品油价格/.test(i.title));
+    assert.strictEqual(oil.length, 4);
+    // ⚠️ 列表页 href 是 ./202611/… 这种相对链接。手工拼字符串会变成
+    // www.ndrc.gov.cn. 这种带尾点的域名，证书 altnames 直接不匹配。
+    assert.strictEqual(oil[0].url, 'https://www.ndrc.gov.cn/xwdt/xwfb/202611/t20261112_1408795.html');
+    assert.strictEqual(oil[0].publishedAt, '2026-11-12');
   });
 
-  // ⚠️ 下面这组用例钉的是「机器判定可信」的前提：
-  // 标号要从正文里明确抓到数字，泛称不猜；日期要认「24时」。
-  // 解析错标号的后果是 98# 的幅度被记到 92# 头上，
-  // 而 perFuel 还判定成「解析成功」—— 错的幅度会被当成可信结果发布出去。
-  check(label + ' ndrcNotice 逐项写法：四个油品各归各的', () => {
-    const r = sources.PARSERS.ndrcNotice(
-      '国家发展改革委宣布国内成品油价格按机制下调。从2026年11月24日24时起，全国平均来看：' +
-      '92号汽油每升下调0.08元，95号汽油每升下调0.08元，98号汽油每升下调0.10元，0号柴油每升下调0.08元。'
-    );
-    assert.deepStrictEqual(r.deltas, { '92': -0.08, '95': -0.08, '98': -0.1, '0': -0.08 });
-    assert.strictEqual(r.perFuel, true);
-    assert.strictEqual(r.executeAt, '2026-11-24');
+  check(label + ' ndrcNotice 真实公告：下调 645/625 元每吨', () => {
+    const r = ndrcParse('ndrc-2026-11-12.html');
+    assert.strictEqual(r.direction, 'down');
+    assert.deepStrictEqual(r.tonChanges, { gasoline: -645, diesel: -625 });
+    assert.strictEqual(r.executeAt, '2026-11-12');
+    assert.strictEqual(r.announcedAt, '2026-11-12');
+    assert.strictEqual(r.reviewStatus, 'approved');
+    // 公告不给每升四油品幅度 —— 留空，由展示层测算，不在这里猜
+    assert.deepStrictEqual(r.deltas, {});
+  });
+
+  check(label + ' ndrcNotice 调控类：取「实际上调」不取「应上调」', () => {
+    const r = ndrcParse('ndrc-2026-10-29.html');
+    // 原文同段里既有「应上调440元、420元」也有「调控后实际上调345元、335元」，
+    // 只有后者是实际执行值 —— 拿理论值当执行值就是替来源编数字。
+    assert.strictEqual(r.direction, 'up');
+    assert.deepStrictEqual(r.tonChanges, { gasoline: 345, diesel: 335 });
+    assert.strictEqual(r.executeAt, '2026-10-29');
     assert.strictEqual(r.reviewStatus, 'approved');
   });
 
-  check(label + ' ndrcNotice 顿号串号：列表里的每个标号都拿到那个幅度', () => {
-    const r = sources.PARSERS.ndrcNotice(
-      '自2026年11月24日24时起，92号汽油、98号汽油每升下调0.10元。'
-    );
-    // 「A、B每升X元」是公告的列表写法：A 与 B 都适用这个幅度。
-    // ⚠️ 旧解析器把这种写法读成「只有最后一个标号算数」，
-    // 92# 明明写在正文里却被丢掉 —— 而且照样判成 approved。
-    assert.strictEqual(r.deltas['98'], -0.1);
-    assert.strictEqual(r.deltas['92'], -0.1, '92# 在正文里写了，同一个幅度也适用它');
+  check(label + ' ndrcNotice 调控类第二篇：395/385 而不是理论值 830/800', () => {
+    const r = ndrcParse('ndrc-2026-09-24.html');
+    assert.deepStrictEqual(r.tonChanges, { gasoline: 395, diesel: 385 });
   });
 
-  check(label + ' ndrcNotice 四油品共用一个幅度：逐项齐全判可信', () => {
-    const r = sources.PARSERS.ndrcNotice(
-      '自2026年11月24日24时起，92号汽油、95号汽油、98号汽油每升下调0.10元，0号柴油每升下调0.10元。'
-    );
-    assert.deepStrictEqual(r.deltas, { '92': -0.1, '95': -0.1, '98': -0.1, '0': -0.1 });
-    assert.strictEqual(r.perFuel, true);
+  check(label + ' ndrcNotice 搁浅：方向 flat，不编幅度', () => {
+    const r = ndrcParse('ndrc-2026-10-15.html');
+    assert.strictEqual(r.direction, 'flat');
+    assert.deepStrictEqual(r.tonChanges, {});
+    assert.strictEqual(r.executeAt, '2026-10-15');
     assert.strictEqual(r.reviewStatus, 'approved');
   });
 
-  check(label + ' ndrcNotice 只有总幅度：不复制给四个油品，判存疑', () => {
-    const r = sources.PARSERS.ndrcNotice('自2026年11月24日24时起，每升下调0.08元。');
-    assert.deepStrictEqual(r.deltas, {}, '总幅度不能复制给四个油品');
-    assert.strictEqual(r.perFuel, false);
-    assert.strictEqual(r.reviewStatus, 'pending');
-  });
-
-  check(label + ' ndrcNotice 泛称「汽油」：猜不出标号，不填', () => {
-    const r = sources.PARSERS.ndrcNotice('自2026年11月24日24时起，汽油每升下调0.08元。');
-    assert.deepStrictEqual(r.deltas, {}, '汽油有 92/95/98 三个标号，猜不出来');
-    assert.strictEqual(r.reviewStatus, 'pending');
-  });
-
-  check(label + ' ndrcNotice 有幅度没日期：正文格式不符，判存疑', () => {
-    const r = sources.PARSERS.ndrcNotice('92号汽油每升下调0.08元，98号汽油每升下调0.10元。');
-    // ⚠️ perFuel 的含义是「四油品逐项齐全」：只解析出 2 个油品时
-    // 缺失的两个是**猜不出来的**，不能当成「逐项解析成功」。
-    assert.strictEqual(r.perFuel, false, '只解析出 2 个油品不算逐项齐全');
-    assert.strictEqual(r.executeAt, null);
-    assert.strictEqual(r.reviewStatus, 'pending');
-  });
-
-  check(label + ' ndrcNotice 中性词「调整」不猜方向，判存疑', () => {
-    const r = sources.PARSERS.ndrcNotice(
-      '自2026年11月24日24时起，92号汽油每升调整0.10元，95号汽油每升调整0.10元，' +
-      '98号汽油每升调整0.10元，0号柴油每升调整0.10元。'
-    );
-    // 「调整」看不出上调还是下调 —— 之前非「下调」一律取正，
-    // 等于把一条方向不明的公告当成**上涨**发布出去。
-    assert.strictEqual(r.ambiguousDirection, true);
-    assert.strictEqual(r.reviewStatus, 'pending');
+  check(label + ' ndrcNotice 只有「应上调」：理论值不算实际执行值', () => {
+    const r = sources.PARSERS.ndrcNotice(ndrcPage(
+      '根据现行价格机制计算，自10月29日24时起，国内汽、柴油（标准品）价格每吨分别应上调440元、420元。',
+      '2026年10月29日国内成品油价格调整',
+      '2026-10-29'
+    ));
+    assert.strictEqual(r.direction, 'up', '方向是明确的');
+    assert.deepStrictEqual(r.tonChanges, {}, '「应上调」是机制理论值，不能当实际执行幅度');
+    assert.strictEqual(r.theoryOnly, true);
+    assert.strictEqual(r.reviewStatus, 'pending', '没有实际幅度就存疑，不对外发布');
   });
 
   check(label + ' ndrcNotice 不拿上一轮的日期当本轮生效日', () => {
-    const r = sources.PARSERS.ndrcNotice(
-      '上次调价自2026年11月1日24时起，本轮92号汽油每升下调0.10元，95号汽油每升下调0.10元，' +
-      '98号汽油每升下调0.10元，0号柴油每升下调0.10元。'
-    );
-    assert.strictEqual(r.executeAt, null, '上一轮的日期不是本轮生效日');
-    assert.strictEqual(r.reviewStatus, 'pending');
+    const r = sources.PARSERS.ndrcNotice(ndrcPage(
+      '上次调价自2026年11月1日24时起，本轮国内汽、柴油（标准品）价格每吨分别下调645元、625元。',
+      '2026年11月12日国内成品油价格调整',
+      '2026-11-12'
+    ));
+    // 正文里唯一带「24时起」的是上一轮的日期 → 不能当本轮生效日
+    assert.notStrictEqual(r.executeAt, '2026-11-01');
+    assert.strictEqual(r.executeAt, '2026-11-12', '执行日退回标题里的日期');
   });
 
-  check(label + ' ndrcNotice 同一油品两种幅度，判存疑', () => {
-    const r = sources.PARSERS.ndrcNotice(
-      '自2026年11月24日24时起，92号汽油每升下调0.10元，92号汽油每升下调0.20元，95号汽油每升下调0.10元，' +
-      '98号汽油每升下调0.10元，0号柴油每升下调0.10元。'
-    );
-    assert.strictEqual(r.conflict, true);
-    assert.strictEqual(r.reviewStatus, 'pending');
+  check(label + ' ndrcNotice 跨年：12 月发布、次年 1 月执行', () => {
+    const r = sources.PARSERS.ndrcNotice(ndrcPage(
+      '根据国际市场油价变化情况，自1月5日24时起，国内汽、柴油（标准品）价格每吨分别下调100元、95元。',
+      '2025年12月31日国内成品油价格调整',
+      '2025-12-31'
+    ));
+    assert.strictEqual(r.executeAt, '2026-01-05');
   });
 
-  check(label + ' ndrcNotice 各油品方向不一致，判存疑', () => {
-    const r = sources.PARSERS.ndrcNotice(
-      '自2026年11月24日24时起，92号汽油每升下调0.10元，95号汽油每升上调0.10元，' +
-      '98号汽油每升下调0.10元，0号柴油每升下调0.10元。'
-    );
-    assert.strictEqual(r.mixedDirection, true);
+  check(label + ' ndrcNotice 方向解析不出来：判存疑', () => {
+    const r = sources.PARSERS.ndrcNotice(ndrcPage(
+      '根据国际市场油价变化情况，国内汽、柴油价格适当调整。',
+      '2026年11月12日国内成品油价格适当调整',
+      '2026-11-12'
+    ));
+    assert.strictEqual(r.direction, '', '「适当调整」看不出方向，不猜');
     assert.strictEqual(r.reviewStatus, 'pending');
-  });
-
-  check(label + ' ndrcNotice 日期认「24时」', () => {
-    const r = sources.PARSERS.ndrcNotice('自2026年11月24日24时起，每升下调0.08元。');
-    assert.strictEqual(r.executeAt, '2026-11-24');
   });
 }
 

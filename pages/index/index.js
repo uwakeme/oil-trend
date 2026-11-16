@@ -351,7 +351,13 @@ Page({
     // 没有 id 也没有标题 = 压根没有正式通知（不是「有通知但内容缺了」）。
     // 这种时候不能再拼「--」日期和「调价幅度待公布」那种半吊子文案。
     var noticeEmpty = !latest.id && !latest.title;
-    var noticeChanges = latest.changes || {};
+    // 每升四油品幅度取哪一份：官方公布了用官方的，
+    // 官方没公布（发改委公告只给吨价）才用挂牌价测算值 —— 并标明来源
+    var noticeDeltaSource = fmt.noticeDeltas(latest);
+    var noticeChanges = noticeDeltaSource.deltas;
+    var noticeMeasured = noticeDeltaSource.measured;
+    // 官方公告给的吨价与方向（发改委公告只给这个，不给每升幅度）
+    var noticeOfficial = noticeEmpty ? '' : fmt.noticeOfficialText(latest);
     // 幅度缺失时不能拿 0 顶上：那是替来源猜了一个幅度
     var noticeDelta = noticeChanges[fuelId];
     var noticeKnown = typeof noticeDelta === 'number' && isFinite(noticeDelta);
@@ -433,8 +439,12 @@ Page({
         executeText: noticeEmpty ? '' : (executeDate
           ? (fmt.fullDate(executeDate.slice(0, 10)) + ' ' + executeTime + ' 时执行')
           : '执行日期待公布'),
-        // 摘要优先用后端给的 summary，没有就退回固定说明
-        summaryText: noticeEmpty ? '' : (latest.summary || '以下为本地各油品调整后的零售价格。'),
+        // 官方口径（方向 + 汽/柴油吨价）优先，没有才退回后端给的摘要
+        summaryText: noticeEmpty ? '' : (noticeOfficial || latest.summary || '以下为本地各油品调整后的零售价格。'),
+        // 卡片上单独一行说官方给了什么
+        officialText: noticeOfficial,
+        // 每升幅度是不是挂牌价测算值
+        measured: noticeMeasured,
         prices: noticeEmpty ? [] : noticePrices,
         sourceName: noticeEmpty ? '' : noticeSourceName,
         // 后端通知可能没有发布时间，缺了就不写「发布于 …」，别留个空壳

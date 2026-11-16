@@ -447,6 +447,27 @@
   line-height: 1.5;
 }
 
+/* 官方公告给的方向与吨价（发改委公告只给这个） */
+.notice-preview-official {
+  display: block;
+  font-size: 19rpx;
+  color: var(--ink);
+  line-height: 1.5;
+  margin-bottom: 6rpx;
+}
+
+/* 挂牌价测算值的来源标注 —— 不能让人把它当成官方公布值 */
+.notice-measured-tag {
+  display: block;
+  font-size: 16rpx;
+  color: var(--amber-ink);
+  background: var(--amber-soft);
+  border-radius: 6rpx;
+  padding: 4rpx 10rpx;
+  margin-top: 10rpx;
+  line-height: 1.4;
+}
+
 /* ---------- 弹层内样式 ---------- */
 
 /* ---------- 当前位置入口 ---------- */

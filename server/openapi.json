@@ -3,7 +3,7 @@
   "info": {
     "title": "油价势 · 后端 API",
     "version": "1.0.0",
-    "description": "油价势小程序的自建后端接口（Node + Express + PostgreSQL）。\n\n## 统一响应外壳\n\n所有接口都返回同一个外壳：\n\n```json\n{ \"ok\": true,  \"data\": { } }\n{ \"ok\": false, \"message\": \"错误说明\", \"code\": \"错误码\" }\n```\n\n`ok: false` 时 HTTP 状态码**仍是 200**（业务错误），只有鉴权失败才返回 401。\n小程序端 `utils/cloud.js` 按这个约定解析：`ok === false` 会 reject 并回落到本地演示源。\n\n## 认证\n\n查询类接口（`/api/regions`、`/api/home` 等）**不需要登录**。\n\n用户类接口（`/api/rules`、`/api/history`）需要登录态：\n\n1. 小程序 `wx.login()` 拿到 `code`，POST 到 `/api/login`\n2. 拿到 `token`，后续请求带 `Authorization: Bearer <token>`\n3. token 有效期 7 天；返回 401 时重新走一次登录\n\n## 错误码\n\n| code | 含义 |\n| --- | --- |\n| `NO_CODE` | 请求没带 code |\n| `UNAUTHORIZED` | 没带 token 或 token 无效/过期 |\n| `NO_OPENID` | 换不到 openid |\n| `UNKNOWN_ACTION` | 未知 action（仅云函数路径） |\n| `INTERNAL_ERROR` | 服务端异常 |\n| `NOT_FOUND` | 路径不存在 |\n\n## 数据来源\n\n返回的 `source` 字段如实标注数据来源：`mode` 为 `server` 表示来自本服务，\n`demo` 表示小程序本地演示源。`note` 是给用户看的说明。\n\n## 日期与数字格式\n\n- 日期（`date` / `executeAt` / `changeAt`）：`YYYY-MM-DD` 字符串\n- 时间戳（`publishedAt` / `updatedAt` / `time`）：ISO 8601 字符串\n- 价格与幅度：JSON number，单位元/升\n- 油品 id（`fuelId` / `id`）：**字符串**，取值 `92` / `95` / `98` / `0`\n- 地区 code：`440000` 这类 6 位行政区划码"
+    "description": "油价势小程序的自建后端接口（Node + Express + PostgreSQL）。\n\n## 统一响应外壳\n\n所有接口都返回同一个外壳：\n\n```json\n{ \"ok\": true,  \"data\": { } }\n{ \"ok\": false, \"message\": \"错误说明\", \"code\": \"错误码\" }\n```\n\n`ok: false` 时 HTTP 状态码按错误类型给出：业务错误 4xx、内部错误 5xx（外壳 `{ok, message, code}` 不变）。\n小程序端 `utils/cloud.js` 按这个约定解析：`ok === false` 会 reject 并回落到本地演示源。\n\n## 认证\n\n查询类接口（`/api/regions`、`/api/home` 等）**不需要登录**。\n\n用户类接口（`/api/rules`、`/api/history`）需要登录态：\n\n1. 小程序 `wx.login()` 拿到 `code`，POST 到 `/api/login`\n2. 拿到 `token`，后续请求带 `Authorization: Bearer <token>`\n3. token 有效期 7 天；返回 401 时重新走一次登录\n\n## 错误码\n\n| code | 含义 |\n| --- | --- |\n| `NO_CODE` | 请求没带 code |\n| `UNAUTHORIZED` | 没带 token 或 token 无效/过期 |\n| `NO_OPENID` | 换不到 openid |\n| `UNKNOWN_ACTION` | 未知 action（仅云函数路径） |\n| `INTERNAL_ERROR` | 服务端异常 |\n| `NOT_FOUND` | 路径不存在 |\n\n## 数据来源\n\n返回的 `source` 字段如实标注数据来源：`mode` 为 `server` 表示来自本服务，\n`demo` 表示小程序本地演示源。`note` 是给用户看的说明。\n\n## 日期与数字格式\n\n- 日期（`date` / `executeAt` / `changeAt`）：`YYYY-MM-DD` 字符串\n- 时间戳（`publishedAt` / `updatedAt` / `time`）：ISO 8601 字符串\n- 价格与幅度：JSON number，单位元/升\n- 油品 id（`fuelId` / `id`）：**字符串**，取值 `92` / `95` / `98` / `0`\n- 地区 code：`440000` 这类 6 位行政区划码"
   },
   "servers": [
     {
@@ -992,9 +992,35 @@
             "description": "执行日期 YYYY-MM-DD",
             "example": "2026-11-12"
           },
+          "announcedAt": {
+            "type": "string",
+            "description": "公告发布日期 YYYY-MM-DD",
+            "example": "2026-11-12"
+          },
+          "direction": {
+            "type": "string",
+            "description": "官方调价方向：up / down / flat（flat = 本轮不作调整）",
+            "enum": [
+              "up",
+              "down",
+              "flat"
+            ],
+            "example": "down"
+          },
+          "tonChanges": {
+            "type": "object",
+            "description": "官方公布的吨价幅度（元/吨），只分汽/柴油两类。发改委公告只给这个 —— 它不给每升四油品幅度",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "example": {
+              "gasoline": -645,
+              "diesel": -625
+            }
+          },
           "changes": {
             "type": "object",
-            "description": "各油品调整幅度（元/升），负数是下调",
+            "description": "官方公布的各油品每升调整幅度（元/升），负数是下调。发改委公告不给这一项 —— 这种情况下看 measuredChanges",
             "additionalProperties": {
               "type": "number"
             },
@@ -1005,9 +1031,27 @@
               "98": 0.15
             }
           },
+          "measuredChanges": {
+            "type": "object",
+            "description": "挂牌价测算出的各油品每升调整幅度（元/升），**不是官方公布值**。取各地挂牌价在生效日前后的快照差值再取中位数；测算方向与公告方向不一致时不返回",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "example": {
+              "0": -0.13,
+              "92": -0.13,
+              "95": -0.13,
+              "98": -0.13
+            }
+          },
+          "changesMeasured": {
+            "type": "boolean",
+            "description": "measuredChanges 是否有值",
+            "example": true
+          },
           "summary": {
             "type": "string",
-            "example": "各油品每升上调 0.15 元"
+            "example": "官方公告：下调，汽油 645 元/吨、柴油 625 元/吨。"
           },
           "prices": {
             "type": "object",
@@ -1175,7 +1219,7 @@
           },
           "amount": {
             "type": "number",
-            "description": "该油品的调整幅度",
+            "description": "该油品的调整幅度（由挂牌价在生效日前后的快照差值测算，不是官方公布值）",
             "example": 0.1
           },
           "direction": {

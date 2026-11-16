@@ -107,7 +107,10 @@ Page({
 
     var notices = (payload.notices || []).map(function (n) {
       var fuelId = prefsFuelId();
-      var delta = (n.changes || {})[fuelId];
+      // 每升四油品幅度取哪一份：官方公布了用官方的，
+      // 官方没公布（发改委公告只给吨价）才用挂牌价测算值
+      var deltaSource = fmt.noticeDeltas(n);
+      var delta = deltaSource.deltas[fuelId];
       // 幅度缺失时不能拿 0 顶上：那等于替来源猜了一个幅度
       var known = typeof delta === 'number' && isFinite(delta);
       var meta = known ? changeMeta(delta) : { text: '待公布', direction: 'flat' };
@@ -121,6 +124,10 @@ Page({
           ' ' + (String(n.executeAt || '').slice(11, 16) || '') + ' 执行',
         changeText: meta.text,
         direction: meta.direction,
+        // 官方公告给的方向与汽/柴油吨价
+        officialText: fmt.noticeOfficialText(n),
+        // 每升幅度是不是挂牌价测算值
+        measured: deltaSource.measured,
         raw: n
       };
     });
@@ -219,9 +226,12 @@ Page({
     }
 
     var rawSource = raw.source || {};
-    var rawDelta = (raw.changes || {})[fuelId];
+    // 详情里的每升幅度也按「官方优先、否则测算」取
+    var rawDeltaSource = fmt.noticeDeltas(raw);
+    var rawDelta = rawDeltaSource.deltas[fuelId];
     var rawKnown = typeof rawDelta === 'number' && isFinite(rawDelta);
     var rawMeta = rawKnown ? changeMeta(rawDelta) : { verb: '待公布', direction: 'flat' };
+    var rawOfficialText = fmt.noticeOfficialText(raw);
     var publishedText = fmt.dateTime(raw.publishedAt);
 
     this.setData({
@@ -229,7 +239,10 @@ Page({
       sheetKind: kind,
       detail: {
         title: raw.title,
-        summary: raw.summary,
+        // 官方口径（方向 + 汽/柴油吨价）优先；没有官方口径才用后端摘要
+        summary: rawOfficialText || raw.summary,
+        // 每升幅度是不是挂牌价测算值
+        measured: rawDeltaSource.measured,
         verb: rawMeta.verb,
         direction: rawMeta.direction,
         prices: prices,

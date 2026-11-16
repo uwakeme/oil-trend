@@ -205,6 +205,55 @@ function sourceName(source) {
   return '待确认';
 }
 
+
+/**
+ * 调价方向的中文说法。
+ */
+function directionText(direction) {
+  if (direction === 'up') return '上调';
+  if (direction === 'down') return '下调';
+  if (direction === 'flat') return '不作调整';
+  return '';
+}
+
+/**
+ * 官方公告给出的信息（方向 + 汽/柴油吨价）。
+ *
+ * 发改委公告只给吨价、只分汽/柴油两类，不给四油品每升幅度 ——
+ * 所以这里只说官方真说过的话，不掺任何测算值。
+ *
+ * 「官方公告：下调 · 汽油 645 元/吨、柴油 625 元/吨」
+ */
+function noticeOfficialText(notice) {
+  if (!notice) return '';
+  var dir = directionText(notice.direction || '');
+  if (!dir) return '';
+  if (notice.direction === 'flat') return '官方公告：本轮不作调整';
+  var ton = notice.tonChanges || {};
+  var parts = [];
+  if (typeof ton.gasoline === 'number') parts.push('汽油 ' + Math.abs(ton.gasoline) + ' 元/吨');
+  if (typeof ton.diesel === 'number') parts.push('柴油 ' + Math.abs(ton.diesel) + ' 元/吨');
+  if (!parts.length) return '';
+  return '官方公告：' + dir + ' · ' + parts.join('、');
+}
+
+/**
+ * 每升四油品幅度取哪一份。
+ *
+ * 官方公布了每升幅度就用官方的；官方没公布（发改委公告不给这一项）
+ * 才用挂牌价测算值，并把 measured 标出来 —— 界面必须写清这是测算值。
+ *
+ * 返回 { deltas: { '92': -0.13, ... }, measured: 布尔 }
+ */
+function noticeDeltas(notice) {
+  if (!notice) return { deltas: {}, measured: false };
+  var official = notice.changes || {};
+  if (Object.keys(official).length) return { deltas: official, measured: false };
+  var measured = notice.measuredChanges || {};
+  if (Object.keys(measured).length) return { deltas: measured, measured: true };
+  return { deltas: {}, measured: false };
+}
+
 module.exports = {
   pad2: pad2,
   price: price,
@@ -223,6 +272,9 @@ module.exports = {
   syncStatus: syncStatus,
   sourceLine: sourceLine,
   sourceName: sourceName,
+  directionText: directionText,
+  noticeOfficialText: noticeOfficialText,
+  noticeDeltas: noticeDeltas,
   SOURCE_MODE_TEXT: SOURCE_MODE_TEXT,
   SYNC_STATUS_META: SYNC_STATUS_META
 };

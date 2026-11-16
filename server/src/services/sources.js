@@ -40,13 +40,24 @@ const SOURCES = [
   },
   {
     id: 'ndrc-notice',
-    name: '国家发展改革委价格监测中心',
+    name: '国家发展改革委价格司',
     kind: 'notice',
-    enabled: false,
-    url: '',
+    // 2026-11-16 完成只读验证：列表页与详情页均可访问，采集器 UA 不被拦，
+    // 正文结构稳定（div.TRS_Editor），条款要求「如需转载，请注明来源」。
+    // ⚠️ robots.txt 被站点 WAF 挡（403），抓取约定无法确认 → 只低频抓、
+    // 抓到的公告已入库就不再重复抓详情。
+    enabled: true,
+    // 列表页 → 详情页两步抓取
+    url: 'https://www.ndrc.gov.cn/xwdt/xwfb/',
+    listUrl: 'https://www.ndrc.gov.cn/xwdt/xwfb/',
+    listParser: 'ndrcNoticeList',
+    // 只取标题里带这些词的公告，其余是新闻发布会、答记者问，与油价无关
+    itemTitleKeywords: ['成品油价格'],
+    // 单轮最多抓几篇详情页
+    maxItems: 5,
     headers: {},
     parser: 'ndrcNotice',
-    note: '正式调价公告来源，需先验证可访问性与使用条款'
+    note: '正式调价公告：方向 + 执行日期 + 汽/柴油吨价。附件价目表是图片，不解析'
   },
   {
     id: 'market-quote',
@@ -110,115 +121,197 @@ const PARSERS = {
   },
 
   /**
-   * 解析调价公告：从正文里找「每升调整 X 元」这类明确表述。
-   * 找不到就返回 null。
+   * 解析发改委调价公告。
    *
-   * ⚠️ reviewStatus 在这里是**机器判定**的可信度标记，不是人工审核结论：
-   *   approved —— 逐项幅度明确且执行日期明确，可对外发布；
-   *   pending  —— 正文写法与预期不符（只解析出总幅度 / 没抓到执行日期），
-   *               存疑不发布，等人工核对。
+   * 公告的真实形态（2026-11-16 实测四篇，列表页 → 详情页两步抓取）：
+   *   标题    「2026年11月12日国内成品油价格调整」
+   *   正文    自11月12日24时起，国内汽、柴油（标准品）价格每吨分别下调645元、625元。
+   *   调控类  自10月29日24时起，…每吨分别应上调440元、420元，…调控后实际上调345元、335元。
+   *   搁浅类  本次汽、柴油价格不作调整。
+   *   附表    是 JPG 图片（各省最高零售价），不是 HTML 表格，不解析。
+   *
+   * ⚠️ 公告**只给吨价、只分汽/柴油两类**，没有「四油品每升幅度」。
+   * 每升四油品幅度由展示层拿各地挂牌价的前后快照差值测算
+   * （server/src/services/measure.js），界面必须标注「据挂牌价测算」，
+   * 不能写成官方公布值。
+   *
+   * 方向只认「上调/下调/不作调整」。「应上调」是机制算出的**理论值**，
+   * 不是实际执行值 —— 调控类公告同段里「应上调440元」与「实际上调345元」并存，
+   * 只能取「实际上调」。
+   *
+   * ⚠️ reviewStatus 是**机器判定**的可信度标记，不是人工审核结论：
+   *   approved —— 方向明确 + 执行日期明确 + （上调/下调时）汽/柴油吨价齐全；
+   *   pending  —— 正文写法与预期不符，存疑不发布，等人工核对。
    */
-  ndrcNotice(raw) {
-    var text = String(raw || '').replace(/\s+/g, '');
+  ndrcNotice(raw, meta) {
+    var html = String(raw || '');
+    var metaInfo = meta || {};
 
-    // ---- 1. 逐项幅度 ----
-    // 正文里的典型写法是「92号汽油、95号汽油、98号汽油每升下调0.10元」：
-    // 几个油品**共用一个幅度**。所以先把油品标号按位置抓出来，
-    // 再看每个「每升X元」短语前面那一串标号 —— 那一串全都适用这个幅度。
-    //
-    // ⚠️ 之前用「标号 + 每升X元」配对，正则一匹配就吃掉整段，
-    // 于是共用幅度的写法只认得下最后一个油品（98# 的幅度记到 98# 头上，
-    // 92# 与 95# 直接丢了），却仍然判成「逐项解析成功」。
-    var labels = [];
-    var labelRe = /(^|[^0-9])(92|95|98|0)\s*[#号]\s*(?:汽油|柴油)?/g;
-    var lm;
-    while ((lm = labelRe.exec(text)) !== null) {
-      // (^|[^0-9]) 会吃掉标号前面那个字，算真实起点时要补回来。
-      // 前一位不是数字这条约束保证「90号」不会被当成「0号」。
-      labels.push({ fuelId: lm[2], start: lm.index + lm[1].length, end: labelRe.lastIndex });
+    // 正文：优先取 article_con 容器（到右侧排行榜 div 之前），
+    // 拿不到再退回 div.TRS_Editor。script 里的字符串可能含 </div>，先剥掉。
+    var bodyHtml = '';
+    var conM = html.match(/<div class="article_con[^"]*"[^>]*>([\s\S]*?)<div class="article_r"/);
+    if (conM) bodyHtml = conM[1];
+    else {
+      var trsM = html.match(/<div class=TRS_Editor>([\s\S]*?)/);
+      if (trsM) bodyHtml = trsM[1];
     }
+    bodyHtml = bodyHtml.replace(/<script[\s\S]*?<\/script>/gi, '');
+    var text = stripTags(bodyHtml);
 
-    var deltas = {};
-    var ambiguousDirection = false;
-    var conflict = false;
-    var prevEnd = 0;
-    var amountRe = /每升(?:价格)?(上调|下调|调整)([\d.]+)元/g;
-    var am;
-    while ((am = amountRe.exec(text)) !== null) {
-      var dir = am[1];
-      var mag = Number(am[2]);
-      var group = fuelGroupBefore(text, labels, prevEnd, am.index);
-      prevEnd = amountRe.lastIndex;
-      if (!group.length || !isFinite(mag)) continue;
-      if (dir !== '上调' && dir !== '下调') {
-        // 「调整」看不出方向 —— 不猜，整条判存疑。
-        // （之前非「下调」一律取正，「调整0.10元」被当成**上涨**发布）
-        ambiguousDirection = true;
-        continue;
-      }
-      var value = dir === '下调' ? -mag : mag;
-      group.forEach(function (g) {
-        if (deltas[g.fuelId] !== undefined && deltas[g.fuelId] !== value) conflict = true;
-        deltas[g.fuelId] = value;
-      });
+    // ---- 1. 标题与公告日期 ----
+    var title = metaInfo.title || '';
+    if (!title) {
+      var atM = html.match(/<meta\s+name="ArticleTitle"\s+content="([^"]*)"/i);
+      if (atM) title = atM[1];
+    }
+    if (!title) {
+      var h2M = html.match(/<h2[^>]*class="article_title"[^>]*>([\s\S]*?)<\/h2>/i);
+      if (h2M) title = stripTags(h2M[1]);
+    }
+    title = String(title).replace(/\s+/g, ' ').trim();
+
+    var announcedAt = '';
+    var pubM = html.match(/<meta\s+name="PubDate"\s+content="([\d-]+)/i);
+    if (pubM) announcedAt = pubM[1];
+    if (!announcedAt) {
+      var tm = html.match(/发布时间：([\d/]+)/);
+      if (tm) announcedAt = tm[1].replace(/\//g, '-');
+    }
+    // 标题里的日期是执行日（公告在执行当天发布），比 PubDate 更可靠
+    var titleDateM = title.match(/(\d{4})年(\d{1,2})月(\d{1,2})日/);
+    var titleYear = titleDateM ? Number(titleDateM[1]) : 0;
+    if (!announcedAt && titleDateM) {
+      announcedAt = titleDateM[1] + '-' + pad(titleDateM[2]) + '-' + pad(titleDateM[3]);
     }
 
     // ---- 2. 执行日期 ----
-    // 只认「…24时起」这种带生效语义的写法。
-    // 被「上次/上轮/此前」修饰的日期是上一轮的，不能当本轮生效日 ——
-    // 之前不限语境直接取第一个匹配，「上次调价自11月1日24时起」会被当成本轮日期。
-    var executeAt = null;
-    var dateRe = /(\d{4})年(\d{1,2})月(\d{1,2})日(?:24时|24:00)/g;
-    var dm;
-    while ((dm = dateRe.exec(text)) !== null) {
-      var before = text.slice(Math.max(0, dm.index - 16), dm.index);
-      if (/上次|上轮|此前|前次|上一轮/.test(before)) continue;
-      // 取最后一个：本轮生效日总在上一轮之后
-      executeAt = dm[1] + '-' + pad(dm[2]) + '-' + pad(dm[3]);
+    // 只认「自X月X日24时起」这种带生效语义的写法。
+    // 被「上次/上轮/此前」修饰的日期是上一轮的，不能当本轮生效日。
+    var executeAt = '';
+    var execM = text.match(/(?:自)?(?:(\d{4})年)?(\d{1,2})月(\d{1,2})日(?:24时|24:00)/);
+    if (execM) {
+      var before = text.slice(Math.max(0, execM.index - 16), execM.index);
+      if (!/上次|上轮|此前|前次|上一轮/.test(before)) {
+        var y = execM[1]
+          ? Number(execM[1])
+          : (titleYear || (announcedAt ? Number(announcedAt.slice(0, 4)) : 0));
+        if (y) {
+          var d = new Date(Date.UTC(y, Number(execM[2]) - 1, Number(execM[3])));
+          // 跨年：12 月发布、次年 1 月执行时，组合出来的日期会早一年
+          if (announcedAt) {
+            var pubTs = Date.parse(announcedAt + 'T00:00:00Z');
+            if (isFinite(pubTs) && d.getTime() < pubTs - 60 * 86400000) {
+              d = new Date(Date.UTC(y + 1, Number(execM[2]) - 1, Number(execM[3])));
+            }
+          }
+          executeAt = d.toISOString().slice(0, 10);
+        }
+      }
+    }
+    // 正文没写「24时起」（搁浅公告写「本次…不作调整」）→ 执行日取标题日期
+    if (!executeAt && titleDateM) {
+      executeAt = titleDateM[1] + '-' + pad(titleDateM[2]) + '-' + pad(titleDateM[3]);
     }
 
-    // ---- 3. 总幅度（只用于存疑时的说明文案） ----
-    var totalDelta = null;
-    var totalM = text.match(/每升(?:汽柴油)?(?:价格)?(?:分别)?(上调|下调)([\d.]+)元/);
-    if (totalM) {
-      var tm = Number(totalM[2]);
-      if (isFinite(tm)) totalDelta = totalM[1] === '下调' ? -tm : tm;
+    // ---- 3. 方向与吨价幅度 ----
+    var direction = '';
+    var tonChanges = {};
+    var theoryOnly = false;
+
+    var flatM = text.match(/汽、?柴油(?:价格)?不作调整|汽、?柴油价格不予调整|汽、?柴油价格暂不调整/);
+    if (flatM) {
+      direction = 'flat';
+    } else {
+      // 实际值优先：调控类公告同段里「应上调X」与「实际上调Y」并存，
+      // 只能取「实际上调」—— 「应上调」是机制算出的理论值，不是实际执行值。
+      var actM = text.match(/实际(上调|下调)([\d.]+)元、([\d.]+)元/);
+      var directM = actM ? null : text.match(/每吨分别(上调|下调)([\d.]+)元、([\d.]+)元/);
+      var useM = actM || directM;
+      if (useM) {
+        direction = useM[1] === '下调' ? 'down' : 'up';
+        var sign = useM[1] === '下调' ? -1 : 1;
+        tonChanges.gasoline = sign * Number(useM[2]);
+        tonChanges.diesel = sign * Number(useM[3]);
+      } else {
+        // 只有「应上调/应下调」：方向明确，但幅度是理论值，不是实际执行值
+        var theoryM = text.match(/每吨分别应(上调|下调)/);
+        if (theoryM) {
+          direction = theoryM[1] === '下调' ? 'down' : 'up';
+          theoryOnly = true;
+        }
+      }
     }
 
     // ---- 4. 判定 ----
-    var fuelIds = ['92', '95', '98', '0'];
-    // 逐项齐全才算可信：只解析出 1~2 个油品就发布，等于替公告补了缺失的幅度。
-    var perFuel = fuelIds.every(function (f) { return typeof deltas[f] === 'number'; });
-    // 国内成品油是一次整体调整，各油品方向必须一致
-    var hasUp = false;
-    var hasDown = false;
-    Object.keys(deltas).forEach(function (f) {
-      if (deltas[f] > 0) hasUp = true;
-      if (deltas[f] < 0) hasDown = true;
-    });
-    var mixedDirection = hasUp && hasDown;
-
-    var titleMatch = text.match(/(?:国内)?成品油价格按机制(?:上调|下调)/);
+    // 公告层面可信 = 方向明确 + 执行日期明确 + 上调/下调时汽/柴油吨价齐全。
+    // 每升四油品幅度公告不给 —— 那部分由展示层测算，不在这里猜。
+    var tonOk = direction === 'flat'
+      ? true
+      : (typeof tonChanges.gasoline === 'number' && typeof tonChanges.diesel === 'number');
+    var reviewStatus = (direction && executeAt && tonOk && !theoryOnly) ? 'approved' : 'pending';
 
     return {
       kind: 'official',
-      title: titleMatch ? titleMatch[0] : '国内成品油价格调整',
+      title: title || '国内成品油价格调整',
+      announcedAt: announcedAt,
       executeAt: executeAt,
-      delta: totalDelta,
-      deltas: deltas,
-      perFuel: perFuel,
-      ambiguousDirection: ambiguousDirection,
-      conflict: conflict,
-      mixedDirection: mixedDirection,
-      // 机器判定可信：四油品齐全 + 方向明确 + 执行日期明确，且无自相矛盾。
-      // 任何一项不满足都判存疑，不对外发布。
-      //
-      // ⚠️ 这条门槛定得死是有原因的：approved = 对外宣称「这是官方结果」，
-      // 猜错的代价是提醒金额全错。所以宁可多进人工核对队列。
-      reviewStatus: (perFuel && executeAt && !ambiguousDirection && !conflict && !mixedDirection)
-        ? 'approved' : 'pending',
-      raw: raw && raw.length > 4000 ? raw.slice(0, 4000) : raw
+      direction: direction,
+      tonChanges: tonChanges,
+      // 每升四油品幅度：公告不给，留在空对象里，由展示层测算后另给
+      deltas: {},
+      perFuel: false,
+      theoryOnly: theoryOnly,
+      reviewStatus: reviewStatus,
+      raw: html.length > 4000 ? html.slice(0, 4000) : html
     };
+  },
+
+  /**
+   * 解析发改委「新闻发布」列表页，取出公告的标题与详情页链接。
+   *
+   * 页面结构（2026-11-16 实测）：
+   *   <div class="list"><ul class="u-list">
+   *     <li><a href="./202611/t20261112_1408795.html" target="_blank"
+   *          title="2026年11月12日国内成品油价格调整">…</a><span>2026/11/12</span></li>
+   *   </ul></div>
+   *
+   * ⚠️ href 是**相对**链接（./202611/…），必须用 new URL(href, base) 拼接 ——
+   * 手工拼字符串会变成 www.ndrc.gov.cn. 这种带尾点的域名，证书 altnames 不匹配。
+   */
+  ndrcNoticeList(raw, baseUrl) {
+    var html = String(raw || '');
+    var base = baseUrl || 'https://www.ndrc.gov.cn/xwdt/xwfb/';
+    var items = [];
+    var liRe = /<li[^>]*>([\s\S]*?)<\/li>/g;
+    var lm;
+    while ((lm = liRe.exec(html)) !== null) {
+      var inner = lm[1];
+      var aM = inner.match(/<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+      if (!aM) continue;
+      var href = aM[1];
+      // 有些站点会在链接后面挂查询串，别把这种当成非文章页
+      if (!/\.html?(\?|$)/i.test(href)) continue;
+      var titleAttr = (aM[0].match(/title="([^"]*)"/) || [])[1] || '';
+      var title = String(titleAttr || stripTags(aM[2])).replace(/\s+/g, ' ').trim();
+      if (!title) continue;
+      var spanM = inner.match(/<span>([\s\S]*?)<\/span>/);
+      var publishedAt = '';
+      if (spanM) {
+        var parts = stripTags(spanM[1]).split('/');
+        if (parts.length === 3) {
+          publishedAt = parts[0] + '-' + pad(parts[1]) + '-' + pad(parts[2]);
+        }
+      }
+      var url = '';
+      try {
+        url = new URL(href, base).href;
+      } catch (e) {
+        continue;
+      }
+      items.push({ title: title, url: url, publishedAt: publishedAt });
+    }
+    return { items: items };
   },
 
   /**

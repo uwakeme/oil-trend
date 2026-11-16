@@ -6,6 +6,8 @@
 const dao = require('../dao');
 const shared = require('../shared/shared');
 const query = require('./query');
+// 挂牌价测算：公告只给吨价，每升四油品幅度靠各地挂牌价的前后快照差值
+const measure = require('./measure');
 
 /* ---------------- 调价通知 ---------------- */
 
@@ -21,14 +23,16 @@ var NOTICE_PAGE = 20;
  * 还没生效的公告不倒推 —— 那时当前价里还没有这次调整，倒推出来是错的。
  * 倒推不出来就留空，界面显示「暂无价格」，不编数字。
  */
-function noticePricesOf(notice, priceMap, today) {
+function noticePricesOf(notice, priceMap, today, deltas) {
   if (notice.prices && Object.keys(notice.prices).length) return notice.prices;
   if (notice.kind !== 'official') return {};
   var executeAt = String(notice.executeAt || '').slice(0, 10);
   if (!executeAt || executeAt > today) return {};
   var out = {};
+  // 优先用官方公布的每升幅度，没有就用挂牌价测算值
+  var source = deltas || notice.changes || {};
   Object.keys(priceMap).forEach(function (fuelId) {
-    var delta = (notice.changes || {})[fuelId];
+    var delta = source[fuelId];
     if (typeof delta !== 'number') return;
     var after = Number(priceMap[fuelId]);
     if (!isFinite(after)) return;
@@ -62,31 +66,48 @@ function actionNotices(payload) {
     prices.forEach(function (p) { priceMap[p.fuelId] = p.price; });
     var today = query.todayStr();
 
-    return {
-      region: { code: region.code, fullName: region.name + ' · ' + region.city },
-      window: query.buildWindow(win),
-      sync: {
-        // 没有采集记录 / 真实来源全关时是 idle，不能报「同步正常」
-        status: lastRun ? (lastRun.needsReview && lastRun.needsReview.length ? 'pending' : (lastRun.status || 'idle')) : 'idle',
-        lastCheckedAt: lastRun ? lastRun.finishedAt : '',
-        sourceName: lastRun ? lastRun.sourceName : '服务端定时采集',
-        sourceUrl: ''
-      },
-      notices: notices.map(function (n) {
-        return {
-          id: n.id,
-          kind: n.kind,
-          title: n.title,
-          publishedAt: n.publishedAt,
-          executeAt: n.executeAt,
-          changes: n.changes || {},
-          summary: n.summary || '',
-          prices: noticePricesOf(n, priceMap, today),
-          source: n.source || {}
-        };
-      }),
-      source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
-    };
+    // 挂牌价测算：一次查这一页所有公告的生效日
+    return measure.measureMany(notices.map(function (n) { return n.executeAt; })).then(function (measuredByDate) {
+      return {
+        region: { code: region.code, fullName: region.name + ' · ' + region.city },
+        window: query.buildWindow(win),
+        sync: {
+          // 没有采集记录 / 真实来源全关时是 idle，不能报「同步正常」
+          status: lastRun ? (lastRun.needsReview && lastRun.needsReview.length ? 'pending' : (lastRun.status || 'idle')) : 'idle',
+          lastCheckedAt: lastRun ? lastRun.finishedAt : '',
+          sourceName: lastRun ? lastRun.sourceName : '服务端定时采集',
+          sourceUrl: ''
+        },
+        notices: notices.map(function (n) {
+          var measured = (measuredByDate[n.executeAt] || {});
+          // 测算值只有在方向与公告一致时才摆出来：方向矛盾说明用错了快照
+          var measuredChanges = measure.agreesWithDirection(measured, n.direction) ? measured : {};
+          var deltas = Object.keys(n.changes || {}).length ? n.changes : measuredChanges;
+          return {
+            id: n.id,
+            kind: n.kind,
+            title: n.title,
+            publishedAt: n.publishedAt,
+            // 公告发布日
+            announcedAt: n.announcedAt || '',
+            executeAt: n.executeAt,
+            // 官方方向 up/down/flat
+            direction: n.direction || '',
+            // 官方吨价（汽/柴油，元/吨）
+            tonChanges: n.tonChanges || {},
+            // 官方公布的每升四油品幅度（发改委公告不给这一项）
+            changes: n.changes || {},
+            // 挂牌价测算的每升四油品幅度 —— 不是官方公布值
+            measuredChanges: measuredChanges,
+            changesMeasured: Object.keys(measuredChanges).length > 0,
+            summary: n.summary || '',
+            prices: noticePricesOf(n, priceMap, today, deltas),
+            source: n.source || {}
+          };
+        }),
+        source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
+      };
+    });
   });
 }
 

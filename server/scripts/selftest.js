@@ -740,31 +740,105 @@ async function main() {
   // ⚠️ 不允许直接 insert 一条 approved 夹具 —— 那会绕过整条判定链路，
   // 自检就成了「自己证明自己」。这里从**正文**出发走完整条链路。
   var sources = require(path.join(ROOT, 'src', 'services', 'sources.js'));
-  var noticeSource = { id: 'ndrc-notice', name: '国家发展改革委价格监测中心', url: 'https://example.invalid/' };
-  var goodText = '根据国家发展改革委有关成品油价格调整的通知，自2026年12月10日24时起，' +
-    '国内成品油价格按机制下调，调整幅度为：92号汽油每升下调0.08元，95号汽油每升下调0.08元，' +
-    '98号汽油每升下调0.10元，0号柴油每升下调0.08元。';
+  var noticeSource = { id: 'ndrc-notice', name: '国家发展改革委价格司', url: 'https://example.invalid/' };
+  // ⚠ 发改委公告只给吨价、只分汽/柴油两类，**不给**每升四油品幅度。
+  // 这里按真实公告的形态拼正文，不再假设「92号汽油每升下调0.08元」那种写法。
+  var ndrcHtml = function (body, title, pubDate) {
+    return '<html><head>' +
+      '<meta name="ArticleTitle" content="' + title + '">' +
+      '<meta name="PubDate" content="' + pubDate + '">' +
+      '</head><body><div class="article"><div class="article_l">' +
+      '<div class="article_con article_con_title"><div class=TRS_Editor><div>' + body + '</div></div></div>' +
+      '</div><div class="article_r"></div></div></body></html>';
+  };
+  var goodText = ndrcHtml(
+    '根据国际市场油价变化情况，自12月10日24时起，国内汽、柴油（标准品）价格每吨分别下调645元、625元。',
+    '2026年12月10日国内成品油价格调整',
+    '2026-12-10 10:00:00'
+  );
   var parsedGood = sources.PARSERS.ndrcNotice(goodText);
   await collector.saveNotice(noticeSource, parsedGood);
   var goodKey = shared.dedupKey(noticeSource.id, parsedGood.title, parsedGood.executeAt);
   var rowGood = await dao.notices.findByDedupKey(goodKey);
   check('正文完整的公告入库后 review_status 是 approved',
     !!rowGood && rowGood.reviewStatus === 'approved', rowGood && rowGood.reviewStatus);
+  check('官方吨价入库了（汽/柴油，元/吨）',
+    !!rowGood && rowGood.tonChanges && rowGood.tonChanges.gasoline === -645 &&
+    rowGood.tonChanges.diesel === -625, rowGood && JSON.stringify(rowGood.tonChanges));
+  check('官方方向入库了', !!rowGood && rowGood.direction === 'down', rowGood && rowGood.direction);
+  check('公告发布日期入库了', !!rowGood && rowGood.announcedAt === '2026-12-10', rowGood && rowGood.announcedAt);
+  check('公告的每升四油品幅度留空（公告不给这一项）',
+    !!rowGood && Object.keys(rowGood.changes || {}).length === 0, rowGood && JSON.stringify(rowGood.changes));
+  check('可信公告的摘要说的是吨价',
+    !!rowGood && rowGood.summary.indexOf('元/吨') >= 0, rowGood && rowGood.summary);
   var publicList = await dao.notices.listPublic('official', 50, 0);
   check('可信公告对外可见',
     !!rowGood && publicList.some(function (n) { return n.id === rowGood.id; }));
 
-  // 只写了一个油品 —— 缺的两个是猜不出来的，不能发布
-  var parsedBad = sources.PARSERS.ndrcNotice('自2026年12月20日24时起，92号汽油每升下调0.10元。');
+  // 方向解析不出来 —— 替来源猜方向就是编结论，不能发布
+  var parsedBad = sources.PARSERS.ndrcNotice(ndrcHtml(
+    '根据国际市场油价变化情况，国内汽、柴油价格适当调整。',
+    '2026年12月20日国内成品油价格适当调整',
+    '2026-12-20 10:00:00'
+  ));
   await collector.saveNotice(noticeSource, parsedBad);
   var badKey = shared.dedupKey(noticeSource.id, parsedBad.title, parsedBad.executeAt);
   var rowBad = await dao.notices.findByDedupKey(badKey);
-  check('残缺公告入库后是 pending', !!rowBad && rowBad.reviewStatus === 'pending',
+  check('方向不明的公告入库后是 pending', !!rowBad && rowBad.reviewStatus === 'pending',
     rowBad && rowBad.reviewStatus);
-  check('残缺公告不对外可见',
+  check('存疑公告不对外可见',
     !!rowBad && !(await dao.notices.listPublic('official', 50, 0)).some(function (n) { return n.id === rowBad.id; }));
-  check('残缺公告的摘要不谎称「逐项列明各油品」',
-    !!rowBad && rowBad.summary.indexOf('逐项列明') < 0, rowBad && rowBad.summary);
+  check('存疑公告的摘要不谎称每升幅度',
+    !!rowBad && rowBad.summary.indexOf('元/升') < 0, rowBad && rowBad.summary);
+
+  console.log('\n--- 挂牌价测算：每升四油品幅度（端到端） ---');
+  var measure = require(path.join(ROOT, 'src', 'services', 'measure.js'));
+  // 灌一段挂牌价快照：生效日之前是旧价，生效日之后是新价
+  var pushHistory = async function (rows) {
+    await dao.history.upsertMany(rows);
+  };
+  var buildRows = function (regionList, pairs) {
+    var rows = [];
+    regionList.forEach(function (r) {
+      shared.FUELS.forEach(function (fuel) {
+        pairs.forEach(function (p) {
+          rows.push({ regionCode: r.code, fuelId: fuel.id, date: p[0], price: p[1], source: 'qiyoujiage' });
+        });
+      });
+    });
+    return rows;
+  };
+  // 常规：生效日 2027-03-10，次日挂出新价（8.99 → 8.86）
+  await pushHistory(buildRows(shared.REGIONS, [
+    ['2027-03-09', 8.99], ['2027-03-10', 8.99], ['2027-03-11', 8.86]
+  ]));
+  var measured = await measure.measureOne('2027-03-10');
+  check('四油品幅度都测算出来了',
+    shared.FUELS.every(function (f) { return typeof measured[f.id] === 'number'; }),
+    JSON.stringify(measured));
+  check('测算出的方向是下调',
+    measured['92'] < 0 && measured['0'] < 0, JSON.stringify(measured));
+  check('测算幅度就是前后快照的差值',
+    Math.abs(measured['92'] - (8.86 - 8.99)) < 0.0001, JSON.stringify(measured));
+
+  // 来源站提前挂价：变价发生在生效日当天，也要算对
+  await pushHistory(buildRows(shared.REGIONS, [
+    ['2027-06-09', 9.50], ['2027-06-10', 9.37], ['2027-06-11', 9.37]
+  ]));
+  var measuredEarly = await measure.measureOne('2027-06-10');
+  check('站点提前挂出新价时幅度照样算得对',
+    Math.abs(measuredEarly['92'] - (9.37 - 9.50)) < 0.0001, JSON.stringify(measuredEarly));
+
+  // 样本太少：中位数不可信，不给结论
+  await pushHistory(buildRows([shared.REGIONS[0]], [
+    ['2027-09-09', 8.00], ['2027-09-10', 8.00], ['2027-09-11', 7.87]
+  ]));
+  var measuredThin = await measure.measureOne('2027-09-10');
+  check('样本太少时不给结论',
+    Object.keys(measuredThin).length === 0, JSON.stringify(measuredThin));
+
+  check('方向矛盾时不摆测算值', !measure.agreesWithDirection(measured, 'up'), '');
+  check('方向一致时摆测算值', measure.agreesWithDirection(measured, 'down'), '');
 
   console.log('\n--- 发送失败不再永久占住去重键 ---');
   var retryKey = 'selftest::retry::key';

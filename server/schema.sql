@@ -52,7 +52,14 @@ CREATE TABLE IF NOT EXISTS oil_notices (
   kind          TEXT NOT NULL DEFAULT 'official',
   title         TEXT,
   published_at  TIMESTAMPTZ,
+  -- 公告发布日（发改委公告在执行当天发布，与 execute_at 多数同一天）
+  announced_at  DATE,
   execute_at    DATE,
+  -- 调价方向 up/down/flat。方向单独存：吨价解析不出来时靠它表达方向
+  direction     TEXT,
+  -- 官方公布的吨价幅度（汽/柴油，元/吨）：{ gasoline: -645, diesel: -625 }
+  -- 公告只给吨价、只分汽/柴油两类，不给四油品每升幅度
+  ton_changes   JSONB NOT NULL DEFAULT '{}'::jsonb,
   changes       JSONB NOT NULL DEFAULT '{}'::jsonb,
   summary       TEXT,
   prices        JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -158,6 +165,9 @@ CREATE TABLE IF NOT EXISTS collector_runs (
 -- 老库补列：CREATE TABLE IF NOT EXISTS 不会改动已存在的表，
 -- 部署脚本每次都会跑这个文件，所以补列放这里（重复执行安全）。
 ALTER TABLE oil_windows ADD COLUMN IF NOT EXISTS forecast_direction TEXT;
+ALTER TABLE oil_notices ADD COLUMN IF NOT EXISTS announced_at DATE;
+ALTER TABLE oil_notices ADD COLUMN IF NOT EXISTS direction TEXT;
+ALTER TABLE oil_notices ADD COLUMN IF NOT EXISTS ton_changes JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS target_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS subscribe_used_at TIMESTAMPTZ;
 

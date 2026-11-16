@@ -136,10 +136,12 @@
         </view>
         <view class="notice-preview-body">
           <text class="notice-preview-title">{{notice.title}}</text>
+          <text wx:if="{{notice.officialText}}" class="notice-preview-official">{{notice.officialText}}</text>
           <text class="notice-preview-desc">
             <text wx:if="{{notice.value === '--'}}" class="{{notice.changeDirection}}">{{notice.fuelName}} 调价幅度待公布</text>
             <text wx:else class="{{notice.changeDirection}}">{{notice.fuelName}}每升{{notice.verb}} {{notice.value}} 元</text> · 查看通知详情 ›
           </text>
+          <text wx:if="{{notice.measured}}" class="notice-measured-tag">每升幅度据各地挂牌价测算，非官方公布</text>
         </view>
       </view>
     </view>
@@ -190,6 +192,7 @@
     <text class="detail-title">{{notice.title}}</text>
     <view class="sheet-body" style="margin-top:12rpx">{{notice.executeText}}</view>
     <view class="sheet-body" style="margin-top:8rpx">{{notice.summaryText}}</view>
+    <text wx:if="{{notice.measured}}" class="notice-measured-tag" style="margin-top:10rpx">每升幅度据各地挂牌价测算，非官方公布</text>
     <view class="detail-price-grid">
       <view wx:for="{{notice.prices}}" wx:key="id" class="detail-price">
         <text class="detail-price-name">{{item.name}}</text>

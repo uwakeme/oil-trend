@@ -40,7 +40,7 @@ var NUMERIC_COLUMNS = {
  * 页面拿到的一律是日期字符串，所以这里必须对齐。
  */
 var DATE_COLUMNS = {
-  date: 1, changeat: 1, executeat: 1, cyclestart: 1
+  date: 1, changeat: 1, executeat: 1, cyclestart: 1, announcedat: 1
 };
 
 /**
@@ -150,6 +150,20 @@ const history = {
     }
     sql += ' ORDER BY date ASC';
     var rows = await db.query(sql, params);
+    return mapRows(rows);
+  },
+
+  /**
+   * 取一段日期范围内的全部历史价行。
+   *
+   * 「四油品每升幅度测算」要用它：给定调价执行日，
+   * 找出执行日前后的挂牌价快照，算出这次调价实际落了多少元/升。
+   */
+  async listBetween(fromDate, toDate) {
+    var rows = await db.query(
+      'SELECT * FROM oil_price_history WHERE date >= $1 AND date <= $2 ORDER BY region_code, fuel_id, date',
+      [fromDate, toDate]
+    );
     return mapRows(rows);
   },
 
@@ -280,6 +294,23 @@ const notices = {
    * 旧的那条 pending 会永远留在库里、新的 approved 又插一条。
    * 所以按 (来源, 标题) 再回退查一次。
    */
+  /**
+   * 按 (来源, 标题) 找最近的一条通知，不限状态。
+   *
+   * 采集器靠它在抓详情页之前判断「这条公告是不是已经处理过了」——
+   * 已入库的公告不再重复抓详情，减少对来源站点的请求。
+   */
+  async findBySourceTitle(sourceId, title) {
+    var rows = await db.query(
+      'SELECT * FROM oil_notices WHERE title = $1 ORDER BY id DESC',
+      [title]
+    );
+    var matched = mapRows(rows).filter(function (n) {
+      return n.source && n.source.sourceId === sourceId;
+    });
+    return matched.length ? matched[0] : null;
+  },
+
   async findPendingBySourceTitle(sourceId, title) {
     var rows = await db.query(
       "SELECT * FROM oil_notices WHERE review_status = 'pending' AND title = $1 ORDER BY id DESC",
@@ -293,14 +324,19 @@ const notices = {
 
   async insert(doc) {
     var rows = await db.query(
-      'INSERT INTO oil_notices (dedup_key, kind, title, published_at, execute_at, changes, summary, prices, source, review_status, raw) ' +
-      'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb, $10, $11) RETURNING *',
+      'INSERT INTO oil_notices (dedup_key, kind, title, published_at, announced_at, execute_at, direction, ton_changes, changes, summary, prices, source, review_status, raw) ' +
+      'VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11::jsonb, $12::jsonb, $13, $14) RETURNING *',
       [
         doc.dedupKey,
         doc.kind || 'official',
         doc.title || null,
         doc.publishedAt || null,
+        doc.announcedAt || null,
         doc.executeAt || null,
+        doc.direction || null,
+        // 官方吨价（汽/柴油，元/吨）：公告只给这个
+        JSON.stringify(doc.tonChanges || {}),
+        // 每升四油品幅度：公告不给，留空；展示层另给测算值
         JSON.stringify(doc.changes || {}),
         doc.summary || null,
         JSON.stringify(doc.prices || {}),
@@ -320,16 +356,20 @@ const notices = {
    */
   async update(id, doc) {
     var rows = await db.query(
-      'UPDATE oil_notices SET title = $2, published_at = $3, execute_at = $4, changes = $5::jsonb, ' +
-      'summary = $6, source = $7::jsonb, review_status = $8, raw = $9, ' +
+      'UPDATE oil_notices SET title = $2, published_at = $3, announced_at = $4, execute_at = $5, ' +
+      'direction = $6, ton_changes = $7::jsonb, changes = $8::jsonb, ' +
+      'summary = $9, source = $10::jsonb, review_status = $11, raw = $12, ' +
       // dedup_key 也要能改：解析器修好后补上执行日期，键就变了，
       // 不更新的话下一轮又按新键去查，还是找不到这一行。
-      'dedup_key = COALESCE($10, dedup_key) WHERE id = $1 RETURNING *',
+      'dedup_key = COALESCE($13, dedup_key) WHERE id = $1 RETURNING *',
       [
         id,
         doc.title || null,
         doc.publishedAt || null,
+        doc.announcedAt || null,
         doc.executeAt || null,
+        doc.direction || null,
+        JSON.stringify(doc.tonChanges || {}),
         JSON.stringify(doc.changes || {}),
         doc.summary || null,
         JSON.stringify(doc.source || {}),
