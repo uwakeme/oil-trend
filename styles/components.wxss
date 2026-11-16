@@ -174,7 +174,16 @@
   flex-direction: column;
   background: var(--paper);
   border-radius: 50rpx 50rpx 0 0;
-  padding: 24rpx 40rpx calc(48rpx + env(safe-area-inset-bottom));
+  /*
+   * 底部只留一点点呼吸空间，别再加 env(safe-area-inset-bottom)。
+   *
+   * ⚠️ 原生 tabBar 页面上，webview 的底边就是 tabBar 的顶边 ——
+   *   home indicator 那条安全区已经被 tabBar 占住了，webview 够不着。
+   *   这里再叠一次 env()，凭空多出 ~31px 死白带：
+   *   列表被滚动区截断后，下面空一大块，很难看（实测 54px）。
+   *   底部留 24rpx 就够，滚动区还能多露出 42px 内容。
+   */
+  padding: 24rpx 40rpx 24rpx;
   box-sizing: border-box;
 }
 .sheet-scroll {
