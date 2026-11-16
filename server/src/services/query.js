@@ -183,7 +183,7 @@ function actionHome(payload) {
     return Promise.all([
       getHistoryByRegion(regionCode, from30),
       // 挂牌价测算：公告只给吨价，每升四油品幅度靠各地挂牌价的前后快照差值
-      notice ? measure.measureOne(notice.executeAt) : Promise.resolve({})
+      notice ? measure.measureOne(notice.executeAt, notice.tonChanges) : Promise.resolve({})
     ]).then(function (r1) {
       var historyByFuel = r1[0];
       var measuredRaw = r1[1];
@@ -330,7 +330,13 @@ function actionTrend(payload) {
     // 调价节点优先用官方公告：公告是权威来源，
     // 每升四油品幅度由各地挂牌价的前后快照差值测算（measure.js）。
     var execDates = notices.map(function (n) { return n.executeAt; });
-    return measure.measureMany(execDates).then(function (measuredByDate) {
+    // 按生效日把官方吨价带上：测算的合理区间要跟着公告走，
+    // 写死阈值会把大轮调价（如 645 元/吨 ≈ 0.5 元/升）整轮剔光。
+    var tonByDate = {};
+    notices.forEach(function (n) {
+      if (n.executeAt) tonByDate[n.executeAt] = n.tonChanges || {};
+    });
+    return measure.measureMany(execDates, tonByDate).then(function (measuredByDate) {
       var officialEvents = notices
         .filter(function (n) { return n.executeAt && n.executeAt >= fromDate && n.executeAt <= today; })
         .map(function (n) {

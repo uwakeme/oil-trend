@@ -837,6 +837,41 @@ async function main() {
   check('样本太少时不给结论',
     Object.keys(measuredThin).length === 0, JSON.stringify(measuredThin));
 
+  // 大轮调价：官方 645 元/吨 ≈ 0.47 元/升，真实挂牌价降幅 0.52~0.56 元/升。
+  // ⚠️ 阈值早先写死 0.5 —— 这轮会被整轮剔光，界面一个每升幅度都出不来。
+  await pushHistory(buildRows(shared.REGIONS, [
+    ['2027-12-09', 8.91], ['2027-12-10', 8.91], ['2027-12-11', 8.39]
+  ]));
+  var measuredBig = await measure.measureOne('2027-12-10', { gasoline: -645, diesel: -625 });
+  check('大轮调价（官方 645 元/吨）照样算得出每升幅度',
+    Math.abs(measuredBig['92'] - (-0.52)) < 0.0001, JSON.stringify(measuredBig));
+  check('大轮调价时柴油同样算得出',
+    Math.abs(measuredBig['0'] - (-0.52)) < 0.0001, JSON.stringify(measuredBig));
+
+  // 超出官方吨价能解释的范围 → 脏数据，不采信
+  await pushHistory(buildRows(shared.REGIONS, [
+    ['2028-01-09', 8.91], ['2028-01-10', 8.91], ['2028-01-11', 7.94]
+  ]));
+  var measuredDirty = await measure.measureOne('2028-01-10', { gasoline: -645, diesel: -625 });
+  check('超出官方吨价范围的降幅不采信',
+    Object.keys(measuredDirty).length === 0, JSON.stringify(measuredDirty));
+
+  // 官方说降了不少、实测几乎没动 → 抓错快照，不采信
+  await pushHistory(buildRows(shared.REGIONS, [
+    ['2028-02-09', 8.91], ['2028-02-10', 8.91], ['2028-02-11', 8.86]
+  ]));
+  var measuredTiny = await measure.measureOne('2028-02-10', { gasoline: -645, diesel: -625 });
+  check('与官方吨价明显不符的降幅不采信',
+    Object.keys(measuredTiny).length === 0, JSON.stringify(measuredTiny));
+
+  // 官方吨价折算出的理论每升幅度（标准品：89 号汽油 0.725、0 号柴油 0.835）
+  check('645 元/吨折成每升约 0.47 元',
+    Math.abs(measure.boundOf(-645, 'gasoline').theo - 0.47) < 0.005,
+    JSON.stringify(measure.boundOf(-645, 'gasoline')));
+  check('625 元/吨折成每升约 0.52 元',
+    Math.abs(measure.boundOf(-625, 'diesel').theo - 0.52) < 0.005,
+    JSON.stringify(measure.boundOf(-625, 'diesel')));
+
   check('方向矛盾时不摆测算值', !measure.agreesWithDirection(measured, 'up'), '');
   check('方向一致时摆测算值', measure.agreesWithDirection(measured, 'down'), '');
 

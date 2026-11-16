@@ -450,12 +450,14 @@ async function main() {
     console.log('\n--- 挂牌价测算：每升四油品幅度 ---');
     // 灌一段挂牌价快照：生效日之前是旧价，生效日之后是新价。
     // 发改委公告只给吨价，每升幅度得靠这些快照算出来。
+    // ⚠️ 快照降幅必须与官方吨价对得上（645 元/吨 ≈ 0.47~0.63 元/升）：
+    // 测算值要跟官方吨价核对量级，对不上的一律不采信 —— 这条夹具就是钉这个。
     var histRows = [];
     shared.REGIONS.forEach(function (r) {
       shared.FUELS.forEach(function (fuel) {
         histRows.push({ regionCode: r.code, fuelId: fuel.id, date: '2026-11-23', price: 8.99, source: 'qiyoujiage' });
         histRows.push({ regionCode: r.code, fuelId: fuel.id, date: '2026-11-24', price: 8.99, source: 'qiyoujiage' });
-        histRows.push({ regionCode: r.code, fuelId: fuel.id, date: '2026-11-25', price: 8.86, source: 'qiyoujiage' });
+        histRows.push({ regionCode: r.code, fuelId: fuel.id, date: '2026-11-25', price: 8.47, source: 'qiyoujiage' });
       });
     });
     await dao.history.upsertMany(histRows);
@@ -511,8 +513,8 @@ async function main() {
     check('home 的通知带官方方向',
       home.notice.direction === 'down', home.notice.direction);
     check('home 的通知带挂牌价测算出的每升幅度',
-      !!home.notice.measuredChanges && home.notice.measuredChanges['92'] === -0.13 &&
-      home.notice.measuredChanges['0'] === -0.13, JSON.stringify(home.notice.measuredChanges));
+      !!home.notice.measuredChanges && home.notice.measuredChanges['92'] === -0.52 &&
+      home.notice.measuredChanges['0'] === -0.52, JSON.stringify(home.notice.measuredChanges));
     check('home 的通知标明每升幅度是测算值',
       home.notice.changesMeasured === true, String(home.notice.changesMeasured));
     check('公告的官方每升幅度仍然是空的（不把测算值混进官方字段）',
@@ -566,8 +568,13 @@ async function main() {
       indexPage.data.notice.officialText);
     check('首页通知标明每升幅度是挂牌价测算值',
       indexPage.data.notice.measured === true, String(indexPage.data.notice.measured));
-    check('首页通知的每升幅度就是测算出来的 0.13',
-      indexPage.data.notice.value === '0.13', '实际：' + indexPage.data.notice.value);
+    check('首页通知的每升幅度就是测算出来的 0.52',
+      indexPage.data.notice.value === '0.52', '实际：' + indexPage.data.notice.value);
+    check('首页通知写明了官方吨价与每升测算的口径差',
+      !!indexPage.data.notice.measuredNote &&
+      indexPage.data.notice.measuredNote.indexOf('标准品最高零售价') >= 0 &&
+      indexPage.data.notice.measuredNote.indexOf('挂牌价') >= 0,
+      indexPage.data.notice.measuredNote);
     check('首页有来源提示条', !!indexPage.data.sourceText);
     // ⚠️ 这条是「api 层真的跑过」的证据：
     // 后端给的 mode 是 'server'，只有 stampSource 归一成 'live' 才会是这句文案。
@@ -627,6 +634,11 @@ async function main() {
     check('调价页通知标明每升幅度是挂牌价测算值',
       noticePage.data.notices[0].measured === true,
       String(noticePage.data.notices[0].measured));
+    check('调价页通知写明了官方吨价与每升测算的口径差',
+      !!noticePage.data.notices[0].measuredNote &&
+      noticePage.data.notices[0].measuredNote.indexOf('标准品最高零售价') >= 0 &&
+      noticePage.data.notices[0].measuredNote.indexOf('挂牌价') >= 0,
+      noticePage.data.notices[0].measuredNote);
     check('调价页只显示可信公告',
       noticePage.data.notices.every(function (n) {
         return String((n.raw || {}).executeAt || '').slice(0, 10) !== parsedPartial.executeAt;

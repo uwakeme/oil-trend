@@ -445,6 +445,8 @@ Page({
         officialText: noticeOfficial,
         // 每升幅度是不是挂牌价测算值
         measured: noticeMeasured,
+        // 口径说明（官方吨价 vs 挂牌价测算，四处展示共用同一句）
+        measuredNote: fmt.MEASURED_NOTE,
         prices: noticeEmpty ? [] : noticePrices,
         sourceName: noticeEmpty ? '' : noticeSourceName,
         // 后端通知可能没有发布时间，缺了就不写「发布于 …」，别留个空壳

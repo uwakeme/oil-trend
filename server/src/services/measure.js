@@ -10,7 +10,9 @@
  * 算法：
  *   1. 对每个 (地区, 油品)，在历史价序列里找**生效日附近最后一次价格变化**；
  *   2. 变化点前一条 = 调价前挂牌价，变化点 = 调价后挂牌价，差值 = 本次幅度；
- *   3. 同一个油品在各省的差值取中位数（个别省份单独调价不影响整体）。
+ *   3. 同一个油品在各省的差值取中位数（个别省份单独调价不影响整体）；
+ *   4. 差值要落在「官方吨价换算出的合理区间」内，否则当脏数据剔除
+ *      （这一轮没有官方吨价时用绝对兜底上限）。
  *
  * 为什么按「变化点」而不是按日期直接取行：
  *   来源站可能提前几天就把新挂牌价挂出来（也可能在生效日当天才挂）。
@@ -21,8 +23,31 @@
  */
 const dao = require('../dao');
 
-/** 一次调价的合理幅度上限（元/升）：超出算异常值，剔除 */
-var MAX_REASONABLE = 0.5;
+/**
+ * 没有官方吨价时的绝对兜底上限（元/升）。
+ *
+ * ⚠️ 这里原来写死 0.5。2026-11-12 那轮官方 645 元/吨，真实降幅 0.52~0.56 元/升，
+ * 全被当成异常值剔光 → 一个每升幅度都算不出来，界面等于没这功能。
+ * 阈值必须跟着官方吨价走，见 boundOf()。
+ */
+var MAX_REASONABLE = 1.0;
+
+/** 官方吨价 → 每升理论幅度用的密度（kg/L）：标准品是 89 号汽油、0 号车用柴油 */
+var DENSITY = { gasoline: 0.725, diesel: 0.835 };
+
+/**
+ * 允许偏差比例：实测与理论值的差。
+ *
+ * 官方给的是标准品吨价，各标号另有质量差额、密度也不同，
+ * 实测本来就会偏离理论值 —— 2026-11-12 那轮理论 0.47，实测 0.52~0.56。
+ */
+var TOL_RATIO = 0.35;
+
+/** 允许偏差的绝对下限（元/升）：挂牌价只精确到 0.01，容差太窄会把小调价也剔掉 */
+var TOL_FLOOR = 0.15;
+
+/** 油品 → 官方吨价分类（92/95/98 是汽油，0 是柴油） */
+var FUEL_GROUP = { '92': 'gasoline', '95': 'gasoline', '98': 'gasoline', '0': 'diesel' };
 
 /** 至少要有几个省的数据才给结论 —— 样本太少时中位数不可信 */
 var MIN_REGIONS = 3;
@@ -64,12 +89,37 @@ function median(list) {
 }
 
 /**
+ * 按官方吨价算出这一轮允许的每升幅度区间。
+ *
+ * 官方给的是标准品吨价（89 号汽油 / 0 号车用柴油），折成每升是「理论值」；
+ * 各标号另有质量差额、密度也不同，实测会偏离理论值，所以给一个容差带。
+ *
+ * 实测 2026-11-12 那轮：官方 645 元/吨 → 理论 0.47 元/升，
+ * 区间 [0.30, 0.63]；实测 92# 0.52 / 95# 0.55 / 98# 0.56 都在带内，
+ * 而海南 98# 那种 -0.97 的脏数据落在带外，被剔掉。
+ *
+ * 没有官方吨价时返回 null —— 调用方改用绝对兜底上限。
+ */
+function boundOf(tonAmount, group) {
+  var ton = Math.abs(Number(tonAmount));
+  if (!isFinite(ton) || ton <= 0) return null;
+  var rho = DENSITY[group] || DENSITY.gasoline;
+  var theo = ton / 1000 * rho;
+  var tol = Math.max(theo * TOL_RATIO, TOL_FLOOR);
+  return {
+    theo: round2(theo),
+    min: Math.max(0, round2(theo - tol)),
+    max: round2(theo + tol)
+  };
+}
+
+/**
  * 算一组生效日对应的四油品每升幅度。
  *
  * 返回 { 'YYYY-MM-DD': { '92': -0.13, '95': -0.13, ... } }
  * 某个油品算不出来就不出现在结果里 —— 不填 0，不填猜测值。
  */
-async function measureMany(executeAtList) {
+async function measureMany(executeAtList, tonByDate) {
   var dates = [];
   (executeAtList || []).forEach(function (d) {
     var s = String(d || '').slice(0, 10);
@@ -96,6 +146,8 @@ async function measureMany(executeAtList) {
   dates.forEach(function (date) {
     var winStart = shiftDate(date, -EARLY_DAYS);
     var winEnd = shiftDate(date, AFTER_DAYS);
+    // 这一轮官方给的汽/柴油吨价（没有就用绝对兜底）
+    var ton = (tonByDate || {})[date] || {};
     var byFuel = {};
 
     Object.keys(groups).forEach(function (regionCode) {
@@ -114,8 +166,16 @@ async function measureMany(executeAtList) {
         if (idx <= 0) return;
         var delta = round2(list[idx].price - list[idx - 1].price);
         if (!isFinite(delta) || delta === 0) return;
-        // 超出一轮调价的合理幅度 → 当异常值剔除，不参与中位数
-        if (Math.abs(delta) > MAX_REASONABLE) return;
+        // 幅度要落在官方吨价换算出的合理区间里，否则当脏数据剔除。
+        // ⚠️ 上限不能写死：645 元/吨那轮真实降幅就有 0.56 元/升，
+        // 写死 0.5 会把这轮所有省的数据剔光。
+        var group = FUEL_GROUP[fuelId];
+        var bound = boundOf(ton[group], group);
+        var maxAbs = bound ? bound.max : MAX_REASONABLE;
+        var minAbs = bound ? bound.min : 0;
+        if (Math.abs(delta) > maxAbs) return;
+        // 官方说降了这么多，实测却几乎没动 → 抓错了快照，不参与中位数
+        if (Math.abs(delta) < minAbs) return;
         if (!byFuel[fuelId]) byFuel[fuelId] = [];
         byFuel[fuelId].push(delta);
       });
@@ -135,9 +195,12 @@ async function measureMany(executeAtList) {
 /**
  * 单个生效日的幅度。
  */
-async function measureOne(executeAt) {
-  var res = await measureMany([executeAt]);
-  return res[String(executeAt || '').slice(0, 10)] || {};
+async function measureOne(executeAt, tonChanges) {
+  var date = String(executeAt || '').slice(0, 10);
+  var tonByDate = {};
+  if (date) tonByDate[date] = tonChanges || {};
+  var res = await measureMany([executeAt], tonByDate);
+  return res[date] || {};
 }
 
 /**
@@ -164,7 +227,12 @@ module.exports = {
   median: median,
   agreesWithDirection: agreesWithDirection,
   shiftDate: shiftDate,
+  boundOf: boundOf,
   MAX_REASONABLE: MAX_REASONABLE,
+  DENSITY: DENSITY,
+  TOL_RATIO: TOL_RATIO,
+  TOL_FLOOR: TOL_FLOOR,
+  FUEL_GROUP: FUEL_GROUP,
   MIN_REGIONS: MIN_REGIONS,
   EARLY_DAYS: EARLY_DAYS,
   AFTER_DAYS: AFTER_DAYS

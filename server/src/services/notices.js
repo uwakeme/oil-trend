@@ -67,7 +67,13 @@ function actionNotices(payload) {
     var today = query.todayStr();
 
     // 挂牌价测算：一次查这一页所有公告的生效日
-    return measure.measureMany(notices.map(function (n) { return n.executeAt; })).then(function (measuredByDate) {
+    // 按生效日带上官方吨价 —— 测算的合理区间跟着公告走
+    var execDates = notices.map(function (n) { return n.executeAt; });
+    var tonByDate = {};
+    notices.forEach(function (n) {
+      if (n.executeAt) tonByDate[n.executeAt] = n.tonChanges || {};
+    });
+    return measure.measureMany(execDates, tonByDate).then(function (measuredByDate) {
       return {
         region: { code: region.code, fullName: region.name + ' · ' + region.city },
         window: query.buildWindow(win),

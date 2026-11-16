@@ -68,7 +68,7 @@
         <text>{{item.executeText}}</text>
         <text class="notice-change {{item.direction}}">{{item.changeText}}</text>
       </view>
-      <text wx:if="{{item.measured}}" class="notice-measured-tag">每升幅度据各地挂牌价测算，非官方公布</text>
+      <text wx:if="{{item.measured}}" class="notice-measured-tag">{{item.measuredNote}}</text>
     </view>
 
   </block>
@@ -82,7 +82,7 @@
       </view>
       <text class="notice-detail-title">{{detail.title}}</text>
       <view class="sheet-body" style="margin-top:12rpx">{{detail.summary}}</view>
-      <text wx:if="{{detail.measured}}" class="notice-measured-tag" style="margin-top:10rpx">每升幅度据各地挂牌价测算，非官方公布</text>
+      <text wx:if="{{detail.measured}}" class="notice-measured-tag" style="margin-top:10rpx">{{detail.measuredNote}}</text>
       <view class="detail-price-grid">
         <view wx:for="{{detail.prices}}" wx:key="id" class="detail-price">
           <text class="detail-price-name">{{item.name}}</text>

@@ -238,6 +238,17 @@ function noticeOfficialText(notice) {
 }
 
 /**
+ * 测算值的口径说明。
+ *
+ * 官方给的是「标准品（89 号汽油 / 0 号车用柴油）最高零售价」，单位元/吨；
+ * 每升幅度是拿各地挂牌价的前后快照差值算出来的 —— 两者口径不同，
+ * 摆在一起必须说清楚，否则用户会以为官方值和测算值对不上。
+ *
+ * 四处展示（首页卡片、首页详情、调价列表、调价详情）都读这一个值。
+ */
+var MEASURED_NOTE = '官方为标准品最高零售价（元/吨）；每升幅度按各地挂牌价前后快照测算';
+
+/**
  * 每升四油品幅度取哪一份。
  *
  * 官方公布了每升幅度就用官方的；官方没公布（发改委公告不给这一项）
@@ -275,6 +286,7 @@ module.exports = {
   directionText: directionText,
   noticeOfficialText: noticeOfficialText,
   noticeDeltas: noticeDeltas,
+  MEASURED_NOTE: MEASURED_NOTE,
   SOURCE_MODE_TEXT: SOURCE_MODE_TEXT,
   SYNC_STATUS_META: SYNC_STATUS_META
 };

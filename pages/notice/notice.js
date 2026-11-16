@@ -128,6 +128,8 @@ Page({
         officialText: fmt.noticeOfficialText(n),
         // 每升幅度是不是挂牌价测算值
         measured: deltaSource.measured,
+        // 口径说明（官方吨价 vs 挂牌价测算，四处展示共用同一句）
+        measuredNote: fmt.MEASURED_NOTE,
         raw: n
       };
     });
@@ -243,6 +245,8 @@ Page({
         summary: rawOfficialText || raw.summary,
         // 每升幅度是不是挂牌价测算值
         measured: rawDeltaSource.measured,
+        // 口径说明（官方吨价 vs 挂牌价测算，四处展示共用同一句）
+        measuredNote: fmt.MEASURED_NOTE,
         verb: rawMeta.verb,
         direction: rawMeta.direction,
         prices: prices,
