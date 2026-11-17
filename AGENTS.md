@@ -71,6 +71,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
   —— 坐标系全程 **GCJ-02**，与 `wx.getLocation` 的 `type:'gcj02'` 对齐
 - **演示数据日期整体平移**（`utils/demo-clock.js`，锚点 `config.demoAnchorDate`），保证长期打开数据仍然新鲜
 - **真源在 `data/`，`server/src/shared/shared.js` 是生成产物**（`scripts/sync-shared.js` 生成 + 一致性断言）。改完 `data/` 必须重跑同步脚本；**手改生成文件会被下次覆盖**
+- **后端地址不对外公开**：仓库是 public，README、GitHub Pages 主页等对外文档只写「部署在自己的服务器上」，**不要出现真实后端域名**（配置里必须写的 `apiBaseUrl` 除外）
 
 ## 微信小程序特有坑（都踩过，改代码前先看）
 
@@ -221,7 +222,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 ## 项目现状（2026-11）
 
 五个页面已写完并逐页验证过。**后端已上线**：`server/`（Node + Express + PostgreSQL）
-部署在 `oil-trend.uwakeme.top`，采集器每 30 分钟从**油价网**（xmgcn，HTTPS）抓
+部署在自己的服务器上，采集器每 30 分钟从**油价网**（xmgcn，HTTPS）抓
 31 省挂牌价 + 最近 30 期历史（走势图能铺满近一年），**下次调价预测**另由**汽油价格网**
 （qiyoujiage）提供并兼作兜底与交叉校核，页面显示的是真实挂牌价
 （解析规则见 `server/src/services/sources.js`，分工见上文「数据源现状」）。

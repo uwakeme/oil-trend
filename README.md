@@ -161,7 +161,7 @@ module.exports = {
 
 ## 后端与接口
 
-自建后端跑在 `server/`，Node 18 + Express + PostgreSQL，部署在 `https://oil-trend.uwakeme.top`。微信云开发那套已经下线，云函数目录也删了。
+自建后端跑在 `server/`，Node 18 + Express + PostgreSQL，部署在自己的服务器上，**后端地址不对外公开**。微信云开发那套已经下线，云函数目录也删了。
 
 前端只认一条链路：
 
@@ -308,4 +308,4 @@ MIT，见 [LICENSE](./LICENSE)。
 [issues-shield]: https://img.shields.io/github/issues/uwakeme/oil-trend.svg?style=for-the-badge
 [issues-url]: https://github.com/uwakeme/oil-trend/issues
 [backend-shield]: https://img.shields.io/badge/backend-online-brightgreen?style=for-the-badge
-[backend-url]: https://oil-trend.uwakeme.top/health
+[backend-url]: https://github.com/uwakeme/oil-trend/tree/main/server

@@ -395,17 +395,6 @@ img { max-width: 100%; display: block; }
 .scripts td:first-child { padding-right: 18px; white-space: nowrap; }
 .scripts code { font-family: var(--font-num); font-size: 12.5px; color: var(--ink); }
 .scripts td:last-child { color: var(--muted); line-height: 1.65; }
-.live {
-  display: inline-flex; align-items: center; gap: 8px; margin-top: 16px;
-  font-size: 13px; color: var(--muted);
-}
-.live i {
-  width: 7px; height: 7px; border-radius: 50%; background: var(--green);
-  box-shadow: 0 0 0 3px rgba(19, 122, 82, .16);
-}
-.live a { color: var(--green); text-decoration: none; border-bottom: 1px solid rgba(19, 122, 82, .35); }
-.live a:hover { border-bottom-color: var(--green); }
-
 /* ---------- 页脚 ---------- */
 .foot { background: var(--night); color: #8fa99c; padding: 52px 0 46px; border-top: 3px solid var(--amber); }
 .foot-in {
@@ -710,7 +699,6 @@ npm start</code><button class="copy" data-copy-target="#cmd-server">复制</butt
         <h3>接上自己的后端</h3>
         <p>后端是 Node 18 + Express + PostgreSQL。改后端地址只动 <code>config/index.js</code> 的 <code>apiBaseUrl</code> 一处，页面与数据层一行不用动。</p>
         <div class="warn"><b>域名要先进白名单。</b>公众平台的「服务器域名 → request 合法域名」里没配，请求会被直接拦掉，页面就一直显示演示数据。</div>
-        <p class="live"><i></i>线上后端 · <a href="https://oil-trend.uwakeme.top" target="_blank" rel="noopener">oil-trend.uwakeme.top</a></p>
       </div>
       <div class="reveal">
         <h3>改完先跑这几条</h3>
@@ -743,7 +731,6 @@ npm start</code><button class="copy" data-copy-target="#cmd-server">复制</butt
       <a href="https://github.com/uwakeme/oil-trend/releases" target="_blank" rel="noopener">Releases</a>
       <a href="https://github.com/uwakeme/oil-trend/tags" target="_blank" rel="noopener">标签</a>
       <a href="https://github.com/uwakeme/oil-trend/blob/main/LICENSE" target="_blank" rel="noopener">许可证</a>
-      <a href="https://oil-trend.uwakeme.top" target="_blank" rel="noopener">后端</a>
     </nav>
     <p class="foot-note">页面上的调价节点与地区价差取自仓库 data 目录里的真实文件；小程序界面里的价格随演示数据平移，不代表实时行情。</p>
   </div>
