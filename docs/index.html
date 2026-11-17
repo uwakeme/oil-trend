@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>油价势 · 微信油价与调价提醒小程序</title>
+<meta name="description" content="油价势是给车主用的油价微信小程序：本地 92#/95#/98#/0# 挂牌价、下一轮调价窗口、近一年阶梯线走势，降价还能提醒你。原生小程序 + Node/Express/PostgreSQL 自建后端。">
+<meta property="og:type" content="website">
+<meta property="og:title" content="油价势 · 查本地油价，等下一轮调价">
+<meta property="og:description" content="给车主用的油价小程序：本地挂牌价、调价窗口、阶梯线走势、降价提醒。">
+<meta property="og:image" content="https://uwakeme.github.io/oil-trend/assets/app-icon.png">
+<meta property="og:url" content="https://uwakeme.github.io/oil-trend/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="油价势 · 查本地油价，等下一轮调价">
+<meta name="twitter:description" content="给车主用的油价小程序：本地挂牌价、调价窗口、阶梯线走势、降价提醒。">
+<meta name="twitter:image" content="https://uwakeme.github.io/oil-trend/assets/app-icon.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23142c23'/%3E%3Cpath d='M5 22h7v-7h7v-5h8' fill='none' stroke='%23e9a928' stroke-width='2.6' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="assets/app-icon.png">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "油价势",
+  "alternateName": "Oil Trend",
+  "description": "给车主用的油价微信小程序：本地挂牌价、下一轮调价窗口、近一年阶梯线走势与降价提醒。",
+  "applicationCategory": "UtilitiesApplication",
+  "operatingSystem": "微信小程序",
+  "url": "https://github.com/uwakeme/oil-trend",
+  "codeRepository": "https://github.com/uwakeme/oil-trend",
+  "license": "https://github.com/uwakeme/oil-trend/blob/main/LICENSE",
+  "image": "https://uwakeme.github.io/oil-trend/assets/app-icon.png",
+  "author": { "@type": "Person", "url": "https://github.com/uwakeme" },
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "CNY" }
+}
+</script>
+<style>
+/* ===========================================================
+ * 油价势项目主页 —— 视觉沿用小程序的设计令牌
+ * 能源行情杂志 + 车载仪表：暖灰纸面 / 深墨绿 / 琥珀强调
+ * =========================================================== */
+:root {
+  --paper: #f5f2e9;
+  --paper-deep: #eae6da;
+  --ink: #17231e;
+  --muted: #6f7771;
+  --line: #dcd8cc;
+  --green: #137a52;
+  --green-soft: #e2f1e8;
+  --red: #ce493b;
+  --red-soft: #fae8e3;
+  --amber: #e9a928;
+  --amber-soft: #f7e8bc;
+  --amber-ink: #79510a;
+  --night: #142c23;
+  --night-2: #1d4a38;
+  --white: #fffef9;
+
+  --font-num: "Bahnschrift", "DIN Alternate", "Helvetica Neue", Arial, sans-serif;
+  --font-title: "Songti SC", "STSong", "Noto Serif CJK SC", "SimSun", serif;
+  --font-body: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+
+  --wrap: 1180px;
+  --rail: 3px;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.75;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+h1, h2, h3, h4 { font-family: var(--font-title); font-weight: 700; margin: 0; line-height: 1.25; }
+p { margin: 0; }
+a { color: inherit; }
+img { max-width: 100%; display: block; }
+
+.wrap { max-width: var(--wrap); margin: 0 auto; padding: 0 28px; }
+
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+
+/* ---------- 顶部导航 ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: rgba(245, 242, 233, .92);
+  backdrop-filter: saturate(1.4) blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.topbar-in {
+  max-width: var(--wrap);
+  margin: 0 auto;
+  padding: 0 28px;
+  height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 26px;
+}
+.brand { display: flex; align-items: center; gap: 9px; text-decoration: none; }
+.brand img { width: 26px; height: 26px; border-radius: 6px; }
+.brand b { font-family: var(--font-title); font-size: 17px; letter-spacing: 2px; }
+.brand span { font-family: var(--font-num); font-size: 10px; letter-spacing: 2.4px; color: var(--muted); padding-top: 3px; }
+.topnav { margin-left: auto; display: flex; align-items: center; gap: 22px; }
+.topnav a { font-size: 13.5px; color: var(--muted); text-decoration: none; transition: color .18s ease; }
+.topnav a:hover { color: var(--ink); }
+.gh-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 7px 14px; border: 1px solid var(--line); border-radius: 3px;
+  font-size: 13px; text-decoration: none; background: var(--white);
+  transition: border-color .18s ease, background .18s ease;
+}
+.gh-btn:hover { border-color: var(--ink); }
+.gh-btn svg { width: 15px; height: 15px; }
+
+/* ---------- 区块骨架 ---------- */
+.band { padding: 92px 0; }
+.band-rule { border-top: 1px solid var(--line); }
+.band-night { background: var(--night); color: var(--paper); }
+
+.sec-head { margin-bottom: 52px; max-width: 780px; }
+.sec-rail { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+.sec-rail i { display: block; width: 34px; height: var(--rail); background: var(--amber); }
+.eyebrow {
+  font-family: var(--font-num);
+  font-size: 11px; letter-spacing: 3.2px; text-transform: uppercase;
+  color: var(--muted);
+}
+.band-night .eyebrow { color: #8fa99c; }
+.sec-head h2 { font-size: clamp(28px, 4.2vw, 42px); letter-spacing: .5px; }
+.sec-sub { margin-top: 18px; font-size: 16.5px; color: var(--muted); max-width: 660px; }
+.band-night .sec-sub { color: #a8c0b3; }
+
+/* ---------- HERO ---------- */
+.hero {
+  background:
+    radial-gradient(1100px 520px at 78% -10%, rgba(233, 169, 40, .14), transparent 62%),
+    linear-gradient(160deg, #142c23 0%, #17382c 58%, #1d4a38 100%);
+  color: var(--paper);
+  padding: 76px 0 0;
+  position: relative;
+  overflow: hidden;
+}
+.hero::before {
+  content: "";
+  position: absolute; left: 0; right: 0; top: 0; height: 6px;
+  background: var(--amber);
+}
+.hero-in {
+  max-width: var(--wrap); margin: 0 auto; padding: 0 28px;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.02fr);
+  gap: 56px; align-items: center;
+  padding-bottom: 64px;
+}
+.hero h1 {
+  font-size: clamp(34px, 5.4vw, 58px);
+  line-height: 1.2;
+  letter-spacing: 1px;
+  margin: 20px 0 22px;
+}
+.hero .eyebrow { color: #8fa99c; }
+.hero-lede { font-size: 17px; line-height: 1.85; color: #c2d4cb; max-width: 480px; }
+.hero-cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 9px;
+  padding: 12px 22px; border-radius: 3px; text-decoration: none;
+  font-size: 14.5px; font-weight: 500;
+  transition: transform .18s ease, background .18s ease, border-color .18s ease;
+}
+.btn:hover { transform: translateY(-1px); }
+.btn-primary { background: var(--amber); color: var(--night); }
+.btn-primary:hover { background: #f2b83e; }
+.btn-ghost { border: 1px solid rgba(245, 242, 233, .3); color: var(--paper); }
+.btn-ghost:hover { border-color: rgba(245, 242, 233, .7); }
+.facts {
+  list-style: none; margin: 42px 0 0; padding: 22px 0 0;
+  border-top: 1px solid rgba(245, 242, 233, .16);
+  display: flex; flex-wrap: wrap; gap: 10px 30px;
+}
+.facts li { font-size: 12.5px; color: #9db3a8; letter-spacing: .4px; }
+.facts b { font-family: var(--font-num); color: var(--amber); font-size: 15px; margin-right: 5px; }
+
+/* ---------- HERO 仪表卡 ---------- */
+.chart-card {
+  margin: 0;
+  background: rgba(10, 26, 20, .42);
+  border: 1px solid rgba(245, 242, 233, .16);
+  border-radius: 4px;
+  padding: 22px 24px 18px;
+  position: relative;
+}
+.chart-card::before, .chart-card::after {
+  content: "";
+  position: absolute; width: 13px; height: 13px;
+  border: 1px solid var(--amber); opacity: .55;
+}
+.chart-card::before { left: -1px; top: -1px; border-right: 0; border-bottom: 0; }
+.chart-card::after { right: -1px; bottom: -1px; border-left: 0; border-top: 0; }
+.chart-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; margin-bottom: 6px;
+}
+.chart-title { font-size: 13px; color: #cfddd5; letter-spacing: .3px; }
+.chart-tag {
+  font-family: var(--font-num); font-size: 10.5px; letter-spacing: 1.4px;
+  color: var(--amber); border: 1px solid rgba(233, 169, 40, .45);
+  padding: 2px 7px; border-radius: 2px; white-space: nowrap;
+}
+.chart-svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart-note {
+  margin-top: 10px; padding-top: 13px; border-top: 1px solid rgba(245, 242, 233, .13);
+  font-size: 12.5px; line-height: 1.7; color: #93aa9e;
+}
+.chart-note b { color: var(--amber); font-weight: 500; }
+
+/* ---------- 界面截图 ---------- */
+.shots {
+  list-style: none; margin: 0; padding: 0;
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 18px;
+}
+.shot { min-width: 0; }
+.shot-img {
+  border: 1px solid var(--line); border-radius: 4px; overflow: hidden;
+  background: var(--white); box-shadow: 0 12px 26px -18px rgba(23, 35, 30, .45);
+}
+.shot-img img { width: 100%; height: auto; }
+.shot-idx {
+  font-family: var(--font-num); font-size: 11px; letter-spacing: 2px;
+  color: var(--amber-ink); margin-bottom: 10px;
+}
+.shot h3 { font-size: 16.5px; letter-spacing: .4px; }
+.shot h3 em { font-style: normal; color: var(--muted); font-family: var(--font-body); font-size: 13px; font-weight: 400; margin-left: 6px; }
+.shot p { font-size: 13.5px; color: var(--muted); line-height: 1.7; margin-top: 6px; }
+.shot-note {
+  margin-top: 34px; font-size: 12.5px; color: var(--muted);
+  display: flex; align-items: center; gap: 9px;
+}
+.shot-note::before { content: ""; width: 20px; height: 1px; background: var(--line); }
+
+/* ---------- 算法 ---------- */
+.formula {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-left: var(--rail) solid var(--amber);
+  border-radius: 3px;
+  padding: 30px 34px;
+  font-family: var(--font-title);
+  font-size: clamp(17px, 2.4vw, 23px);
+  letter-spacing: .6px;
+  line-height: 1.8;
+}
+.formula .op { color: var(--amber-ink); padding: 0 10px; }
+.formula .unit { font-size: .62em; color: var(--muted); letter-spacing: 0; }
+.formula-sub {
+  margin-top: 14px; font-family: var(--font-body); font-size: 13px;
+  color: var(--muted); letter-spacing: 0;
+}
+.model-grid {
+  margin-top: 40px;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 3px; overflow: hidden;
+}
+.model-card { background: var(--paper); padding: 26px 24px 24px; transition: background .2s ease; }
+.model-card:hover { background: var(--white); }
+.model-card h4 { font-size: 16px; margin-bottom: 10px; letter-spacing: .4px; }
+.model-card p { font-size: 13.5px; color: var(--muted); line-height: 1.8; }
+.model-card .mark {
+  font-family: var(--font-num); font-size: 11px; letter-spacing: 2px;
+  color: var(--amber-ink); margin-bottom: 12px;
+}
+.spread {
+  margin-top: 40px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px;
+}
+.spread-item {
+  border-top: 1px solid var(--ink); padding-top: 18px;
+}
+.spread-item .label { font-size: 13.5px; color: var(--muted); }
+.spread-item .big {
+  font-family: var(--font-num); font-variant-numeric: tabular-nums;
+  font-size: 34px; font-weight: 600; letter-spacing: -1px; margin: 8px 0 4px;
+}
+.spread-item .range { font-size: 13px; color: var(--muted); }
+.spread-item .range b { font-family: var(--font-num); color: var(--ink); font-weight: 600; }
+.example {
+  margin-top: 42px; padding: 26px 30px;
+  background: var(--paper-deep); border-radius: 3px;
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px;
+}
+.example .who { font-family: var(--font-title); font-size: 18px; letter-spacing: .6px; }
+.example .calc { font-family: var(--font-num); font-size: 19px; letter-spacing: .3px; }
+.example .calc em { font-style: normal; color: var(--muted); font-size: 15px; }
+.example .calc b { color: var(--green); font-weight: 600; }
+.example .tag {
+  font-size: 11.5px; color: var(--muted); border: 1px solid var(--line);
+  padding: 2px 8px; border-radius: 2px; margin-left: auto;
+}
+
+/* ---------- 数据来源 ---------- */
+.sources {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px;
+  background: rgba(245, 242, 233, .14);
+  border: 1px solid rgba(245, 242, 233, .14);
+  border-radius: 4px; overflow: hidden;
+}
+.source { background: var(--night); padding: 24px 22px 22px; min-width: 0; transition: background .2s ease; }
+.source:hover { background: #17382c; }
+.source .name { font-family: var(--font-title); font-size: 16.5px; letter-spacing: .4px; }
+.source .host { font-family: var(--font-num); font-size: 12px; color: #8fa99c; margin-top: 3px; word-break: break-all; }
+.source .role { margin-top: 14px; font-size: 13.5px; line-height: 1.8; color: #b6cbbf; }
+.source .proto {
+  display: inline-block; margin-top: 16px;
+  font-family: var(--font-num); font-size: 10.5px; letter-spacing: 1.6px;
+  padding: 3px 8px; border-radius: 2px;
+}
+.source .proto.https { color: #9fd3bb; border: 1px solid rgba(159, 211, 187, .4); }
+.source .proto.http { color: var(--amber); border: 1px solid rgba(233, 169, 40, .45); }
+
+.gates { margin-top: 46px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 46px; align-items: start; }
+.gates h3 { font-size: 19px; letter-spacing: .4px; margin-bottom: 6px; }
+.gates .lead { font-size: 13.5px; color: #a8c0b3; margin-bottom: 18px; }
+.gate-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 9px; }
+.gate-list li {
+  font-size: 13px; padding: 6px 13px; border-radius: 2px;
+  border: 1px solid rgba(245, 242, 233, .22); color: #cfe0d6;
+}
+.gate-list li::before { content: ""; display: inline-block; width: 5px; height: 5px; background: var(--amber); margin-right: 8px; vertical-align: 2px; }
+.rules { list-style: none; margin: 0; padding: 0; }
+.rules li { display: flex; gap: 14px; padding: 14px 0; border-top: 1px solid rgba(245, 242, 233, .14); }
+.rules li:first-child { border-top: 0; padding-top: 0; }
+.rules .n { font-family: var(--font-num); font-size: 12px; color: var(--amber); padding-top: 3px; letter-spacing: 1px; }
+.rules p { font-size: 13.5px; line-height: 1.8; color: #b6cbbf; }
+.rules p b { color: var(--paper); font-weight: 600; }
+
+/* ---------- 快速开始 ---------- */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 30px; }
+.step { min-width: 0; border-top: 2px solid var(--ink); padding-top: 20px; }
+.step .n {
+  font-family: var(--font-num); font-size: 12px; letter-spacing: 2px;
+  color: var(--amber-ink); margin-bottom: 10px;
+}
+.step h3 { font-size: 18px; letter-spacing: .4px; }
+.step p { font-size: 13.5px; color: var(--muted); line-height: 1.8; margin-top: 9px; }
+.code {
+  margin-top: 16px; position: relative;
+  background: var(--night); color: #d8e4dc;
+  border-radius: 3px; padding: 36px 16px 15px;
+  font-family: var(--font-num); font-size: 13px; line-height: 1.9;
+  overflow-x: auto; white-space: pre;
+}
+.code .prompt { color: var(--amber); }
+.copy {
+  position: absolute; top: 8px; right: 9px;
+  font-family: var(--font-body); font-size: 11.5px;
+  background: rgba(245, 242, 233, .1); color: #b6cbbf;
+  border: 1px solid rgba(245, 242, 233, .18);
+  border-radius: 2px; padding: 3px 9px; cursor: pointer;
+  transition: background .18s ease, color .18s ease, border-color .18s ease;
+}
+.copy:hover { background: rgba(245, 242, 233, .18); color: var(--paper); }
+.copy.done { color: var(--amber); border-color: rgba(233, 169, 40, .55); }
+.start-grid {
+  margin-top: 56px; padding-top: 42px; border-top: 1px solid var(--line);
+  display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 56px;
+}
+.start-grid h3 { font-size: 19px; letter-spacing: .4px; margin-bottom: 14px; }
+.start-grid p { font-size: 13.5px; color: var(--muted); line-height: 1.85; }
+.warn {
+  margin-top: 18px; padding: 15px 18px; border-radius: 3px;
+  background: var(--amber-soft); border-left: var(--rail) solid var(--amber);
+  font-size: 13.5px; line-height: 1.8; color: var(--amber-ink);
+}
+.warn b { color: #5d3d07; }
+.scripts { width: 100%; border-collapse: collapse; font-size: 13px; }
+.scripts th {
+  text-align: left; font-family: var(--font-num); font-weight: 500;
+  font-size: 10.5px; letter-spacing: 2px; text-transform: uppercase;
+  color: var(--muted); padding: 0 0 10px; border-bottom: 1px solid var(--line);
+}
+.scripts td { padding: 11px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.scripts td:first-child { padding-right: 18px; white-space: nowrap; }
+.scripts code { font-family: var(--font-num); font-size: 12.5px; color: var(--ink); }
+.scripts td:last-child { color: var(--muted); line-height: 1.65; }
+.live {
+  display: inline-flex; align-items: center; gap: 8px; margin-top: 16px;
+  font-size: 13px; color: var(--muted);
+}
+.live i {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+  box-shadow: 0 0 0 3px rgba(19, 122, 82, .16);
+}
+.live a { color: var(--green); text-decoration: none; border-bottom: 1px solid rgba(19, 122, 82, .35); }
+.live a:hover { border-bottom-color: var(--green); }
+
+/* ---------- 页脚 ---------- */
+.foot { background: var(--night); color: #8fa99c; padding: 52px 0 46px; border-top: 3px solid var(--amber); }
+.foot-in {
+  max-width: var(--wrap); margin: 0 auto; padding: 0 28px;
+  display: flex; flex-wrap: wrap; gap: 26px 40px; align-items: flex-start;
+}
+.foot-brand { font-family: var(--font-title); font-size: 19px; color: var(--paper); letter-spacing: 2px; }
+.foot-nav { display: flex; flex-wrap: wrap; gap: 20px; font-size: 13px; }
+.foot-nav a { color: #8fa99c; text-decoration: none; }
+.foot-nav a:hover { color: var(--paper); }
+.foot-note { font-size: 12.5px; line-height: 1.8; color: #6f8a7d; max-width: 640px; }
+.foot-note b { color: #a8c0b3; font-weight: 500; }
+
+/* ---------- 动效 ---------- */
+/* 不做滚动渐显：任何时候内容都可读，截图、打印与爬虫拿到的都是完整页面 */
+@keyframes stepIn { to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .chart-svg #stepPath { animation: none !important; stroke-dashoffset: 0 !important; }
+  .btn:hover { transform: none; }
+}
+
+/* ---------- 响应式 ---------- */
+@media (max-width: 1080px) {
+  .hero-in { grid-template-columns: minmax(0, 1fr); gap: 46px; }
+  .shots { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 30px; }
+  .sources { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .model-grid { grid-template-columns: minmax(0, 1fr); }
+  .steps { grid-template-columns: minmax(0, 1fr); gap: 34px; }
+  .gates { grid-template-columns: minmax(0, 1fr); gap: 36px; }
+  .start-grid { grid-template-columns: minmax(0, 1fr); gap: 44px; }
+}
+@media (max-width: 760px) {
+  .band { padding: 64px 0; }
+  .wrap, .topbar-in, .hero-in, .foot-in { padding-left: 20px; padding-right: 20px; }
+  .topnav a:not(.gh-btn) { display: none; }
+  .spread { grid-template-columns: minmax(0, 1fr); gap: 22px; }
+  .sources { grid-template-columns: minmax(0, 1fr); }
+  .shots {
+    grid-template-columns: none; grid-auto-flow: column;
+    grid-auto-columns: 74%; gap: 14px;
+    overflow-x: auto; scroll-snap-type: x mandatory;
+    padding-bottom: 14px; margin-right: -20px; padding-right: 20px;
+  }
+  .shot { scroll-snap-align: start; }
+  .shots::-webkit-scrollbar { height: 5px; }
+  .shots::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  .formula { padding: 22px 20px; }
+  .code { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .hero { padding-top: 52px; }
+  .facts { gap: 8px 22px; }
+  .example { padding: 20px; }
+  .example .tag { margin-left: 0; }
+}
+/* ---------- 补充：图片卡间距、数字单位、行内代码 ---------- */
+.shot-img { margin-top: 14px; }
+.spread-item .big small { font-size: 14px; color: var(--muted); font-weight: 400; margin-left: 6px; letter-spacing: 0; }
+.code code { font: inherit; color: inherit; }
+.code .prompt { color: var(--amber); margin-right: 4px; }
+.warn b { color: #5d3d07; }
+.foot-ver { font-family: var(--font-num); font-size: 12px; letter-spacing: 1.6px; color: #6f8a7d; margin-top: 6px; }
+
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="topbar-in">
+    <a class="brand" href="#top">
+      <img src="assets/app-icon.png" alt="油价势图标">
+      <b>油价势</b><span>OIL TREND</span>
+    </a>
+    <nav class="topnav">
+      <a href="#screens">界面</a>
+      <a href="#model">算法</a>
+      <a href="#data">数据</a>
+      <a href="#start">开始</a>
+      <a class="gh-btn" href="https://github.com/uwakeme/oil-trend" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<section class="hero">
+  <div class="hero-in">
+    <div class="hero-copy reveal">
+      <p class="eyebrow">油价势 · 原生微信小程序</p>
+      <h1>你的车加几号油，<br>今天该付多少</h1>
+      <p class="hero-lede">本地 92# / 95# / 98# / 0# 挂牌价、下一轮调价窗口、近一年调价走势，还能写一条「降到 7.5 就提醒我」的规则。</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="https://github.com/uwakeme/oil-trend" target="_blank" rel="noopener">
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82a7.4 7.4 0 0 1 2-.27c.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+          看代码
+        </a>
+        <a class="btn btn-ghost" href="#screens">看界面</a>
+      </div>
+      <ul class="facts">
+        <li><b>31</b>个省级行政区</li>
+        <li><b>5</b>个一级页面</li>
+        <li><b>24</b>次调价节点</li>
+        <li><b>124</b>个基准价校验值</li>
+      </ul>
+    </div>
+    <figure class="chart-card reveal">
+      <figcaption class="chart-head">
+        <span class="chart-title">全国 92# 均价（元/升）</span>
+        <span class="chart-tag">阶梯线</span>
+      </figcaption>
+      <svg class="chart-svg" viewBox="0 0 660 300" role="img" aria-label="全国 92# 汽油均价阶梯线，2025 年 10 月至 2026 年 11 月共 24 次调价节点，末次 8.94 元每升">
+        <path d="M48 258.6h594M48 204.7h594M48 150.8h594M48 96.9h594M48 43h594" stroke="rgba(245,242,233,.13)" stroke-width="1" fill="none"/>
+        <g fill="#8fa99c" font-family="Bahnschrift, DIN Alternate, Helvetica Neue, Arial, sans-serif" font-size="11" text-anchor="end">
+          <text x="40" y="262.6">8.85</text><text x="40" y="208.7">8.95</text><text x="40" y="154.8">9.05</text><text x="40" y="100.9">9.15</text><text x="40" y="47">9.25</text>
+        </g>
+        <path d="M94.3 264v6M113.7 264v6M134.6 264v6M155.5 264v6M185.3 264v6M206.2 264v6M227.1 264v6M248 264v6M268.9 264v6M289.8 264v6M315.2 264v6M336 264v6M359.9 264v6M380.8 264v6M406.2 264v6M427.1 264v6M451 264v6M471.9 264v6M497.2 264v6M518.1 264v6M536 264v6M567.4 264v6M600.2 264v6M619.6 264v6" stroke="#e9a928" stroke-width="1.4" opacity=".45" fill="none"/>
+        <path fill="rgba(233,169,40,.10)" d="M48 264 L48.0 107.7 L 94.3 107.7 L 94.3 53.7 L 113.7 53.7 L 113.7 129.2 L 134.6 129.2 L 134.6 102.3 L 155.5 102.3 L 155.5 188.5 L 185.3 188.5 L 185.3 123.8 L 206.2 123.8 L 206.2 177.7 L 227.1 177.7 L 227.1 134.6 L 248.0 134.6 L 248.0 199.3 L 268.9 199.3 L 268.9 167.0 L 289.8 167.0 L 289.8 215.5 L 315.2 215.5 L 315.2 156.2 L 336.0 156.2 L 336.0 193.9 L 359.9 193.9 L 359.9 226.3 L 380.8 226.3 L 380.8 177.7 L 406.2 177.7 L 406.2 107.7 L 427.1 107.7 L 427.1 188.5 L 451.0 188.5 L 451.0 150.8 L 471.9 150.8 L 471.9 193.9 L 497.2 193.9 L 497.2 220.9 L 518.1 220.9 L 518.1 167.0 L 536.0 167.0 L 536.0 145.4 L 567.4 145.4 L 567.4 199.3 L 600.2 199.3 L 600.2 167.0 L 619.6 167.0 L 619.6 210.1 L 642.0 210.1 L 642 264 Z"/>        <path id="stepPath" fill="none" stroke="#e9a928" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="square" d="M48.0 107.7 L 94.3 107.7 L 94.3 53.7 L 113.7 53.7 L 113.7 129.2 L 134.6 129.2 L 134.6 102.3 L 155.5 102.3 L 155.5 188.5 L 185.3 188.5 L 185.3 123.8 L 206.2 123.8 L 206.2 177.7 L 227.1 177.7 L 227.1 134.6 L 248.0 134.6 L 248.0 199.3 L 268.9 199.3 L 268.9 167.0 L 289.8 167.0 L 289.8 215.5 L 315.2 215.5 L 315.2 156.2 L 336.0 156.2 L 336.0 193.9 L 359.9 193.9 L 359.9 226.3 L 380.8 226.3 L 380.8 177.7 L 406.2 177.7 L 406.2 107.7 L 427.1 107.7 L 427.1 188.5 L 451.0 188.5 L 451.0 150.8 L 471.9 150.8 L 471.9 193.9 L 497.2 193.9 L 497.2 220.9 L 518.1 220.9 L 518.1 167.0 L 536.0 167.0 L 536.0 145.4 L 567.4 145.4 L 567.4 199.3 L 600.2 199.3 L 600.2 167.0 L 619.6 167.0 L 619.6 210.1 L 642.0 210.1"/>        <g>
+          <line x1="619.6" y1="210.1" x2="619.6" y2="264" stroke="rgba(233,169,40,.5)" stroke-width="1" stroke-dasharray="2 4"/>
+          <circle cx="619.6" cy="210.1" r="4.5" fill="#f5f2e9" stroke="#e9a928" stroke-width="2"/>
+          <text x="611" y="198" text-anchor="end" fill="#f5f2e9" font-family="Bahnschrift, DIN Alternate, Arial, sans-serif" font-size="13" font-weight="600">8.94</text>
+        </g>
+        <g fill="#8fa99c" font-family="Bahnschrift, DIN Alternate, Arial, sans-serif" font-size="11" text-anchor="middle">
+          <text x="48" y="286">10月</text><text x="185.3" y="286">1月</text><text x="319.6" y="286">4月</text><text x="455.4" y="286">7月</text><text x="619.6" y="286">11月</text>
+        </g>
+      </svg>
+      <p class="chart-note">横段是价格不变的调价周期，竖线是调价那一刻的跳变。国内油价 30 天不动一次，所以走势画的是<b>阶梯线</b>，不是折线。
+        <br>24 个节点，取自仓库 <code>data/adjustments.js</code>
+      </p>
+    </figure>
+  </div>
+</section>
+<section id="screens" class="band band-rule">
+  <div class="wrap">
+    <header class="sec-head reveal">
+      <div class="sec-rail"><i></i><p class="eyebrow">界面</p></div>
+      <h2>五个页面，五个问题</h2>
+      <p class="sec-sub">底部 tabBar 的顺序就是信息架构：先查价，再看走势、核对通知，最后去设提醒。</p>
+    </header>
+    <ol class="shots">
+      <li class="shot reveal">
+        <div class="shot-idx">01 · 油价</div>
+        <h3>现在多少钱？</h3>
+        <div class="shot-img"><img src="screenshots/01-price-home.png" alt="油价首页：92# 主价格卡、四个油品小卡、下一次调价窗口与近 30 天走势"></div>
+        <p>本地 92# 大卡 + 95# / 98# / 0# 固定顺序小卡；切换大卡油品时，价格、走势、通知里的油品和金额一起换。</p>
+      </li>
+      <li class="shot reveal">
+        <div class="shot-idx">02 · 走势</div>
+        <h3>什么时候变的？</h3>
+        <div class="shot-img"><img src="screenshots/02-trend.png" alt="走势页：阶梯线价格图与调价节点列表"></div>
+        <p>阶梯线画价格图，下面列出每一次调价节点，近 3 月 / 6 月 / 1 年可切换。</p>
+      </li>
+      <li class="shot reveal">
+        <div class="shot-idx">03 · 调价</div>
+        <h3>下一轮涨还是跌？</h3>
+        <div class="shot-img"><img src="screenshots/03-notice.png" alt="调价页：下一轮窗口、正式结果与市场预测分栏"></div>
+        <p>正式公告和市场预测分成两栏，不只靠颜色区分，预测一律标「非官方」。</p>
+      </li>
+      <li class="shot reveal">
+        <div class="shot-idx">04 · 国际</div>
+        <h3>大盘怎么走？</h3>
+        <div class="shot-img"><img src="screenshots/04-global.png" alt="国际页：Brent 与 WTI 行情曲线"></div>
+        <p>Brent 与 WTI 行情曲线，固定写明单位是美元/桶，行情延时多少分钟照实标出。</p>
+      </li>
+      <li class="shot reveal">
+        <div class="shot-idx">05 · 提醒</div>
+        <h3>降到我关心的价就叫我</h3>
+        <div class="shot-img"><img src="screenshots/05-alert.png" alt="提醒页：订阅状态、降价规则与历史记录"></div>
+        <p>能写「官方降价就提醒我」，也能设目标价与单次降幅门槛；预测提醒默认关掉。</p>
+      </li>
+    </ol>
+    <p class="shot-note">截图由微信开发者工具自动化服务抓取，含 Canvas 图表图层。</p>
+  </div>
+</section>
+<section id="model" class="band band-rule">
+  <div class="wrap">
+    <header class="sec-head reveal">
+      <div class="sec-rail"><i></i><p class="eyebrow">算法</p></div>
+      <h2>全国价 + 地区价差</h2>
+      <p class="sec-sub">国内成品油价格有两条规矩：调价幅度全国统一，落地零售价按地区定价。所以价格拆成两层算。</p>
+    </header>
+    <div class="formula reveal">
+      某地某油品价格 = 全国价<span class="op">（累加所有调价幅度）</span>+ 地区价差<span class="op">（该地区、该油品）</span>
+      <p class="formula-sub">全国价来自调价时间线；地区价差按油品分别存，覆盖 31 个省级行政区。</p>
+    </div>
+    <div class="model-grid">
+      <div class="model-card reveal">
+        <div class="mark">01 / 全国统一</div>
+        <h4>幅度一样，落地各省定价</h4>
+        <p>发改委每轮调价给的是全国幅度，各省再定自己的最高零售价。所以同一天各省挂牌价不一样，是正常的。</p>
+      </div>
+      <div class="model-card reveal">
+        <div class="mark">02 / 分油品存</div>
+        <h4>价差必须按油品分开存</h4>
+        <p>各省标号结构不同，98# 相对 92# 的溢价差得远。四个油品共用一套价差，98# 的误差最大能到 0.89 元/升。</p>
+      </div>
+      <div class="model-card reveal">
+        <div class="mark">03 / 逐省比对</div>
+        <h4>124 个基准值盯着</h4>
+        <p>基准价存各省真实挂牌价，自检时逐省比对 124 个值。算错了会当场对不上，不会悄悄发出去。</p>
+      </div>
+    </div>
+    <div class="spread">
+      <div class="spread-item reveal">
+        <div class="label">98# 相对 92# 的地区差</div>
+        <div class="big">1.57 <small>元/升</small></div>
+        <div class="range"><b>−0.68</b> 甘肃·兰州 → <b>+0.89</b> 广东·广州</div>
+      </div>
+      <div class="spread-item reveal">
+        <div class="label">柴油相对 92# 的地区差</div>
+        <div class="big">1.17 <small>元/升</small></div>
+        <div class="range"><b>−0.96</b> 海南·海口 → <b>+0.21</b> 山西·太原</div>
+      </div>
+    </div>
+    <div class="example reveal">
+      <span class="who">广东·广州 92#</span>
+      <span class="calc">全国价 <em>8.94</em> + 地区价差 <em>(−0.03)</em> = <b>8.91 元/升</b></span>
+      <span class="tag">演示数据集中的算例</span>
+    </div>
+  </div>
+</section>
+<section id="data" class="band band-night">
+  <div class="wrap">
+    <header class="sec-head reveal">
+      <div class="sec-rail"><i></i><p class="eyebrow">数据</p></div>
+      <h2>四个源，各管一段</h2>
+      <p class="sec-sub">采集器每 30 分钟跑一次，31 个省级行政区、3 并发，6 小时内不重复抓。</p>
+    </header>
+    <div class="sources">
+      <div class="source reveal">
+        <div class="name">油价网</div>
+        <div class="host">xmgcn.com</div>
+        <div class="role">现价 + 最近 30 期历史（主源）。每省一次请求同时给出当前价与整段历史，走势图因此能铺满近一年。31 省 × 1 次。</div>
+        <span class="proto https">HTTPS</span>
+      </div>
+      <div class="source reveal">
+        <div class="name">汽油价格网</div>
+        <div class="host">qiyoujiage.com</div>
+        <div class="role">下次调价预测，全网唯一给预测的地方。兼主源失败时的现价兜底，以及广东 / 山东 / 新疆 3 省的交叉校核。</div>
+        <span class="proto http">HTTP</span>
+      </div>
+      <div class="source reveal">
+        <div class="name">油价网调价时间表</div>
+        <div class="host">xmgcn.com/tiaozheng/</div>
+        <div class="role">官方调价时间表，只做口径互校：吨价换算成每升，比各省实测中位数，不直接当结论用。</div>
+        <span class="proto https">HTTPS</span>
+      </div>
+      <div class="source reveal">
+        <div class="name">国家发改委</div>
+        <div class="host">ndrc.gov.cn</div>
+        <div class="role">正式调价公告。列表页 → 详情页两步抓取。对外只发正式结果。</div>
+        <span class="proto https">HTTPS</span>
+      </div>
+    </div>
+    <div class="gates">
+      <div class="reveal">
+        <h3>历史价入库要过五道闸门</h3>
+        <p class="lead">跨省离群值保留源站原值、只告警 —— 擅自改写才是替来源编数字。</p>
+        <ul class="gate-list">
+          <li>价格区间</li><li>时序去重</li><li>首尾自洽</li><li>跨省一致性</li><li>幂等</li>
+        </ul>
+      </div>
+      <ul class="rules reveal">
+        <li><span class="n">01</span><p>解析不出结构化字段就进人工核对队列，<b>绝不把猜测值发布成正式结果</b>。</p></li>
+        <li><span class="n">02</span><p>预测类信息一律标「非官方」；来源只说方向没给幅度时，<b>幅度留空而不是填 0</b>。</p></li>
+        <li><span class="n">03</span><p>后端不可用时前端自动回落本地演示源，<b>界面写明当前拿的是哪一种</b>，不把演示数据说成实时行情。</p></li>
+      </ul>
+    </div>
+  </div>
+</section>
+<section id="start" class="band band-rule">
+  <div class="wrap">
+    <header class="sec-head reveal">
+      <div class="sec-rail"><i></i><p class="eyebrow">开始</p></div>
+      <h2>克隆下来就能跑</h2>
+      <p class="sec-sub">前端没有 npm 依赖，也不需要打包步骤；用微信开发者工具打开目录直接编译。</p>
+    </header>
+    <ol class="steps">
+      <li class="step reveal">
+        <div class="n">01 / 克隆</div>
+        <h3>拿到代码</h3>
+        <div class="code"><span class="prompt">$</span> <code id="cmd-clone">git clone https://github.com/uwakeme/oil-trend.git
+cd oil-trend</code><button class="copy" data-copy-target="#cmd-clone">复制</button></div>
+      </li>
+      <li class="step reveal">
+        <div class="n">02 / 编译</div>
+        <h3>用开发者工具打开</h3>
+        <p>微信开发者工具 2.02.2609250 或更新，基础库 3.8.10，打开这个目录直接编译就能跑。</p>
+      </li>
+      <li class="step reveal">
+        <div class="n">03 / 后端（可选）</div>
+        <h3>不配也能跑</h3>
+        <p>不配后端地址时走本地演示源，全部交互都跑得通。</p>
+        <div class="code"><span class="prompt">$</span> <code id="cmd-server">cd server
+npm install
+cp .env.example .env
+npm start</code><button class="copy" data-copy-target="#cmd-server">复制</button></div>
+      </li>
+    </ol>
+    <div class="start-grid">
+      <div class="reveal">
+        <h3>接上自己的后端</h3>
+        <p>后端是 Node 18 + Express + PostgreSQL。改后端地址只动 <code>config/index.js</code> 的 <code>apiBaseUrl</code> 一处，页面与数据层一行不用动。</p>
+        <div class="warn"><b>域名要先进白名单。</b>公众平台的「服务器域名 → request 合法域名」里没配，请求会被直接拦掉，页面就一直显示演示数据。</div>
+        <p class="live"><i></i>线上后端 · <a href="https://oil-trend.uwakeme.top" target="_blank" rel="noopener">oil-trend.uwakeme.top</a></p>
+      </div>
+      <div class="reveal">
+        <h3>改完先跑这几条</h3>
+        <p>静态检查能抓出「wx:for 里写成 {{path}}」这类真 bug，渲染结果还得在模拟器里逐页核对。</p>
+        <table class="scripts">
+          <thead><tr><th>命令</th><th>作用</th></tr></thead>
+          <tbody>
+            <tr><td><code>lint-wxml.js</code></td><td>WXML 绑定、事件、样式类与标签闭合</td></tr>
+            <tr><td><code>check-modules.js</code></td><td>逐个 require 运行时与服务端模块</td></tr>
+            <tr><td><code>verify-data.js</code></td><td>打印数据层算出的价格、走势、通知</td></tr>
+            <tr><td><code>sync-shared.js</code></td><td>由 data 目录生成共享模块并断言一致</td></tr>
+            <tr><td><code>verify-in-devtools.js</code></td><td>连开发者工具逐页截图并捕获异常</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="foot">
+  <div class="foot-in">
+    <div>
+      <div class="foot-brand">油价势</div>
+      <p class="foot-ver">OIL TREND · v0.1.0 · MIT</p>
+    </div>
+    <nav class="foot-nav">
+      <a href="https://github.com/uwakeme/oil-trend" target="_blank" rel="noopener">仓库</a>
+      <a href="https://github.com/uwakeme/oil-trend/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/uwakeme/oil-trend/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/uwakeme/oil-trend/tags" target="_blank" rel="noopener">标签</a>
+      <a href="https://github.com/uwakeme/oil-trend/blob/main/LICENSE" target="_blank" rel="noopener">许可证</a>
+      <a href="https://oil-trend.uwakeme.top" target="_blank" rel="noopener">后端</a>
+    </nav>
+    <p class="foot-note">页面上的调价节点与地区价差取自仓库 data 目录里的真实文件；小程序界面里的价格随演示数据平移，不代表实时行情。</p>
+  </div>
+</footer>
+<script>
+/* 复制按钮：优先用剪贴板 API，file:// 打开时退回 execCommand */
+(function () {
+  var buttons = document.querySelectorAll('.copy');
+  Array.prototype.forEach.call(buttons, function (btn) {
+    btn.addEventListener('click', function () {
+      var target = document.querySelector(btn.getAttribute('data-copy-target'));
+      if (!target) return;
+      var text = target.innerText;
+      var done = function () {
+        btn.textContent = '已复制';
+        btn.classList.add('done');
+        setTimeout(function () { btn.textContent = '复制'; btn.classList.remove('done'); }, 1600);
+      };
+      var fallback = function () {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); done(); } catch (e) { /* 复制不可用时保持原样 */ }
+        document.body.removeChild(ta);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done, fallback);
+      } else {
+        fallback();
+      }
+    });
+  });
+})();
+/* 阶梯线入场：按真实路径长度设置虚线偏移，收尾不留白 */
+(function () {
+  var path = document.getElementById('stepPath');
+  if (!path || typeof path.getTotalLength !== 'function') return;
+  var len = Math.ceil(path.getTotalLength());
+  path.style.strokeDasharray = len;
+  path.style.strokeDashoffset = len;
+  path.style.animation = 'stepIn 1.5s cubic-bezier(.2,.7,.3,1) .25s forwards';
+})();
+</script>
+</body>
+</html>

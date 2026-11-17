@@ -42,7 +42,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
   - `server/src/data/provinces.json` 是**生成产物**（省界数据，脚本产出），手改会被覆盖
 - `scripts/` — 检查与构建脚本
 - `design/` — 产品设计稿与高保真原型
-- `docs/` — 只放截图（`docs/screenshots/`）；部署与数据源说明直接看 `server/` 与 `README.md`
+- `docs/` — 截图在 `docs/screenshots/`，项目主页在 `docs/index.html`（GitHub Pages 从 `/docs` 发布）；部署与数据源说明直接看 `server/` 与 `README.md`
 
 ## 代码风格
 
