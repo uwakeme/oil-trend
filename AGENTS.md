@@ -102,7 +102,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 预测幅度解析不出来被当成 0 | `forecast` 是空对象时前端 `changeMeta(undefined)` → `Number(undefined) \|\| 0` → 显示「与上次持平」，来源明说上调却显示持平，等于替来源猜了幅度 | 方向单独存 `oil_windows.forecast_direction`；前端幅度缺失时显示「预计上调 / 幅度待公布 · 非官方」，不写「元/升」 |
 | 订阅消息字段名对不上模板 | 平台只认模板里的占位符名（`thing5`/`amount2`/`phrase1`/`date3`/`thing4`），自己起名一律 `errcode 47003`，日志里只看到「参数无效」 | 字段名与取值格式的唯一真源是 `server/src/services/subscribe-templates.js`（平台模板的镜像）；换模板只改那里，再同步 `config/index.js` 与服务端 `.env` |
 | `amount` 字段不能带「元/升」 | 微信的 amount 类型只认「数字+元」，`"0.13 元/升"` 格式非法（47002） | 一律走契约表的 `formatAmount()`，别在业务代码里手拼 |
-| `date` 字段不吃 ISO 短日期 | `"2026-11-24"` 解析失败，要 `"2026年11月24日"` | 走契约表的 `formatDate()`；服务端取「今天」自己按 UTC+8 日历日算，**不能**用 `shared.clock.today()`（那是演示数据的平移日期） |
+| `date` 字段不吃 ISO 短日期 | `"2026-11-24"` 解析失败，要 `"2026年11月24日"` | 走契约表的 `formatDate()`；服务端取「今天」自己按 UTC+8 日历日算，**不能**用 `shared.clock.today()`（那是演示数据的平移日期）。⚠️ 服务端三个地方各算各的会差一天：`collector.js` / `alert.js` 已经是 UTC+8，`query.js` 的 `todayStr()` 原来按本地时区 —— 服务器跑 UTC 时凌晨 8 点前差一天，窗口卡上的日期整张错 |
 | 一次性订阅授权用完即失效 | 用户每次同意只够发一条。写成永久布尔标记后，界面一直显示「微信提醒已开启」，微信那边其实已经拒收（43101） | 服务端发成功后把 `subscribe_granted` 置回 false 并记 `subscribe_used_at`；前端只在「刚拿到授权」的那一次保存里带 `subscribeGranted`，其它保存一律不带 |
 | 命中多条提醒不能连发 | 一次性授权额度只有 1 条，连发第二条必被拒 | `alert.js` 命中多条只发第一条（按 official → target → forecast 的顺序） |
 | 公告里的油品泛称会串号 | 正文写「98号汽油每升下调0.10元」，按「汽油」泛称匹配会把 98# 的幅度记到 92# 头上（后一段覆盖前一段），而 `perFuel` 还判定成「解析成功」 | 标号必须从正文**明确抓到数字**（92号/95#/98号/0号）；泛称猜不出标号就不填，`changes` 宁可留空也不复制总幅度 |
