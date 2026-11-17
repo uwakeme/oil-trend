@@ -3,5 +3,14 @@
        canvas 走的是独立原生渲染层，z-index 压不住它，
        弹层打开时它会盖在弹层上面。摘掉才是唯一可靠的办法。
        外层 .chart-wrap 保留高度，页面不会跳动。 -->
-  <canvas wx:if="{{visible}}" type="2d" id="chartCanvas" class="chart-canvas"></canvas>
+  <!-- 点哪儿画哪儿：bind 而不是 catchtouchmove，
+       这样手指在图上滑动时页面仍能滚（catch 会把滚动吞掉）。 -->
+  <canvas
+    wx:if="{{visible}}"
+    type="2d"
+    id="chartCanvas"
+    class="chart-canvas"
+    bindtouchstart="onTouchStart"
+    bindtouchmove="onTouchMove"
+  ></canvas>
 </view>

@@ -50,7 +50,7 @@
       </view>
 
       <!-- 点少于 2 个画不出曲线：不渲染图表组件，改显示空态文案 -->
-      <trend-chart wx:if="{{hasChart}}" points="{{points}}" mode="step" height="{{176}}" show-y-axis="{{true}}" direction="{{direction}}" />
+      <trend-chart wx:if="{{hasChart}}" points="{{points}}" mode="step" height="{{176}}" show-y-axis="{{true}}" direction="{{direction}}" unit="元/升" />
       <view wx:else class="chart-empty">
         <text class="chart-empty-text">{{chartEmptyText}}</text>
         <text class="chart-empty-hint">{{chartEmptyHint}}</text>

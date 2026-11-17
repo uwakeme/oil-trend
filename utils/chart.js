@@ -20,7 +20,12 @@ const COLORS = {
   upAreaFrom: 'rgba(206, 73, 59, .18)',
   upAreaTo: 'rgba(206, 73, 59, 0)',
   downAreaFrom: 'rgba(19, 122, 82, .18)',
-  downAreaTo: 'rgba(19, 122, 82, 0)'
+  downAreaTo: 'rgba(19, 122, 82, 0)',
+  // 十字光标：竖线对日期，横线对价格
+  crosshair: '#8d9189',
+  tipBg: '#142c23',
+  tipText: '#fffef9',
+  tipSub: '#b9bdb4'
 };
 
 function toTimestamp(dateStr) {
@@ -66,25 +71,37 @@ function computeXs(points, padLeft, plotW) {
  *   yAxisFormat (v) => string
  *   min / max   强制取值范围
  */
-function drawSeries(ctx, size, options) {
+/**
+ * 算绘图区几何：内边距、绘图区大小、取值范围、每个点的横坐标。
+ *
+ * ⚠️ 手指选点与画图必须用**同一套**几何：
+ *   两边各算一次的话，屏幕密度、边距改一处就会对不上，
+ *   表现是「点一下高亮的点不是那个点」。
+ *
+ * @param {Array} points [{date, value}]
+ * @param {object} options 绘图选项（min/max/showYAxis/pad* 都在里面）
+ * @param {number} width 画布 CSS 宽
+ * @param {number} height 画布 CSS 高
+ * @returns {object} 几何信息
+ */
+function computeLayout(points, options, width, height) {
   var opts = options || {};
-  var points = opts.points || [];
-  var width = size.width;
-  var height = size.height;
-
-  ctx.clearRect(0, 0, width, height);
-  if (!points.length) return;
-
   var padTop = opts.padTop === undefined ? 18 : opts.padTop;
   var padBottom = opts.padBottom === undefined ? 14 : opts.padBottom;
   var padLeft = opts.padLeft === undefined ? (opts.showYAxis ? 44 : 4) : opts.padLeft;
   var padRight = opts.padRight === undefined ? 8 : opts.padRight;
-  var plotW = Math.max(1, width - padLeft - padRight);
-  var plotH = Math.max(1, height - padTop - padBottom);
+  var w = width || 0;
+  var h = height || 0;
+  var plotW = Math.max(1, w - padLeft - padRight);
+  var plotH = Math.max(1, h - padTop - padBottom);
 
-  var values = points.map(function (p) { return Number(p.value); });
+  var values = (points || []).map(function (p) { return Number(p.value); });
   var min = opts.min !== undefined ? opts.min : Math.min.apply(null, values);
   var max = opts.max !== undefined ? opts.max : Math.max.apply(null, values);
+  if (!isFinite(min) || !isFinite(max)) {
+    min = 0;
+    max = 0;
+  }
   if (max - min < 1e-6) {
     min -= 0.05;
     max += 0.05;
@@ -94,10 +111,49 @@ function drawSeries(ctx, size, options) {
     max += pad;
   }
 
-  var xs = computeXs(points, padLeft, plotW);
+  var xs = computeXs(points || [], padLeft, plotW);
   function yOf(v) {
     return padTop + plotH * (1 - (v - min) / (max - min));
   }
+
+  return {
+    width: w,
+    height: h,
+    padTop: padTop,
+    padBottom: padBottom,
+    padLeft: padLeft,
+    padRight: padRight,
+    plotW: plotW,
+    plotH: plotH,
+    min: min,
+    max: max,
+    values: values,
+    xs: xs,
+    yOf: yOf
+  };
+}
+
+function drawSeries(ctx, size, options) {
+  var opts = options || {};
+  var points = opts.points || [];
+  var width = size.width;
+  var height = size.height;
+
+  ctx.clearRect(0, 0, width, height);
+  if (!points.length) return;
+
+  var layout = computeLayout(points, opts, width, height);
+  var padTop = layout.padTop;
+  var padBottom = layout.padBottom;
+  var padLeft = layout.padLeft;
+  var padRight = layout.padRight;
+  var plotW = layout.plotW;
+  var plotH = layout.plotH;
+  var values = layout.values;
+  var min = layout.min;
+  var max = layout.max;
+  var xs = layout.xs;
+  var yOf = layout.yOf;
 
   var gridCount = opts.gridLines === undefined ? 4 : opts.gridLines;
 
@@ -184,6 +240,131 @@ function drawSeries(ctx, size, options) {
     ctx.stroke();
     ctx.restore();
   }
+
+  // 十字光标最后画：压在曲线上面
+  if (opts.crosshair) {
+    drawCrosshair(ctx, layout, opts.crosshair);
+  }
+}
+
+/** 圆角矩形路径 */
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/**
+ * 画十字光标：竖线对日期，横线对价格，中间标出选中的点，
+ * 旁边挂一个读数气泡（日期 + 价格）。
+ *
+ * ⚠️ 读数只能画在画布上：canvas 是独立原生渲染层，
+ * WXML 浮层压不住它 —— 气泡画在 DOM 里会被画布盖住。
+ *
+ * @param {object} ctx Canvas 2D 上下文
+ * @param {object} layout computeLayout 的结果
+ * @param {object} cross { x, y, valueText, dateText }
+ */
+function drawCrosshair(ctx, layout, cross) {
+  var x = cross.x;
+  var y = cross.y;
+  var plotBottom = layout.padTop + layout.plotH;
+  var plotLeft = layout.padLeft;
+  var plotRight = layout.padLeft + layout.plotW;
+
+  ctx.save();
+  // 竖线（日期）
+  ctx.strokeStyle = COLORS.crosshair;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(Math.round(x) + 0.5, layout.padTop);
+  ctx.lineTo(Math.round(x) + 0.5, plotBottom);
+  ctx.stroke();
+  // 横线（价格）
+  ctx.beginPath();
+  ctx.moveTo(plotLeft, Math.round(y) + 0.5);
+  ctx.lineTo(plotRight, Math.round(y) + 0.5);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // 选中的点
+  ctx.beginPath();
+  ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+  ctx.fillStyle = cross.dotColor || COLORS.point;
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#fffef9';
+  ctx.stroke();
+
+  var lines = [];
+  if (cross.valueText) lines.push(cross.valueText);
+  if (cross.dateText) lines.push(cross.dateText);
+  if (!lines.length) {
+    ctx.restore();
+    return;
+  }
+
+  // 气泡尺寸按文字量出来，别写死 —— 写死就会长短不一
+  ctx.font = '600 12px sans-serif';
+  var w1 = ctx.measureText(lines[0]).width;
+  ctx.font = '10px sans-serif';
+  var w2 = lines[1] ? ctx.measureText(lines[1]).width : 0;
+  var tw = Math.min(layout.width - 4, Math.max(w1, w2) + 16);
+  var th = lines.length > 1 ? 34 : 22;
+  var gap = 12;
+
+  var tx = x + gap;
+  if (tx + tw > layout.width - 2) tx = x - gap - tw;
+  if (tx < 2) tx = 2;
+  var ty = y - th - gap;
+  if (ty < 2) ty = y + gap;
+  if (ty + th > layout.height - 2) ty = layout.height - th - 2;
+
+  roundRect(ctx, tx, ty, tw, th, 6);
+  ctx.fillStyle = COLORS.tipBg;
+  ctx.fill();
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = COLORS.tipText;
+  ctx.font = '600 12px sans-serif';
+  ctx.fillText(lines[0], tx + 8, ty + (lines.length > 1 ? 12 : th / 2));
+  if (lines.length > 1) {
+    ctx.fillStyle = COLORS.tipSub;
+    ctx.font = '10px sans-serif';
+    ctx.fillText(lines[1], tx + 8, ty + 25);
+  }
+  ctx.restore();
+}
+
+/**
+ * 手指横坐标 → 最近的点的下标。
+ *
+ * 单独抽出来是为了能单独测：选点算错的话，
+ * 表现是「点哪儿高亮的不是哪儿」，静态检查看不出来。
+ *
+ * @param {Array} xs 每个点的横坐标
+ * @param {number} x 手指横坐标（相对画布）
+ * @returns {number} 下标；没有点时返回 -1
+ */
+function nearestIndex(xs, x) {
+  if (!xs || !xs.length) return -1;
+  var value = Number(x);
+  if (!isFinite(value)) return -1;
+  var best = 0;
+  var bestDist = Infinity;
+  for (var i = 0; i < xs.length; i++) {
+    var d = Math.abs(xs[i] - value);
+    if (d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  }
+  return best;
 }
 
 /** 按涨跌方向取一组配色 */
@@ -199,6 +380,9 @@ function directionColors(direction) {
 
 module.exports = {
   COLORS: COLORS,
+  computeLayout: computeLayout,
+  nearestIndex: nearestIndex,
   drawSeries: drawSeries,
+  drawCrosshair: drawCrosshair,
   directionColors: directionColors
 };

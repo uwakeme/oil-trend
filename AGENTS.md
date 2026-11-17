@@ -17,6 +17,7 @@ node scripts/check-modules.js      # 运行时模块 + 服务端模块加载冒�
 node scripts/verify-data.js        # 数据层自检，打印算出的价格/走势/通知/行情
 node scripts/verify-contract.js    # 端到端契约自检：后端真实响应 → 前端页面渲染结果
 node scripts/verify-collector.js   # 采集器解析回归（--live 追加真实抓取 + pg-mem 入库链路）
+node scripts/verify-chart.js        # 走势图自检：绘图几何、选点算法、组件触摸链路（假的 Canvas 上下文）
 node scripts/gen-province-geo.js  # 重新生成服务端省界数据（server/src/data/provinces.json）
 node scripts/sync-shared.js        # 由 data/ 生成服务端共享模块并做一致性断言，部署前必跑
 node scripts/build-icons.js        # 重生成 assets/icons/*.png（SVG 精灵内联在脚本里，需本机 Chrome）
@@ -154,6 +155,11 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 模板 ID 手抄错一个字符，平台拒收但看不出原因 | 小写 `l` 与大写 `I` 长得一模一样，微信只回「参数无效」(47003)，日志里看不出是 ID 错了 | 三处同步：`config/index.js` / `server/src/services/subscribe-templates.js` / 服务端 `.env`。.env 的值**没登记在契约表就回退**契约表默认模板（`config.validate()` 会给警告）；selftest 钉死前两处必须一致 |
 | IDE 2.02 的 `--qr-output` 直接写**图片文件** | 脚本按终端字符二维码去解析，报「没有解析出二维码模块，文件格式不对」，看起来像上传失败 | `scripts/preview-qr.js` 先看文件头：JPEG/PNG 直接转 PNG 交付（`preview-qr.js` 里已处理） |
 | 首页小卡和通知卡的每升幅度不是一个口径 | 首页 95#/98#/0# 小卡用 `p.changeAmount`（**本地区**挂牌价前后差），通知卡用各省**中位数**，同一轮能差 0.01（广东 98# -0.56 vs 中位数 -0.55） | 别拿小卡数字去对中位数；看到不一致先查取的是哪个字段（`pages/index/index.js` 的 `changeMeta(p.changeAmount, ...)`） |
+| 画布上的读数**不能**用 WXML 浮层 | canvas 是独立原生渲染层，z-index 压不住它 —— 浮层会被画布盖住（跟弹层被走势图盖住是同一个原因） | 十字光标与读数气泡直接画在画布上（`utils/chart.js` 的 `drawCrosshair`）；DOM 浮层只适合放在画布**外面**的地方 |
+| 选点与画图必须用**同一套**几何 | 两边各算一次横坐标的话，边距或像素密度改一处就对不上，表现是「点哪儿高亮的不是哪儿」 | 几何统一由 `chart.computeLayout()` 算：绘制（`drawSeries`）与触摸选点都调它 |
+| 画布上用 `bindtouchmove` 而不是 `catchtouchmove` | catch 会把页面滚动吞掉 —— 手指落在图上就滚不动 | 画布用 `bind*`，页面照常滚；图表自己的拖动在 `onTouchMove` 里处理 |
+| 自检脚本里直接 require 组件会炸 | node 里没有 `Component` 也没有 `wx`；而且 `wx` 是 **render 时**才读的，require 完就删会 ReferenceError | 先补 `global.Component` / `global.wx`，`wx` 留到组件跑完再删（`scripts/verify-chart.js`） |
+| 自动化协议点不了按钮 → 交互只能假跑 | `Element.tap` / `Element.query` 在 IDE 2.02 未实现，想验证点选只能靠肉眼 | 用假的 Canvas 上下文直接调组件的 `onTouchStart`；要截图就临时注入固定选中点，截完必须还原（`.tooling/shot-crosshair.js`） |
 
 ## 数据源现状（2026-11-16 起）
 

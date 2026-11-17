@@ -67,6 +67,10 @@
 
 <img src="./docs/screenshots/05-alert.png" alt="提醒页：订阅状态、降价规则与历史记录" width="30%" />
 
+<img src="./docs/screenshots/02-trend-crosshair.png" alt="走势页：点选走势图后出现的十字光标与读数气泡" width="30%" />
+
+<img src="./docs/screenshots/01-home-crosshair.png" alt="首页近 30 天迷你走势：点选后的一行读数" width="30%" />
+
 </div>
 
 <p align="center"><sub>截图由开发者工具自动化服务抓取，含 Canvas 图表图层。</sub></p>
@@ -78,6 +82,7 @@
 - 首页把 92# 放在大卡，95#、98#、0# 按固定顺序排成小卡，不跟着点击顺序重排
 - 切换大卡油品时，调价幅度、近 30 天走势、最新通知里的油品和金额一起换
 - 走势图画阶梯线：横段是价格不变的调价周期，竖线是调价那一刻的跳变
+- 走势图上点一下就出十字光标：竖线对日期、横线对价格，读出那一格的准确价格；拖动可以逐日扫，再点一次收起
 - 调价页把正式公告和市场预测分成两栏，不只靠颜色区分，预测一律标「非官方」
 - 国际页固定写明单位是美元/桶，行情延时多少分钟也照实标出来
 - 提醒页可以写「官方降价就提醒我」，也能设目标价和单次降幅门槛，预测提醒默认关掉
@@ -225,6 +230,7 @@ module.exports = {
 | `node scripts/check-modules.js` | 逐个 require 运行时模块与服务端模块，挡加载期 ReferenceError |
 | `node scripts/verify-data.js` | 打印数据层算出的价格、走势、通知与行情 |
 | `node scripts/verify-collector.js` | 采集器解析回归，`--live` 追加真实抓取与 pg-mem 入库 |
+| `node scripts/verify-chart.js` | 走势图自检：绘图几何、选点算法与组件触摸链路（假的 Canvas 上下文） |
 | `node scripts/sync-shared.js` | 由 `data/` 生成服务端共享模块并做一致性断言 |
 | `node scripts/build-icons.js` | 重生成 `assets/icons/*.png`，需要本机 Chrome |
 | `node scripts/preview-qr.js <appid>` | 上传预览包并出扫码图，必须用正式 AppID |
