@@ -157,9 +157,12 @@ Component({
     /** 读数气泡里的日期文案 */
     _dateText(point) {
       const s = String(point.date || '');
-      // 油品历史是 YYYY-MM-DD、国际行情是 MM-DD HH:mm:ss
+      // 带时刻的（国际行情：2026-11-17 22:45:00）要显示到分钟，
+      // 只显示日期的话日内那根线上的点分不清是几点
+      if (s.indexOf(' ') > 0) return fmt.dateTime(s);
+      // 油品历史：2026-11-13
       if (/^\d{4}-\d{2}-\d{2}/.test(s)) return fmt.shortDate(s);
-      return fmt.dateTime(s);
+      return s;
     },
 
     /** 取事件里最靠前的那个触点 */

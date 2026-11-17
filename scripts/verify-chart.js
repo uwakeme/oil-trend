@@ -177,6 +177,17 @@ inst._active = null;
 inst.onTouchStart({ touches: [{ x: x15, y: 90 }] });
 check('interactive=false 时点了没反应', inst._active === null);
 
+console.log('\n--- 读数日期文案 ---');
+// 国际行情的点日期是 'YYYY-MM-DD HH:mm:ss'，油品历史是 'YYYY-MM-DD'。
+// 两种都带 'YYYY-MM-DD' 开头，早先只按日期匹配，国际行情就只剩 '11/17'，
+// 日内那 15 分钟一个点根本分不清是几点。
+check('油品历史只显示月日',
+  inst._dateText({ date: '2026-11-13' }) === '11/13',
+  inst._dateText({ date: '2026-11-13' }));
+check('国际行情显示到分钟',
+  inst._dateText({ date: '2026-11-17 22:45:00' }) === '11-17 22:45',
+  inst._dateText({ date: '2026-11-17 22:45:00' }));
+
 chart.drawSeries = origDraw;
 delete global.wx;
 

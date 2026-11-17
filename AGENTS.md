@@ -160,6 +160,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 画布上用 `bindtouchmove` 而不是 `catchtouchmove` | catch 会把页面滚动吞掉 —— 手指落在图上就滚不动 | 画布用 `bind*`，页面照常滚；图表自己的拖动在 `onTouchMove` 里处理 |
 | 自检脚本里直接 require 组件会炸 | node 里没有 `Component` 也没有 `wx`；而且 `wx` 是 **render 时**才读的，require 完就删会 ReferenceError | 先补 `global.Component` / `global.wx`，`wx` 留到组件跑完再删（`scripts/verify-chart.js`） |
 | 自动化协议点不了按钮 → 交互只能假跑 | `Element.tap` / `Element.query` 在 IDE 2.02 未实现，想验证点选只能靠肉眼 | 用假的 Canvas 上下文直接调组件的 `onTouchStart`；要截图就临时注入固定选中点，截完必须还原（`.tooling/shot-crosshair.js`） |
+| 读数只按 `YYYY-MM-DD` 匹配 → 国际行情丢掉时刻 | 国际行情的点日期是 `YYYY-MM-DD HH:mm:ss`，油品历史是 `YYYY-MM-DD` —— 两者都带 `YYYY-MM-DD` 开头，只按日期匹配的话国际行情只剩 `11/17`，日内 15 分钟一个点根本分不清是几点 | 先看有没有空格再判带时刻：`components/trend-chart/index.js` 的 `_dateText`，带时刻走 `fmt.dateTime`（到分钟），纯日期走 `fmt.shortDate`；`scripts/verify-chart.js` 里有对应用例 |
 
 ## 数据源现状（2026-11-16 起）
 
