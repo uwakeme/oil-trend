@@ -55,11 +55,11 @@
 
 <div align="center">
 
-<img src="./docs/screenshots/01-price-home.png" alt="油价首页：92# 主价格卡、四个油品小卡、下一次调价窗口与近 30 天走势" width="30%" />
+<img src="./docs/screenshots/01-price-home.png" alt="油价首页：92# 主价格卡、四个油品小卡、预计下次调价窗口（含下次通知时间）与近 30 天走势" width="30%" />
 
 <img src="./docs/screenshots/02-trend.png" alt="走势页：阶梯线价格图与调价节点列表" width="30%" />
 
-<img src="./docs/screenshots/03-notice.png" alt="调价页：下一轮窗口、正式结果与市场预测分栏" width="30%" />
+<img src="./docs/screenshots/03-notice.png" alt="调价页：预计下次调价窗口与下次通知时间、正式结果与市场预测分栏" width="30%" />
 
 <br />
 
