@@ -958,6 +958,47 @@
               "flat"
             ],
             "example": "down"
+          },
+          "estimate": {
+            "type": "object",
+            "description": "推算的下一轮调价日与下次公告发布日。来源还没公布下一轮时用它兜住界面 —— 界面上必须标「推算 · 非官方」，不能当成官方结果",
+            "properties": {
+              "nextAdjustDate": {
+                "type": "string",
+                "description": "推算的下一轮调价日 YYYY-MM-DD",
+                "example": "2026-11-26"
+              },
+              "nextNoticeDate": {
+                "type": "string",
+                "description": "推算的下次公告发布日 YYYY-MM-DD。实测 35 条发改委公告的发布日与调价执行日全部同一天，所以与下一轮调价日同一天",
+                "example": "2026-11-26"
+              },
+              "daysLeft": {
+                "type": "integer",
+                "description": "距今天还有几天",
+                "example": 9
+              },
+              "basedOn": {
+                "type": "string",
+                "description": "推算依据：最近一次实际调价日 YYYY-MM-DD",
+                "example": "2026-11-12"
+              },
+              "cycleWorkdays": {
+                "type": "integer",
+                "description": "调价周期的工作日数",
+                "example": 10
+              },
+              "note": {
+                "type": "string",
+                "description": "推算口径说明，界面上原样显示",
+                "example": "按 10 个工作日周期推算 · 非官方，以正式公告为准"
+              },
+              "noticeNote": {
+                "type": "string",
+                "description": "公告发布时间的口径说明",
+                "example": "公告一般在调价当天上午至下午发布"
+              }
+            }
           }
         }
       },

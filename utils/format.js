@@ -158,6 +158,99 @@ function countdown(daysLeft) {
 }
 
 /**
+ * 两个日期之间差几天（按 UTC 日历日算）。
+ */
+function dayDiff(fromDate, toDate) {
+  var a = Date.parse(String(fromDate || '').slice(0, 10) + 'T00:00:00Z');
+  var b = Date.parse(String(toDate || '').slice(0, 10) + 'T00:00:00Z');
+  if (!isFinite(a) || !isFinite(b)) return 0;
+  return Math.round((b - a) / 86400000);
+}
+
+/**
+ * 调价窗口卡的展示文案（首页与调价页共用一套规则，别各写一遍）。
+ *
+ * ⚠️ 三条规则，缺一条界面就会自相矛盾：
+ *   1. 来源已公布下一轮 → 主日期用来源日期，副说明写「预计时间 · 以官方公告为准」；
+ *   2. 来源还没公布（库里留着上一轮，daysLeft < 0）→ 主日期改用**推算值**，
+ *      并且必须标「推算 · 非官方」—— 绝不把猜测值当官方结果摆出去；
+ *   3. 「下次通知」= 下一轮调价公告的发布日。
+ *      实测 35 条发改委公告，发布日与调价执行日**全部是同一天**，
+ *      所以它与下一轮调价日同一天，差别只在时刻：
+ *      公告上午发，油价当晚 24:00 才变。
+ *
+ * @param {object} win 后端/演示源给的窗口对象
+ * @returns {object} 页面直接可用的展示字段
+ */
+function windowMeta(win) {
+  var w = win || {};
+  var est = w.estimate || null;
+  var hasEstimate = !!(est && est.nextAdjustDate);
+  var srcDaysLeft = Number(w.daysLeft);
+  if (!isFinite(srcDaysLeft)) srcDaysLeft = 0;
+  var expired = windowExpired(srcDaysLeft);
+  // 来源根本没给窗口（库里一条窗口记录都没有）时，主日期也只能来自推算值 ——
+  // 标「推算 · 非官方」，不能装作是来源公布的。
+  var noSource = !w.date;
+  // 来源过期（或压根没有）且有推算 → 用推算值当主日期；
+  // 否则一律用来源日期（来源优先）
+  var useEstimate = hasEstimate && (expired || noSource);
+
+  var dateStr = useEstimate ? est.nextAdjustDate : (w.date || '');
+  var daysLeft = useEstimate ? (Number(est.daysLeft) || 0) : srcDaysLeft;
+  // 「下次通知」只在能确定「下一轮」时才给：
+  //   来源已公布下一轮 → 就是那一轮（公告在调价当天发布）；
+  //   来源过期且有推算 → 推算出来的那一轮；
+  //   来源过期又没有推算依据 → 下一轮是哪天根本不知道，宁可不给，
+  //   拿过期窗口的日期冒充「下次通知」是错的。
+  var noticeDate = '';
+  if (useEstimate) noticeDate = est.nextNoticeDate || dateStr;
+  else if (!expired) noticeDate = dateStr;
+  var time = w.time || '24:00';
+
+  // 周期进度：
+  //   主日期是来源窗口时，用来源自己的 cycleStart；
+  //   主日期换成推算值时，进度必须按「上一轮调价日 → 推算的下一轮」重算 ——
+  //   否则进度条还是上一轮的，跟卡片上的日期对不上（一条满格，
+  //   底下写着「还有 6 天」）。
+  var progress = w.progress === undefined ? 0 : w.progress;
+  var cycleStarted = !!w.cycleStarted;
+  if (useEstimate && est.basedOn && est.nextAdjustDate) {
+    var total = dayDiff(est.basedOn, est.nextAdjustDate);
+    if (total > 0) {
+      var elapsed = total - (Number(est.daysLeft) || 0);
+      progress = Math.min(100, Math.max(0, Math.round(elapsed / total * 100)));
+      cycleStarted = elapsed > 0;
+    }
+  }
+
+  return {
+    hasDate: !!dateStr,
+    dateStr: dateStr,
+    // 首页用带时刻的写法，调价页把时刻拆开单列
+    dateText: dateStr ? (cnDate(dateStr) + ' ' + time) : '',
+    dateOnlyText: cnDate(dateStr),
+    time: time,
+    daysLeft: daysLeft,
+    passedDays: Math.abs(daysLeft),
+    expired: expired,
+    // 主日期是不是推算值 —— 界面上要标出来，不能让人当官方值看
+    estimated: useEstimate,
+    titleText: useEstimate ? '预计下次调价窗口' : windowTitle(srcDaysLeft),
+    // 日期下面那行小字
+    dateNote: useEstimate ? (est.note || '') : '预计时间 · 以官方公告为准',
+    countdownText: (expired && !useEstimate)
+      ? ('已过 ' + Math.abs(srcDaysLeft) + ' 天 · 等待下一轮公布')
+      : countdown(daysLeft),
+    // 「下次通知」那一行
+    noticeText: noticeDate ? ('预计 ' + cnDate(noticeDate) + ' 发布公告') : '',
+    noticeNote: (est && est.noticeNote) ? est.noticeNote : '',
+    progress: progress,
+    cycleStarted: cycleStarted
+  };
+}
+
+/**
  * 来源 mode 白名单 → 固定文案。
  *
  * 只认两种：
@@ -278,8 +371,10 @@ module.exports = {
   dateTime: dateTime,
   fullDate: fullDate,
   countdown: countdown,
+  dayDiff: dayDiff,
   windowExpired: windowExpired,
   windowTitle: windowTitle,
+  windowMeta: windowMeta,
   syncStatus: syncStatus,
   sourceLine: sourceLine,
   sourceName: sourceName,

@@ -94,8 +94,15 @@ offsets.forEach(function (offset) {
 
     // 1) 30 天走势必须每天都有点，末点等于当前价
     var okPoints = points30.length === 30 && Math.abs(lastPrice - current) < 0.0001;
-    // 2) 调价窗口永远是 14 天后（跟着今天一起平移）
-    var okWindow = window.daysLeft === 14;
+    // 2) 调价窗口永远是 6 天后（跟着今天一起平移），
+    //    而且窗口日期必须与「推算的下一轮调价日」是同一天 ——
+    //    演示数据里这两个日期对不上，窗口卡上「预计下次调价」和「下次通知」
+    //    就会自己跟自己打架。
+    var okWindow = window.daysLeft === 6 &&
+      !!window.estimate &&
+      window.estimate.nextAdjustDate === window.date &&
+      window.estimate.daysLeft === window.daysLeft &&
+      window.estimate.nextNoticeDate === window.estimate.nextAdjustDate;
     // 3) 窗口进度在 0~100 之间且不为 0（周期已经开始）
     var okProgress = window.progress > 0 && window.progress <= 100;
     // 4) 首页第一个标签正好是 29 天前（没有二次平移）

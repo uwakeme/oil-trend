@@ -95,6 +95,10 @@ Page({
       return;
     }
     var win = payload.window || {};
+    // 窗口卡的展示规则与首页共用一套（utils/format.windowMeta）：
+    // 来源还没公布下一轮时，主日期改用推算值并标「推算 · 非官方」，
+    // 同时给出「下次通知」= 下一轮调价公告的发布日。
+    var winMeta = fmt.windowMeta(win);
     var sync = payload.sync || {};
     // 同步状态要同时看 payload.source：
     // 演示数据下报「自动同步正常」是误导（看到的不是采集结果）
@@ -124,7 +128,8 @@ Page({
         kind: n.kind,
         kindLabel: n.kind === 'official' ? '正式结果' : '市场预测',
         title: n.title,
-        publishedText: fmt.dateOnly(n.publishedAt),
+        // 发布日用 announcedAt（真实公告发布日），不是 publishedAt（采集入库时刻）
+        publishedText: n.announcedAt ? fmt.dateOnly(n.announcedAt) : '',
         executeText: fmt.cnDate(String(n.executeAt || '').slice(0, 10)) +
           ' ' + (String(n.executeAt || '').slice(11, 16) || '') + ' 执行',
         changeText: meta.text,
@@ -168,15 +173,21 @@ Page({
       sourceWarn: srcLine.warn,
       window: {
         // 没有真实窗口日期就别渲染窗口卡（否则倒计时会写成「就是今天」）
-        hasDate: !!win.date,
-        dateText: fmt.cnDate(win.date),
-        time: win.time,
-        progress: win.progress === undefined ? 0 : win.progress,
-        cycleStarted: !!win.cycleStarted,
-        countdownText: fmt.countdown(win.daysLeft),
-        // 过期窗口的标题与首页共用一套规则（utils/format.windowTitle）
-        expired: fmt.windowExpired(win.daysLeft),
-        titleText: fmt.windowTitle(win.daysLeft)
+        hasDate: winMeta.hasDate,
+        dateText: winMeta.dateOnlyText,
+        time: winMeta.time,
+        // 日期下面那行小字：用推算值时写「推算 · 非官方」
+        dateNote: winMeta.dateNote,
+        progress: winMeta.progress,
+        cycleStarted: winMeta.cycleStarted,
+        countdownText: winMeta.countdownText,
+        // 过期窗口的标题与首页共用一套规则（utils/format.windowMeta）
+        expired: winMeta.expired,
+        estimated: winMeta.estimated,
+        titleText: winMeta.titleText,
+        // 下次通知时间：下一轮调价公告的发布日
+        noticeText: winMeta.noticeText,
+        noticeNote: winMeta.noticeNote
       },
       sync: {
         // 状态文案由 format.syncStatus 统一映射，新增状态不会再漏
@@ -242,7 +253,8 @@ Page({
     var rawKnown = typeof rawDelta === 'number' && isFinite(rawDelta);
     var rawMeta = rawKnown ? changeMeta(rawDelta) : { verb: '待公布', direction: 'flat' };
     var rawOfficialText = fmt.noticeOfficialText(raw);
-    var publishedText = fmt.dateTime(raw.publishedAt);
+    // 公告发布日（announcedAt）。publishedAt 是采集入库时刻，不是发布日。
+    var announcedText = raw.announcedAt ? fmt.dateOnly(raw.announcedAt) : '';
 
     this.setData({
       sheetVisible: true,
@@ -262,8 +274,8 @@ Page({
         // 原文链接：没有就不给，别留个点不动的空壳
         sourceUrl: rawSource.url || '',
         sourceLine: (rawSource.name || '未标注来源') +
-          (publishedText ? (' · 发布于 ' + publishedText) : ''),
-        publishedText: publishedText
+          (announcedText ? (' · 公告发布于 ' + announcedText) : ''),
+        publishedText: announcedText
       }
     });
   },

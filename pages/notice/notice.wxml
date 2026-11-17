@@ -25,14 +25,24 @@
       <text class="window-label">{{window.titleText}}</text>
       <view class="window-date">
         <text class="window-date-value">{{window.dateText}}</text>
-        <text class="window-date-note">{{window.time}} · 预计时间</text>
+        <text class="window-date-note">{{window.time}} 起执行</text>
       </view>
+      <!-- 用推算值时这里写「推算 · 非官方」 -->
+      <text class="window-date-source">{{window.dateNote}}</text>
       <view class="window-progress">
         <view class="window-progress-bar" style="width:{{window.progress}}%"></view>
       </view>
       <view class="window-meta">
         <text>{{window.cycleStarted ? '本轮周期已开始' : '本轮周期尚未开始'}}</text>
         <text>{{window.countdownText}}</text>
+      </view>
+      <!-- 下次通知时间：下一轮调价公告的发布日 -->
+      <view class="window-notice" wx:if="{{window.noticeText}}">
+        <view class="window-notice-row">
+          <text class="window-notice-label">下次通知</text>
+          <text class="window-notice-value">{{window.noticeText}}</text>
+        </view>
+        <text class="window-notice-note" wx:if="{{window.noticeNote}}">{{window.noticeNote}}</text>
       </view>
     </view>
 

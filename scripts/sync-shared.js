@@ -28,6 +28,10 @@ const ANCHOR = config.demoAnchorDate || '2026-11-10';
 // 行情载荷的组装逻辑只有一份实现，避免再次分叉。
 const marketsSource = fs.readFileSync(path.join(ROOT, 'data', 'markets.js'), 'utf8')
   .replace(/\nmodule\.exports[\s\S]*$/, '\n');
+// 把 data/adjust-cycle.js 整份内联：调价周期推算（法定节假日表 + 下一轮推算）。
+// 两端共用同一份实现 —— 节假日表与推算规则一旦分叉，推出来的日期就对不上。
+const cycleSource = fs.readFileSync(path.join(ROOT, 'data', 'adjust-cycle.js'), 'utf8')
+  .replace(/\nmodule\.exports[\s\S]*$/, '\n');
 const SHARED_DIR = path.join(ROOT, 'server', 'src', 'shared');
 const TARGET = path.join(SHARED_DIR, 'shared.js');
 
@@ -43,6 +47,7 @@ const template = [
   ' *   data/adjustments.js  调价时间线（全国统一幅度）',
   ' *   data/regions.js      地区价差',
   ' *   data/fuels.js        油品定义',
+  ' *   data/adjust-cycle.js 调价周期推算（节假日表 + 下一轮调价日）',
   ' *',
   ' * 改了上面任意一个文件，都要重新跑 scripts/sync-shared.js。',
   ' * 只有这一份副本，供自建后端（server/）使用。',
@@ -51,6 +56,24 @@ const template = [
   '/* ---------- 行情（来自 data/markets.js，两端共用同一份实现） ---------- */',
   '',
   marketsSource,
+  '/* ---------- 调价周期推算（来自 data/adjust-cycle.js，两端共用同一份实现） ---------- */',
+  '',
+  'var ADJUST_CYCLE = (function () {',
+  cycleSource,
+  '  return {',
+  '    HOLIDAYS: HOLIDAYS,',
+  '    MAKEUP_WORKDAYS: MAKEUP_WORKDAYS,',
+  '    WORKDAYS_PER_CYCLE: WORKDAYS_PER_CYCLE,',
+  '    ESTIMATE_NOTE: ESTIMATE_NOTE,',
+  '    NOTICE_TIME_NOTE: NOTICE_TIME_NOTE,',
+  '    isHoliday: isHoliday,',
+  '    isWorkday: isWorkday,',
+  '    addWorkdays: addWorkdays,',
+  '    estimateNextAdjustDate: estimateNextAdjustDate,',
+  '    estimateNoticeDate: estimateNoticeDate,',
+  '    estimateNext: estimateNext',
+  '  };',
+  '})();',
   'var DEMO_ANCHOR = ' + JSON.stringify(ANCHOR) + ';',
   '',
   'var FUELS = ' + j(fuels.FUELS) + ';',
@@ -216,6 +239,7 @@ const template = [
   '  buildSeries: buildSeries,',
   '  MARKET_PERIODS: MARKET_PERIODS,',
   '  marketAxisLabel: marketAxisLabel,',
+  '  ADJUST_CYCLE: ADJUST_CYCLE,',
   '  buildMarketPayload: buildMarketPayload,',
   '  clock: { today: today, shiftDate: shiftDate, daysUntil: daysUntil, offsetDays: offsetDays }',
   '};'
@@ -293,6 +317,45 @@ var marketMismatch = 0;
   });
 });
 if (marketMismatch) fail(marketMismatch + ' 处行情载荷与演示源不一致');
+
+// 调价周期推算：两端必须算出同一个日期
+var cycle = require(path.join(ROOT, 'data', 'adjust-cycle.js'));
+if (shared.ADJUST_CYCLE.ESTIMATE_NOTE !== cycle.ESTIMATE_NOTE) {
+  fail('推算口径说明两端不一致');
+}
+if (shared.ADJUST_CYCLE.NOTICE_TIME_NOTE !== cycle.NOTICE_TIME_NOTE) {
+  fail('公告发布时间口径说明两端不一致');
+}
+var probeBase = '2026-11-12';
+var probeMini = cycle.estimateNextAdjustDate(probeBase);
+var probeCloud = shared.ADJUST_CYCLE.estimateNextAdjustDate(probeBase);
+if (probeMini !== probeCloud) {
+  fail('下一轮调价日两端算得不一样：' + probeMini + ' vs ' + probeCloud);
+}
+
+// 推算口径必须能复现真实历史轮次。
+// 这 4 对都是线上 /api/trend 给的真实调价节点（相邻两轮的实际执行日），
+// 推算必须逐个对上 —— 对不上就说明节假日表或周期口径错了。
+var HISTORY_CASES = [
+  ['2026-10-15', '2026-10-29'],   // 常规 10 工作日
+  ['2026-10-29', '2026-11-12'],   // 常规 10 工作日
+  ['2026-09-24', '2026-10-15'],   // 跨国庆：10 月 1-7 日放假顺延
+  ['2026-02-04', '2026-02-25']    // 跨春节：2 月 15-23 日放假顺延
+];
+var historyMiss = 0;
+HISTORY_CASES.forEach(function (pair) {
+  var got = cycle.estimateNextAdjustDate(pair[0]);
+  if (got !== pair[1]) {
+    historyMiss++;
+    console.error('✗ 推算 ' + pair[0] + ' → ' + got + '，实际是 ' + pair[1]);
+  }
+});
+if (historyMiss) fail(historyMiss + ' 个真实历史轮次推算不对');
+
+// 调休上班日算工作日、周末与法定假日不算
+if (!cycle.isWorkday('2026-10-10')) fail('2026-10-10 是调休上班日，应算工作日');
+if (cycle.isWorkday('2026-10-03')) fail('2026-10-03 在国庆假期内，不该算工作日');
+if (cycle.isWorkday('2026-11-14')) fail('2026-11-14 是周六，不该算工作日');
 
 // 调价节点数也要一致
 fuels.FUELS.forEach(function (fuel) {

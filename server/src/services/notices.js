@@ -60,12 +60,15 @@ function actionNotices(payload) {
     dao.notices.listPublic(filter, NOTICE_PAGE, skip),
     query.getWindow(),
     query.getPrices(regionCode),
-    dao.runs.latest()
+    dao.runs.latest(),
+    // 推算下一轮调价日的基准：最近一次实际调价日
+    query.latestAdjustDate()
   ]).then(function (r0) {
     var notices = r0[0];
     var win = r0[1];
     var prices = r0[2];
     var lastRun = r0[3];
+    var lastAdjustDate = r0[4];
 
     var priceMap = {};
     prices.forEach(function (p) { priceMap[p.fuelId] = p.price; });
@@ -81,7 +84,7 @@ function actionNotices(payload) {
     return measure.measureMany(execDates, tonByDate).then(function (measuredByDate) {
       return {
         region: { code: region.code, fullName: region.name + ' · ' + region.city },
-        window: query.buildWindow(win),
+        window: query.buildWindow(win, lastAdjustDate),
         sync: {
           // 没有采集记录 / 真实来源全关时是 idle，不能报「同步正常」
           status: lastRun ? (lastRun.needsReview && lastRun.needsReview.length ? 'pending' : (lastRun.status || 'idle')) : 'idle',

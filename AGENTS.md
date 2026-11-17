@@ -71,6 +71,9 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
   （由 `scripts/gen-province-geo.js` 从 DataV 生成），前端只负责拿经纬度，不往小程序包里塞地理数据
   —— 坐标系全程 **GCJ-02**，与 `wx.getLocation` 的 `type:'gcj02'` 对齐
 - **演示数据日期整体平移**（`utils/demo-clock.js`，锚点 `config.demoAnchorDate`），保证长期打开数据仍然新鲜
+- **调价窗口的推算值**：来源没公布下一轮时，用「最近一次实际调价日 + 10 个工作日」推算（`data/adjust-cycle.js`，含法定节假日表；遇节假日顺延、调休上班日算工作日）。
+  单一真源在小程序端 `data/`，服务端副本由 `scripts/sync-shared.js` 生成 —— 节假日表一旦分叉，推出来的日期就对不上。
+  推算值**必须标「推算 · 非官方」**（项目铁律：绝不把猜测值发布成正式结果）
 - **真源在 `data/`，`server/src/shared/shared.js` 是生成产物**（`scripts/sync-shared.js` 生成 + 一致性断言）。改完 `data/` 必须重跑同步脚本；**手改生成文件会被下次覆盖**
 - **后端地址不对外公开**：仓库是 public，README、GitHub Pages 主页等对外文档只写「部署在自己的服务器上」，**不要出现真实后端域名**（配置里必须写的 `apiBaseUrl` 除外）
 
@@ -160,7 +163,11 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 画布上用 `bindtouchmove` 而不是 `catchtouchmove` | catch 会把页面滚动吞掉 —— 手指落在图上就滚不动 | 画布用 `bind*`，页面照常滚；图表自己的拖动在 `onTouchMove` 里处理 |
 | 自检脚本里直接 require 组件会炸 | node 里没有 `Component` 也没有 `wx`；而且 `wx` 是 **render 时**才读的，require 完就删会 ReferenceError | 先补 `global.Component` / `global.wx`，`wx` 留到组件跑完再删（`scripts/verify-chart.js`） |
 | 自动化协议点不了按钮 → 交互只能假跑 | `Element.tap` / `Element.query` 在 IDE 2.02 未实现，想验证点选只能靠肉眼 | 用假的 Canvas 上下文直接调组件的 `onTouchStart`；要截图就临时注入固定选中点，截完必须还原（`.tooling/shot-crosshair.js`） |
-| 读数只按 `YYYY-MM-DD` 匹配 → 国际行情丢掉时刻 | 国际行情的点日期是 `YYYY-MM-DD HH:mm:ss`，油品历史是 `YYYY-MM-DD` —— 两者都带 `YYYY-MM-DD` 开头，只按日期匹配的话国际行情只剩 `11/17`，日内 15 分钟一个点根本分不清是几点 | 先看有没有空格再判带时刻：`components/trend-chart/index.js` 的 `_dateText`，带时刻走 `fmt.dateTime`（到分钟），纯日期走 `fmt.shortDate`；`scripts/verify-chart.js` 里有对应用例 |
+| 读数只按 `YYYY-MM-DD` 匹配 → 国际行情丢掉时刻 | 国际行情的点日期是 `YYYY-MM-DD HH:mm:ss`，油品历史是 `YYYY-MM-DD` —— 两者都带 `YYYY-MM-DD` 开头，只按日期匹配的话国际行情只剩 `11/17`，日内 15 分钟一个点根本分不清是几点 | 先看有没有空格再判带时刻：`components/trend-chart/index.js` 的 `_dateText`，带时刻走 `fmt.dateTime`（到分钟），纯日期走 `fmt.shortDate`；`scripts/verify-contract.js` 里有对应用例 |
+| 来源还没公布下一轮时，窗口卡只能写「上一轮调价窗口」 | 预测源在两轮之间会把区块改成公布**上一轮结果**（实测 2026-11-17 三省页面给的都是 11-12 那轮的下调结果，`isForecast=false`），库里留的窗口就过期了 | 用「最近一次实际调价日 + 10 个工作日」推算下一轮（`data/adjust-cycle.js`，带法定节假日表），主日期换成推算值并标「推算 · 非官方」；来源一旦公布真实窗口就用真实值 —— 规则统一在 `utils/format.js` 的 `windowMeta` |
+| 推导节点的日期是**生效日**，不是执行日 | 官方公告的 `executeAt` 是执行日，`oil_adjust_events` 的 date 是挂牌价生效日（新价从执行日次日 00:00 才开始挂） | 推算基准要把推导节点**减一天**（`server/src/services/query.js` 的 `latestAdjustDate`）；不减的话下一轮整体多推一天（11-26 变 11-27） |
+| 公告发布日 ≠ 采集入库时刻 | `publishedAt` 是采集入库时间，列表里 4 条公告全显示成入库那天的日期，看着像刚发的 | 展示层读 `announcedAt`（发改委公告的 PubDate）；实测 35 条公告的**发布日与调价执行日全部同一天**（提前天数分布：提前 0 天 35 条），发布时刻 09:15~16:59 |
+| 「下次通知时间」跟「下次调价日」是同一天 | 发改委公告在**调价执行当天**发布，不是提前几天 —— 写成「提前 N 天收到通知」就是错的 | 下次通知日 = 下次调价日（同一天），差别只在时刻：公告上午发，24:00 才调价。口径写进 `data/adjust-cycle.js` 的 `NOTICE_TIME_NOTE` |
 
 ## 数据源现状（2026-11-16 起）
 

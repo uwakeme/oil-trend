@@ -16,10 +16,13 @@ const sources = require('./sources');
 /* ---------------- 时间辅助 ---------------- */
 
 function todayStr() {
-  var d = new Date();
-  var m = d.getMonth() + 1;
-  var day = d.getDate();
-  return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
+  // 统一按 UTC+8 日历日算（与 collector.js / alert.js 一致）：
+  // 服务器可能跑在 UTC，用本地时区会在早上 8 点前差一天 ——
+  // 推算下一轮调价日时差一天，整张窗口卡上的日期就都错了。
+  var d = new Date(Date.now() + 8 * 3600000);
+  var m = d.getUTCMonth() + 1;
+  var day = d.getUTCDate();
+  return d.getUTCFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
 }
 
 function dayDiff(fromDate, toDate) {
@@ -66,6 +69,42 @@ function getAdjustEvents() {
 }
 
 /**
+ * 最近一次**实际调价日（执行日）** —— 推算下一轮调价日的基准。
+ *
+ * ⚠️ 两张表的日期不是一个口径，混着取最大值会整体多推一天：
+ *   - 官方公告节点的 executeAt 就是**执行日**（公告写「X月X日24时起」的那个 X）；
+ *   - 历史推导节点（oil_adjust_events）的 date 是**挂牌价生效日** ——
+ *     新价从执行日次日 00:00 才开始挂牌，所以推导节点要减一天才是执行日。
+ *
+ * 实测：官方公告 2026-11-12 执行 → 推导节点记的是 2026-11-13；
+ *       不减一天的话，下一轮会推成 11-27 而不是 11-26。
+ *
+ * 未来的节点不算「已发生」（来源可能已经预告了下一轮）。
+ *
+ * @returns {Promise<string>} 'YYYY-MM-DD'；没有任何节点时返回空串
+ */
+function latestAdjustDate() {
+  return Promise.all([
+    dao.notices.listPublic('official', 60, 0),
+    dao.events.listAll()
+  ]).then(function (r) {
+    var today = todayStr();
+    var best = '';
+    // 官方公告：日期本身就是执行日
+    (r[0] || []).forEach(function (n) {
+      var d = String(n.executeAt || '').slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d <= today && d > best) best = d;
+    });
+    // 历史推导：日期是生效日，减一天才是执行日
+    (r[1] || []).forEach(function (e) {
+      var d = shiftDate(String(e.date || '').slice(0, 10), -1);
+      if (d && d <= today && d > best) best = d;
+    });
+    return best;
+  });
+}
+
+/**
  * 历史价的来源说明。
  *
  * ⚠️ 必须如实写清数据的来源与覆盖范围：走势图画的是**各省公布的挂牌价**，
@@ -102,18 +141,32 @@ function getHistoryByRegion(regionCode, fromDate) {
   });
 }
 
-function buildWindow(windowDoc) {
+function buildWindow(windowDoc, lastAdjustDate) {
+  var today = todayStr();
+  // 推算下一轮调价日。
+  //
+  // ⚠️ 推算值不是官方公布值：预测源在两轮之间会空窗（站点把区块改成公布上一轮结果），
+  // 这段时间里来源没有下一轮窗口可给。界面上必须标「推算 · 非官方」，
+  // 来源一旦公布真实窗口，就用真实值覆盖推算值。
+  var estimate = lastAdjustDate
+    ? shared.ADJUST_CYCLE.estimateNext(lastAdjustDate, undefined, today)
+    : null;
   if (!windowDoc) {
+    // 来源根本没有窗口记录时，日期留空 ——
+    // 写 date=today 会让倒计时显示成「就是今天」，那是假结论。
+    // 前端拿到空日期会改用推算值（并标「推算 · 非官方」）；
+    // 连推算依据都没有时就不渲染窗口卡，比显示一个假日期强。
     return {
-      date: todayStr(),
+      date: '',
       time: '24:00',
       daysLeft: 0,
       isOfficial: false,
       basis: '暂无窗口数据',
-      forecast: {}
+      forecast: {},
+      estimate: estimate
     };
   }
-  var daysLeft = dayDiff(todayStr(), windowDoc.date);
+  var daysLeft = dayDiff(today, windowDoc.date);
   var totalDays = Math.max(1, dayDiff(windowDoc.cycleStart || windowDoc.date, windowDoc.date));
   var passedDays = Math.max(0, totalDays - daysLeft);
   return {
@@ -128,7 +181,9 @@ function buildWindow(windowDoc) {
     forecast: windowDoc.forecast || {},
     // 幅度可能解析不出来（forecast 为空对象），方向单独给 ——
     // 前端靠它区分「持平」和「有方向但幅度待公布」
-    forecastDirection: windowDoc.forecastDirection || ''
+    forecastDirection: windowDoc.forecastDirection || '',
+    // 推算的下一轮调价日与下次公告发布日（来源没公布时用）
+    estimate: estimate
   };
 }
 
@@ -187,11 +242,14 @@ function actionHome(payload) {
   return Promise.all([
     getPrices(regionCode),
     getWindow(),
-    getLatestNotice()
+    getLatestNotice(),
+    // 推算下一轮调价日的基准：最近一次实际调价日
+    latestAdjustDate()
   ]).then(function (r0) {
     var prices = r0[0];
     var win = r0[1];
     var notice = r0[2];
+    var lastAdjustDate = r0[3];
 
     var priceList = prices.map(function (p) {
       return {
@@ -309,7 +367,7 @@ function actionHome(payload) {
         // 合法为空要标出来：这个地区还没采到价，不是「后端没给成」。
         // 前端据此显示空态，而不是回落演示数据。
         empty: priceList.length === 0,
-        window: buildWindow(win),
+        window: buildWindow(win, lastAdjustDate),
         trend30: trend30,
         changes: changes,
         notice: noticePayload,
@@ -552,6 +610,7 @@ module.exports = {
   getAdjustEvents: getAdjustEvents,
   getHistoryByRegion: getHistoryByRegion,
   buildWindow: buildWindow,
+  latestAdjustDate: latestAdjustDate,
   mergeAdjustNodes: mergeAdjustNodes,
   lastAdjustmentOf: lastAdjustmentOf,
   todayStr: todayStr

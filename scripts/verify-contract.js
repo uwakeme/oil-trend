@@ -326,6 +326,14 @@ function request(port, method, target, body) {
   });
 }
 
+/** 两个 YYYY-MM-DD 之间差几天 */
+function dayDiffOf(fromDate, toDate) {
+  var a = Date.parse(String(fromDate || '').slice(0, 10) + 'T00:00:00Z');
+  var b = Date.parse(String(toDate || '').slice(0, 10) + 'T00:00:00Z');
+  if (!isFinite(a) || !isFinite(b)) return 0;
+  return Math.round((b - a) / 86400000);
+}
+
 async function main() {
   process.env.OIL_ALLOW_NO_DATABASE = '1';
   process.env.OIL_TOKEN_SECRET = 'contract-test-secret-0123456789abcdef';
@@ -610,17 +618,86 @@ async function main() {
       indexPage.data.prices.every(function (p) { return p.changeText.indexOf('持平') < 0; }),
       indexPage.data.prices.map(function (p) { return p.changeText; }).join(' / '));
 
+    // 真实窗口下的展示（下面的过期夹具会覆盖它，先存下来给调价页对账用）
+    var homeWindowTitle = indexPage.data.window.titleText;
+    var homeWindowNote = indexPage.data.window.dateNote;
+    var homeWindowNotice = indexPage.data.window.noticeText;
+
+    /* ===== 推算：来源还没公布下一轮时，界面要给出预计时间并标明非官方 ===== */
+    check('后端给了推算的下一轮调价日',
+      !!(home.window && home.window.estimate && home.window.estimate.nextAdjustDate),
+      JSON.stringify(home.window && home.window.estimate));
+    check('推算值带口径说明与推算依据',
+      !!(home.window.estimate && home.window.estimate.note &&
+        home.window.estimate.note.indexOf('非官方') >= 0 && home.window.estimate.basedOn),
+      JSON.stringify(home.window.estimate));
+    check('下次公告发布日与下一轮调价日同一天（实测 35 条公告均在调价当天发布）',
+      home.window.estimate.nextNoticeDate === home.window.estimate.nextAdjustDate,
+      home.window.estimate.nextNoticeDate + ' vs ' + home.window.estimate.nextAdjustDate);
+    // ⚠️ 这两条钉死的是「推算基准取执行日，不是挂牌价生效日」：
+    //   夹具里最近一次实际调价的执行日是 2026-11-12
+    //   （历史推导节点记的是生效日 11-13 —— 新价从次日 00:00 才开始挂牌），
+    //   10 个工作日之后是 2026-11-26。
+    //   基准取成 11-13 的话，下一轮会推成 11-27 —— 整体多一天。
+    check('推算基准是最近一次实际调价的执行日',
+      home.window.estimate.basedOn === '2026-11-12',
+      '基准=' + home.window.estimate.basedOn);
+    check('推算的下一轮调价日是 10 个工作日之后',
+      home.window.estimate.nextAdjustDate === '2026-11-26',
+      home.window.estimate.nextAdjustDate);
+
     // 窗口已经过去（来源还没公布下一轮）：不能再写「下一次…距窗口 -1 天」
     var expiredHome = JSON.parse(JSON.stringify(home));
     expiredHome.window = Object.assign({}, expiredHome.window || {}, { daysLeft: -1 });
     indexPage.applyHome(expiredHome);
-    check('窗口过期时标题改成上一轮',
-      indexPage.data.window.titleText === '上一轮调价窗口', indexPage.data.window.titleText);
-    check('窗口过期时不显示负数倒计时',
-      indexPage.data.window.daysLeft === -1 && indexPage.data.window.passedDays === 1,
+    check('窗口过期时标题改成预计下次调价',
+      indexPage.data.window.titleText === '预计下次调价窗口', indexPage.data.window.titleText);
+    check('窗口过期时主日期换成推算值',
+      indexPage.data.window.dateText.indexOf(
+        home.window.estimate.nextAdjustDate.slice(5).replace('-', '月') + '日') >= 0,
+      indexPage.data.window.dateText + ' / 推算 ' + home.window.estimate.nextAdjustDate);
+    check('窗口过期时明确标了推算 · 非官方',
+      indexPage.data.window.dateNote.indexOf('推算') >= 0 &&
+      indexPage.data.window.dateNote.indexOf('非官方') >= 0,
+      indexPage.data.window.dateNote);
+    check('窗口过期时倒计时用推算的剩余天数，不是负数',
+      indexPage.data.window.daysLeft > 0 &&
+      indexPage.data.window.daysLeft === home.window.estimate.daysLeft,
       String(indexPage.data.window.daysLeft));
     check('窗口过期时不挂失效的预测',
       indexPage.data.forecast.text.indexOf('预计') < 0, indexPage.data.forecast.text);
+    // 推算态下进度条必须按新周期算（上一轮调价日 → 推算的下一轮），
+    // 沿用来源那一轮的进度会出现「满格 + 还有 N 天」的自相矛盾。
+    // 进度条只画在调价页，所以断言放在那边。
+    var expTotal = dayDiffOf(home.window.estimate.basedOn, home.window.estimate.nextAdjustDate);
+    var expProgress = expTotal > 0
+      ? Math.round((expTotal - home.window.estimate.daysLeft) / expTotal * 100)
+      : -1;
+
+    // 「下次通知」= 下一轮调价公告的发布日
+    check('首页给出下次通知时间',
+      indexPage.data.window.noticeText.indexOf('预计') >= 0 &&
+      indexPage.data.window.noticeText.indexOf('发布公告') >= 0,
+      indexPage.data.window.noticeText);
+    check('首页的下次通知与推算的公告发布日同一天',
+      indexPage.data.window.noticeText.indexOf(
+        home.window.estimate.nextNoticeDate.slice(5).replace('-', '月') + '日') >= 0,
+      indexPage.data.window.noticeText);
+    check('首页写明了公告发布时间口径',
+      indexPage.data.window.noticeNote.indexOf('当天') >= 0, indexPage.data.window.noticeNote);
+
+    // 没有任何推算依据时（库里一条调价节点都没有）：只能退回「上一轮调价窗口」
+    var noEstimateHome = JSON.parse(JSON.stringify(home));
+    noEstimateHome.window = Object.assign({}, noEstimateHome.window || {}, { daysLeft: -1 });
+    delete noEstimateHome.window.estimate;
+    indexPage.applyHome(noEstimateHome);
+    check('没有推算依据时窗口退回上一轮',
+      indexPage.data.window.titleText === '上一轮调价窗口', indexPage.data.window.titleText);
+    check('没有推算依据时不显示负数倒计时',
+      indexPage.data.window.daysLeft === -1 && indexPage.data.window.passedDays === 1,
+      String(indexPage.data.window.daysLeft));
+    check('没有推算依据时不给「下次通知」（下一轮是哪天根本不知道）',
+      !indexPage.data.window.noticeText, indexPage.data.window.noticeText);
 
     // 调价页
     var noticePage = makeInstance(loadPageDef('pages/notice/notice.js'));
@@ -652,6 +729,35 @@ async function main() {
     check('采集有存疑条目时同步状态显示「等待人工核对」',
       noticePage.data.sync.statusText === '等待人工核对', noticePage.data.sync.statusText);
     check('调价页渲染里没有 undefined', hasBadToken(allText(noticePage.data)) === false);
+    check('调价页给出下次通知时间',
+      noticePage.data.window.noticeText.indexOf('发布公告') >= 0,
+      noticePage.data.window.noticeText);
+    // 两页的窗口卡是同一套规则（utils/format.windowMeta），展示必须一模一样
+    check('调价页与首页的下次通知同一口径',
+      noticePage.data.window.noticeText === homeWindowNotice,
+      noticePage.data.window.noticeText + ' vs ' + homeWindowNotice);
+    check('调价页与首页的窗口标题同一口径',
+      noticePage.data.window.titleText === homeWindowTitle,
+      noticePage.data.window.titleText + ' vs ' + homeWindowTitle);
+    check('调价页与首页的窗口口径说明同一口径',
+      noticePage.data.window.dateNote === homeWindowNote,
+      noticePage.data.window.dateNote + ' vs ' + homeWindowNote);
+    // 来源已公布下一轮时：标题是「下一次调价窗口」，不标推算
+    check('来源已公布下一轮时标题是下一次调价窗口',
+      homeWindowTitle === '下一次调价窗口', homeWindowTitle);
+    check('来源已公布下一轮时不标推算',
+      homeWindowNote.indexOf('推算') < 0, homeWindowNote);
+
+    // 调价页：来源过期时进度条要按新周期算
+    var expiredNoticePayload = JSON.parse(JSON.stringify(noticeList));
+    expiredNoticePayload.window.daysLeft = -1;
+    noticePage.applyNotices(expiredNoticePayload);
+    check('调价页推算态下进度条按新周期算',
+      expProgress >= 0 && noticePage.data.window.progress === expProgress,
+      '实际 ' + noticePage.data.window.progress + ' / 期望 ' + expProgress);
+    check('调价页推算态下标题是预计下次调价窗口',
+      noticePage.data.window.titleText === '预计下次调价窗口',
+      noticePage.data.window.titleText);
 
     // 详情弹层：幅度未知的油品要显示 '--'，不能显示 0.00（那是「持平」，不是「不知道」）
     noticePage.data.notices = [{

@@ -334,9 +334,13 @@ Page({
     // 窗口可能已经过去 —— 来源还没公布下一轮时，库里留着的就是上一轮。
     // 这时不能还写「下一次调价窗口 · 距窗口 -1 天」，
     // 也不能把已经失效的预测挂在「下一次」下面。
-    var daysLeft = Number(windowData.daysLeft);
-    if (!isFinite(daysLeft)) daysLeft = 0;
-    var windowExpired = fmt.windowExpired(daysLeft);
+    //
+    // 展示规则与调价页共用一套（utils/format.windowMeta）：
+    // 来源过期时主日期改用**推算值**并标「推算 · 非官方」，
+    // 顺带给出「下次通知」= 下一轮调价公告的发布日。
+    var win = fmt.windowMeta(windowData);
+    var daysLeft = win.daysLeft;
+    var windowExpired = win.expired;
 
     var trendRaw = dataEmpty ? { points: [], labels: [] } : ((payload.trend30 || {})[fuelId] || { points: [], labels: [] });
     var points = trendRaw.points || [];
@@ -390,6 +394,11 @@ Page({
     var noticeSourceName = ((latest.source && latest.source.name) || fmt.sourceName(source)) +
       (source.mode === 'demo' ? '（演示数据）' : '');
 
+    // 公告发布日用 announcedAt（真实的公告发布日）——
+    // publishedAt 是**采集入库时刻**，写成「发布于 2026-11-16 20:03」是误导：
+    // 公告其实是 11-12 上午发的。
+    var announceDate = latest.announcedAt ? fmt.dateOnly(latest.announcedAt) : '';
+
     this.setData({
       loading: false,
       loadError: '',
@@ -400,13 +409,21 @@ Page({
       hero: hero,
       window: {
         // 有没有真实的窗口日期：没有就别渲染窗口卡（否则倒计时会写成「就是今天」）
-        hasWindow: !!windowData.date,
-        dateText: windowData.date ? (fmt.cnDate(windowData.date) + ' ' + (windowData.time || '')) : '',
+        hasWindow: win.hasDate,
+        dateText: win.dateText,
+        // 日期下面那行小字：用推算值时写「推算 · 非官方」
+        dateNote: win.dateNote,
         daysLeft: daysLeft,
-        passedDays: Math.abs(daysLeft),
+        passedDays: win.passedDays,
         expired: windowExpired,
-        // 标题规则与调价页共用一套（utils/format.windowTitle）
-        titleText: fmt.windowTitle(daysLeft)
+        // 主日期是不是推算值
+        estimated: win.estimated,
+        // 标题规则与调价页共用一套（utils/format.windowMeta）
+        titleText: win.titleText,
+        countdownText: win.countdownText,
+        // 下次通知时间：下一轮调价公告的发布日
+        noticeText: win.noticeText,
+        noticeNote: win.noticeNote
       },
       forecast: windowExpired
         // 窗口已经过去，挂在下面的预测早就失效了，不展示
@@ -449,10 +466,10 @@ Page({
         measuredNote: fmt.MEASURED_NOTE,
         prices: noticeEmpty ? [] : noticePrices,
         sourceName: noticeEmpty ? '' : noticeSourceName,
-        // 后端通知可能没有发布时间，缺了就不写「发布于 …」，别留个空壳
-        publishedText: noticeEmpty ? '' : fmt.dateTime(latest.publishedAt),
+        // 公告可能没有发布日（后端没给），缺了就不写，别留个空壳
+        publishedText: noticeEmpty ? '' : announceDate,
         sourceLine: noticeEmpty ? '' : (noticeSourceName +
-          (latest.publishedAt ? (' · 发布于 ' + fmt.dateTime(latest.publishedAt)) : ''))
+          (announceDate ? (' · 公告发布于 ' + announceDate) : ''))
       },
       // 后端没给更新时间就不写，别显示成「 更新」
       updatedLabel: payload.updatedAt ? (fmt.dateTime(payload.updatedAt) + ' 更新') : '',

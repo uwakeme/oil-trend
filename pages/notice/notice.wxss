@@ -51,7 +51,7 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  margin-bottom: 30rpx;
+  margin-bottom: 0;
 }
 
 .window-date-value {
@@ -87,6 +87,48 @@
   justify-content: space-between;
   font-size: 16rpx;
   color: rgba(255, 255, 255, .46);
+}
+
+/* 日期下面那行口径说明：用推算值时写「推算 · 非官方」 */
+.window-date-source {
+  display: block;
+  font-size: 18rpx;
+  color: rgba(255, 255, 255, .5);
+  margin: 12rpx 0 26rpx;
+}
+
+/* ---------- 下次通知 ---------- */
+/* 下一轮调价公告的发布日 —— 用户最想知道「什么时候会再收到通知」 */
+.window-notice {
+  margin-top: 26rpx;
+  padding-top: 22rpx;
+  border-top: 1rpx solid rgba(255, 255, 255, .14);
+}
+
+.window-notice-row {
+  display: flex;
+  align-items: baseline;
+  gap: 16rpx;
+}
+
+.window-notice-label {
+  font-size: 18rpx;
+  color: rgba(255, 255, 255, .55);
+  flex: 0 0 auto;
+}
+
+.window-notice-value {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #fff;
+}
+
+.window-notice-note {
+  display: block;
+  font-size: 16rpx;
+  color: rgba(255, 255, 255, .45);
+  margin-top: 10rpx;
+  line-height: 1.5;
 }
 
 /* ---------- 同步状态 ---------- */

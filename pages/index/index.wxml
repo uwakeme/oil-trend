@@ -84,20 +84,27 @@
     <view class="next-card" wx:if="{{window.hasWindow}}">
       <view class="next-top">
         <text class="next-title">{{window.titleText}}</text>
-        <text class="countdown" wx:if="{{window.expired}}">已过 <text class="num">{{window.passedDays}}</text> 天 · 等待下一轮公布</text>
-        <text class="countdown" wx:elif="{{window.daysLeft === 0}}">就是今天</text>
-        <text class="countdown" wx:else>距窗口 <text class="num">{{window.daysLeft}}</text> 天</text>
+        <text class="countdown">{{window.countdownText}}</text>
       </view>
       <view class="next-main">
         <view class="next-date">
           <text class="next-date-value">{{window.dateText}}</text>
-          <text class="next-date-note">预计时间 · 以官方公告为准</text>
+          <!-- 用推算值时这里写「推算 · 非官方」 -->
+          <text class="next-date-note">{{window.dateNote}}</text>
         </view>
         <!-- 窗口已过期时不渲染预测区：挂着的预测早就失效了 -->
         <view class="forecast" wx:if="{{!window.expired}}">
           <text class="forecast-value num {{forecast.direction}}">{{forecast.text}}</text>
           <text class="forecast-caption">{{forecast.caption}}</text>
         </view>
+      </view>
+      <!-- 下次通知时间：下一轮调价公告的发布日 -->
+      <view class="next-notice" wx:if="{{window.noticeText}}">
+        <view class="next-notice-row">
+          <text class="next-notice-label">下次通知</text>
+          <text class="next-notice-value">{{window.noticeText}}</text>
+        </view>
+        <text class="next-notice-note" wx:if="{{window.noticeNote}}">{{window.noticeNote}}</text>
       </view>
     </view>
 

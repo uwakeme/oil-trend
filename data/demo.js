@@ -12,6 +12,8 @@ const { ADJUSTMENTS, NATIONAL_BASE } = require('./adjustments');
 const { REGIONS, DEFAULT_REGION_CODE } = require('./regions');
 const { FUELS, getFuel } = require('./fuels');
 const { ADJUST_WINDOW, NOTICES, SYNC_STATUS } = require('./notices');
+// 调价周期推算：与服务端共用同一份实现（服务端副本由 scripts/sync-shared.js 生成）
+const ADJUST_CYCLE = require('./adjust-cycle');
 const { buildMarketPayload } = require('./markets');
 const clock = require('../utils/demo-clock');
 
@@ -110,6 +112,32 @@ function getRegions() {
   });
 }
 
+/**
+ * 推算的下一轮调价日与下次公告发布日。
+ *
+ * ⚠️ 推算必须在**未平移**的时间基准上算完再整体平移：
+ *   直接拿平移后的调价日去推，平移会把基准推到周末上，
+ *   「+10 个工作日」就多跨一天，推出来的日期和窗口日期对不上。
+ */
+function estimatePayload() {
+  var raw = ADJUST_CYCLE.estimateNext(
+    ADJUSTMENTS[ADJUSTMENTS.length - 1].date,
+    undefined,
+    undefined
+  );
+  if (!raw) return null;
+  var next = clock.shiftDate(raw.nextAdjustDate);
+  return {
+    nextAdjustDate: next,
+    nextNoticeDate: clock.shiftDate(raw.nextNoticeDate),
+    basedOn: clock.shiftDate(raw.basedOn),
+    cycleWorkdays: raw.cycleWorkdays,
+    note: raw.note,
+    noticeNote: raw.noticeNote,
+    daysLeft: clock.daysUntil(next)
+  };
+}
+
 function windowPayload(fuelId) {
   var windowDate = clock.shiftDate(ADJUST_WINDOW.date);
   var cycleStart = clock.shiftDate(ADJUST_WINDOW.cycleStartDate);
@@ -136,7 +164,9 @@ function windowPayload(fuelId) {
     // 方向单独给：幅度待公布时也要能显示「预计下调」
     forecastDirection: forecast.direction || '',
     isOfficial: ADJUST_WINDOW.isOfficial,
-    basis: ADJUST_WINDOW.basis
+    basis: ADJUST_WINDOW.basis,
+    // 推算的下一轮调价日与下次公告发布日（结构与服务端一致）
+    estimate: estimatePayload()
   };
 }
 
@@ -229,6 +259,8 @@ function getHome(regionCode, fuelId) {
     latestNotice: {
       id: latestNotice.id,
       title: latestNotice.title,
+      // 公告发布日（官方公告在调价执行当天发布）
+      announcedAt: clock.shiftDate(latestNotice.announcedAt || ''),
       executeAt: clock.shiftDateTime(latestNotice.executeAt),
       changes: noticeChanges
     },
@@ -292,6 +324,8 @@ function getNotices(regionCode, filter, fuelId) {
       kind: n.kind,
       title: n.title,
       publishedAt: clock.shiftDateTime(n.publishedAt),
+      // 公告发布日（不是采集入库时刻）
+      announcedAt: clock.shiftDate(n.announcedAt || ''),
       executeAt: clock.shiftDateTime(n.executeAt),
       changes: changes,
       summary: n.summary,
