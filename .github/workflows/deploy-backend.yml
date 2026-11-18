@@ -128,7 +128,10 @@ jobs:
 
             echo "安装生产依赖..."
             cd ${DEPLOY_DIR}/server
-            npm install --omit=dev
+            # ⚠️ 用 npm ci：严格按 package-lock.json 装，lock 与 package.json
+            # 对不上时直接失败。npm install 会自行改动 lock，
+            # 线上装出来的依赖版本可能和仓库里记录的不一样。
+            npm ci --omit=dev
 
             echo "应用数据库结构..."
             # 用项目自带的 pg 跑，不依赖服务器装 psql。

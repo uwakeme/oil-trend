@@ -1,0 +1,55 @@
+name: CI
+
+# 部署流水线只跑服务端自检 —— 前端那一层（WXML 静态检查、模块加载、
+# 数据层自检、绘图自检、端到端契约自检）没人跑，
+# 字段漂一个、空值当 0.00、来源标错，全都靠这一层挡住。
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # ⚠️ 必须先装服务端依赖：契约自检要用 pg-mem 起真库跑真服务，
+      # 依赖在 server/ 下（根目录没有 package.json）。
+      - name: Install server dependencies
+        working-directory: ./server
+        run: npm ci
+
+      - name: WXML static check
+        run: node scripts/lint-wxml.js
+
+      - name: Module load smoke test
+        run: node scripts/check-modules.js
+
+      - name: Data layer self-test
+        run: node scripts/verify-data.js
+
+      - name: Chart self-test
+        run: node scripts/verify-chart.js
+
+      - name: End-to-end contract self-test
+        run: node scripts/verify-contract.js
+
+      # 共享模块是生成产物：data/ 是真源，shared.js 必须与它一致。
+      # 跑一遍生成脚本再 git diff —— 不一致说明有人改了 data/ 却忘了重新生成。
+      - name: Shared module must match data/
+        run: |
+          node scripts/sync-shared.js
+          git diff --exit-code -- server/src/shared/shared.js
+
+      - name: Backend self-test
+        working-directory: ./server
+        run: npm test
