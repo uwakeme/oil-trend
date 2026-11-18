@@ -31,5 +31,12 @@ module.exports = {
 
   // 演示数据集的锚点日期：所有演示日期会按「今天 - 锚点」整体平移，
   // 保证数据集永远看起来是最近发生的，而不是一堆过期日期。
-  demoAnchorDate: '2026-11-10'
+  demoAnchorDate: '2026-11-10',
+
+  // 目标价提醒的取值区间（元/升）。
+  // ⚠️ 必须与服务端 server/src/config.js 的同名配置一致 ——
+  // 两边各写一套的话，前端允许填的值服务端会拒收，规则存不下去。
+  // server/scripts/selftest.js 里有一条断言钉住这两处相同。
+  targetPriceMin: 1.00,
+  targetPriceMax: 30.00
 };

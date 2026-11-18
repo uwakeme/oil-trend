@@ -84,10 +84,14 @@ function createApp() {
   app.use(express.json({ limit: '1mb' }));
 
   // 记录请求，方便排查「小程序到底打过来了没有」
+  //
+  // ⚠️ 只记路径，不记 query：/api/locate 的经纬度在 query 里，
+  // originalUrl 会把用户的精确坐标写进持久化日志。
+  // 需要看参数时从业务日志里找，别从访问日志里捞。
   app.use(function (req, res, next) {
     var start = Date.now();
     res.on('finish', function () {
-      console.log('[http] ' + req.method + ' ' + req.originalUrl +
+      console.log('[http] ' + req.method + ' ' + req.path +
         ' ' + res.statusCode + ' ' + (Date.now() - start) + 'ms');
     });
     next();

@@ -124,4 +124,10 @@ module.exports = {
   collectCron: collectCron,
   alertCron: alertCron,
 
+  // 目标价提醒的取值区间（元/升）
+  // ⚠️ 与小程序端 config/index.js 的 targetPriceMin/Max 必须一致：
+  // 服务端拒绝的范围前端还允许填，用户会看到「保存失败」却不知道为什么。
+  targetPriceMin: 1,
+  targetPriceMax: 30
+
 };

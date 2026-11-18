@@ -17,6 +17,8 @@ const dao = require('../dao');
 const shared = require('../shared/shared');
 const subscribe = require('./subscribe');
 const templates = require('./subscribe-templates');
+// 挂牌价测算：官方公告只给吨价，每升幅度要靠各地挂牌价的前后快照差值
+const measure = require('./measure');
 
 /**
  * 模板字段映射
@@ -92,6 +94,109 @@ function todayCN() {
 }
 
 /**
+ * 规则从哪一天开始接收事件。
+ *
+ * ⚠️ alert_rules.armed_at 是「规则最后一次保存的时间」。
+ * 事件日期早于它 → 这条事件在规则生效前就发生了，不该再补发通知
+ * （新装的用户会收到一堆早就过去的调价通知）。
+ *
+ * 比的是**事件本身的日子**（官方公告的执行日 / 预测的调价日），
+ * 不是「消息什么时候发出去」—— 公告提前几天发布是常事，
+ * 按发布时间比会把刚公布的下一轮也判成过期。
+ */
+function armedDateOf(rule) {
+  var v = rule && rule.armedAt;
+  if (!v) return '';
+  var t = v instanceof Date ? v.getTime() : Date.parse(String(v));
+  if (!isFinite(t)) return '';
+  var d = new Date(t + 8 * 3600000);
+  return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
+}
+
+/**
+ * 事件日期是否不早于规则生效日。
+ *
+ * 老规则没有 armed_at 字段 → 不限制（别因为缺字段把提醒全灭掉）。
+ * 事件日期解析不出来 → 也不限制（不猜）。
+ */
+function eventAfterArmed(rule, eventDate) {
+  var armed = armedDateOf(rule);
+  if (!armed) return true;
+  var d = String(eventDate || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return true;
+  return d >= armed;
+}
+
+/**
+ * 官方降价提醒里的「每升调整幅度」。
+ *
+ * ⚠️ 口径不能混算，优先级从准到粗：
+ *   1. official —— 来源直接公布了每升四油品幅度，原样用；
+ *   2. local    —— 本地区挂牌价的前后快照差值（实测），温馨提示标「本地区实测」；
+ *   3. median   —— 各省挂牌价前后差值的中位数（测算），温馨提示标「测算」；
+ *   4. 都没有   → null：模板的「调整价格」填不了就不填，这条不发。
+ *
+ * 官方公告只给吨价（汽/柴油，元/吨），不给每升幅度 ——
+ * 直接拿吨价填「调整价格」会把两个口径混在一起，
+ * 用户会看到「调整价格 645元」，以为每升降了 645 元。
+ */
+function officialAmountOf(notice, fuelId, ctx) {
+  var options = ctx || {};
+  var official = (notice.changes || {})[fuelId];
+  if (typeof official === 'number' && isFinite(official)) {
+    return { amount: official, source: 'official' };
+  }
+  var local = options.localAmount;
+  if (local && typeof local.delta === 'number' && isFinite(local.delta) && local.delta !== 0) {
+    return { amount: local.delta, source: 'local' };
+  }
+  var median = options.medianAmounts ? options.medianAmounts[fuelId] : null;
+  if (typeof median === 'number' && isFinite(median) && median !== 0) {
+    return { amount: median, source: 'median' };
+  }
+  return null;
+}
+
+/** 官方降价的温馨提示：地区、现价，以及幅度是什么口径 */
+function officialTip(regionName, currentText, source) {
+  var base = regionName + '现价' + currentText + '元';
+  if (source === 'local') return base + '·本地区实测';
+  if (source === 'median') return base + '·测算';
+  return base;
+}
+
+/**
+ * 把调价窗口整理成「预测提醒」能用的形状。
+ *
+ * ⚠️ 预测提醒的真正来源是 oil_windows（预测源写的那一条），
+ * 不是 oil_notices —— 预测源只写窗口，从不写 kind='forecast' 的通知，
+ * 以前去通知表里取最新预测永远取不到，预测提醒从来没触发过。
+ *
+ * 窗口已经过去 = 这一轮已经执行了，挂在下面的预测早就失效 → 不给。
+ */
+function forecastOf(windowDoc, today) {
+  if (!windowDoc) return null;
+  var forecast = windowDoc.forecast || {};
+  var dir = windowDoc.forecastDirection || forecast.direction || '';
+  if (!dir) return null;
+  var date = String(windowDoc.date || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  if (date < today) return null;
+  return {
+    kind: 'forecast',
+    executeAt: date,
+    direction: dir,
+    literMin: typeof forecast.literMin === 'number' ? forecast.literMin : null,
+    literMax: typeof forecast.literMax === 'number' ? forecast.literMax : null
+  };
+}
+
+/** 预测提醒的温馨提示：区间 + 非官方 */
+function forecastTip(min, max) {
+  return '约' + min.toFixed(2) + '-' + max.toFixed(2) + '元·整轮·非官方';
+}
+
+/**
  * 组装一条订阅消息的 data。
  *
  * 值一律走 subscribe-templates.js 的格式化函数：
@@ -140,8 +245,9 @@ function sendSubscribe(openid, template, templateData) {
 /**
  * 匹配单条规则
  */
-function matchRule(rule, prices, latestNotice, forecastNotice) {
+function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
   var hits = [];
+  var options = ctx || {};
 
   var priceDoc = null;
   prices.forEach(function (p) {
@@ -154,23 +260,37 @@ function matchRule(rule, prices, latestNotice, forecastNotice) {
 
   /* --- 1. 官方正式降价 --- */
   if (rule.officialDrop && latestNotice && latestNotice.kind === 'official') {
-    var delta = (latestNotice.changes || {})[rule.fuelId];
-    if (typeof delta === 'number' && delta < 0) {
-      hits.push({
-        type: 'officialDrop',
-        dedupKey: [rule.userId, rule.regionCode, rule.fuelId, 'official', latestNotice.executeAt].join('::'),
-        title: rule.fuelId + '# ' + fuelName(rule.fuelId) + ' 官方降价',
-        price: priceDoc.price,
-        template: TEMPLATE_FIELDS.officialDrop,
-        data: buildData({
-          fuel: fuelName(rule.fuelId),
-          amount: Math.abs(delta),
-          direction: '下调',
-          date: latestNotice.executeAt,
-          // 模板没有「地区」字段，地区和当前价只能写进温馨提示
-          tip: regionName + '现价' + currentText + '元'
-        })
-      });
+    var officialChanges = latestNotice.changes || {};
+    var officialDelta = officialChanges[rule.fuelId];
+    var noticeDir = latestNotice.direction || '';
+    // 方向明确是下调才提醒。
+    // ⚠️ 以前这里只看 latestNotice.changes[fuelId] —— 发改委公告入库时
+    // changes 是空的（公告只给吨价），于是官方降价提醒**一次都没触发过**。
+    // 方向没解析出来时，只有「官方公布了这一油品的每升降幅」才算数 ——
+    // 幅度本身就是官方的说法。
+    var isDrop = noticeDir === 'down' ||
+      (!noticeDir && typeof officialDelta === 'number' && officialDelta < 0);
+    if (isDrop && eventAfterArmed(rule, latestNotice.executeAt)) {
+      var amount = officialAmountOf(latestNotice, rule.fuelId, options);
+      // 每升幅度算不出来就不发：模板的「调整价格」填不了不能空着，
+      // 也不能拿吨价凑一个数字上去。
+      if (amount) {
+        hits.push({
+          type: 'officialDrop',
+          dedupKey: [rule.userId, rule.regionCode, rule.fuelId, 'official', latestNotice.executeAt].join('::'),
+          title: rule.fuelId + '# ' + fuelName(rule.fuelId) + ' 官方降价',
+          price: priceDoc.price,
+          template: TEMPLATE_FIELDS.officialDrop,
+          data: buildData({
+            fuel: fuelName(rule.fuelId),
+            amount: Math.abs(amount.amount),
+            direction: '下调',
+            date: latestNotice.executeAt,
+            // 模板没有「地区」字段，地区和当前价只能写进温馨提示
+            tip: officialTip(regionName, currentText, amount.source)
+          })
+        });
+      }
     }
   }
 
@@ -196,9 +316,17 @@ function matchRule(rule, prices, latestNotice, forecastNotice) {
   }
 
   /* --- 3. 预测下调（默认关闭） --- */
-  if (rule.forecastDrop && forecastNotice) {
-    var fDelta = (forecastNotice.changes || {})[rule.fuelId];
-    if (typeof fDelta === 'number' && fDelta < 0) {
+  //
+  // ⚠️ 预测源给的是**整轮区间**（元/升），没有分油品幅度 ——
+  // 把区间中值复制给四个油品等于替来源猜了四个数。
+  // 模板的「调整价格」只能放一个数字，这里放来源给的**区间下界**，
+  // 区间与「非官方」写进温馨提示，不编中值。
+  if (rule.forecastDrop && forecastNotice && forecastNotice.direction === 'down' &&
+      eventAfterArmed(rule, forecastNotice.executeAt)) {
+    var fMin = forecastNotice.literMin;
+    var fMax = forecastNotice.literMax;
+    // 幅度没解析出来时不能编：宁可不发这条，也不填一个猜的数。
+    if (typeof fMin === 'number' && typeof fMax === 'number') {
       hits.push({
         type: 'forecastDrop',
         dedupKey: [rule.userId, rule.regionCode, rule.fuelId, 'forecast', forecastNotice.executeAt].join('::'),
@@ -207,10 +335,10 @@ function matchRule(rule, prices, latestNotice, forecastNotice) {
         template: TEMPLATE_FIELDS.forecastDrop,
         data: buildData({
           fuel: fuelName(rule.fuelId),
-          amount: Math.abs(fDelta),
+          amount: fMin,
           direction: '预计下调',
           date: forecastNotice.executeAt,
-          tip: regionName + '预测仅供参考，以官方为准'
+          tip: forecastTip(fMin, fMax)
         })
       });
     }
@@ -316,29 +444,60 @@ function run() {
     dao.rules.listAll(1000, 0),
     dao.prices.listAll(),
     dao.notices.latestByKind('official'),
-    dao.notices.latestByKind('forecast')
+    // 预测提醒的来源是调价窗口（oil_windows）——
+    // ⚠️ 以前这里取的是 notices.latestByKind('forecast')，
+    // 而预测源只写 oil_windows、从不写 kind='forecast' 的通知，
+    // 查出来永远是 null：预测提醒在生产上从来没有过数据入口。
+    dao.windows.latest()
   ]).then(function (r0) {
     var rules = r0[0];
     var prices = r0[1];
     var latestNotice = r0[2];
-    var forecastNotice = r0[3];
+    var forecast = forecastOf(r0[3], todayCN());
 
-    return rules.reduce(function (chain, rule) {
-      return chain.then(function () {
-        summary.checked++;
+    // 本地区快照缓存：同一个 (地区, 油品, 生效日) 只查一次历史价
+    var snapshotCache = {};
 
-        // 没授权订阅就不发
-        if (!rule.subscribeGranted) {
-          summary.skipped++;
-          return null;
-        }
+    // 官方每升幅度的中位数：各省挂牌价实测差值，一轮算一次，所有规则共用
+    var medianTask = (latestNotice && latestNotice.direction === 'down')
+      ? measure.measureOne(latestNotice.executeAt, latestNotice.tonChanges)
+      : Promise.resolve({});
 
-        var hits = matchRule(rule, prices, latestNotice, forecastNotice);
-        if (!hits.length) return null;
+    return medianTask.then(function (medianAmounts) {
+      return rules.reduce(function (chain, rule) {
+        return chain.then(function () {
+          summary.checked++;
 
-        return sendFirstHit(rule, hits, summary);
-      });
-    }, Promise.resolve());
+          // 没授权订阅就不发
+          if (!rule.subscribeGranted) {
+            summary.skipped++;
+            return null;
+          }
+
+          // 本地区这一轮的前后快照（实测）：官方公告只给吨价，
+          // 每升幅度要靠本地区挂牌价的前后差值
+          var localTask = Promise.resolve(null);
+          if (rule.officialDrop && latestNotice && latestNotice.executeAt) {
+            var cacheKey = rule.regionCode + '|' + rule.fuelId + '|' + latestNotice.executeAt;
+            if (!snapshotCache[cacheKey]) {
+              snapshotCache[cacheKey] = measure.localSnapshotOf(
+                rule.regionCode, rule.fuelId, latestNotice.executeAt);
+            }
+            localTask = snapshotCache[cacheKey];
+          }
+
+          return localTask.then(function (localAmount) {
+            var hits = matchRule(rule, prices, latestNotice, forecast, {
+              medianAmounts: medianAmounts,
+              localAmount: localAmount
+            });
+            if (!hits.length) return null;
+
+            return sendFirstHit(rule, hits, summary);
+          });
+        });
+      }, Promise.resolve());
+    });
   }).then(function () {
     return summary;
   });
@@ -352,5 +511,10 @@ module.exports = {
   classifyFailure: classifyFailure,
   regionNameOf: regionNameOf,
   todayCN: todayCN,
+  // 导出给自检用：规则生效时间与预测窗口的整理规则
+  armedDateOf: armedDateOf,
+  eventAfterArmed: eventAfterArmed,
+  forecastOf: forecastOf,
+  officialAmountOf: officialAmountOf,
   TEMPLATE_FIELDS: TEMPLATE_FIELDS
 };

@@ -12,6 +12,7 @@
  */
 const dao = require('../dao');
 const shared = require('../shared/shared');
+const config = require('../config');
 
 /* ---------------- 入参校验 ---------------- */
 
@@ -50,8 +51,11 @@ function validateRules(rules) {
     }
     if (rule.targetPrice !== undefined && rule.targetPrice !== null) {
       var target = Number(rule.targetPrice);
-      if (!isFinite(target) || target <= 0 || target > 100) {
-        throw badRequest('目标价不合法', 'INVALID_TARGET_PRICE');
+      // ⚠️ 区间要与小程序端一致（config/index.js 的 targetPriceMin/Max），
+      // 否则前端允许填的值服务端会拒收，用户只看到「保存失败」。
+      if (!isFinite(target) || target < config.targetPriceMin || target > config.targetPriceMax) {
+        throw badRequest('目标价需在 ' + config.targetPriceMin + ' ~ ' + config.targetPriceMax + ' 元/升之间',
+          'INVALID_TARGET_PRICE');
       }
     }
   });

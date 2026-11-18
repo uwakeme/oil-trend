@@ -134,6 +134,10 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   -- 一次性订阅的额度用掉时间。授权只够发一条，发完置 false，
   -- 界面据此显示「授权已用完」，而不是继续显示「微信提醒已开启」
   subscribe_used_at TIMESTAMPTZ,
+  -- 规则生效时间（每次保存刷新）。
+  -- 事件日期早于它 → 这条事件在规则生效前就发生了，不该再发提醒。
+  -- 没有这一列时，新装的用户会收到一堆早就过去的调价通知。
+  armed_at          TIMESTAMPTZ,
   extra             JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -170,6 +174,7 @@ ALTER TABLE oil_notices ADD COLUMN IF NOT EXISTS direction TEXT;
 ALTER TABLE oil_notices ADD COLUMN IF NOT EXISTS ton_changes JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS target_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS subscribe_used_at TIMESTAMPTZ;
+ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS armed_at TIMESTAMPTZ;
 
 -- 去重键补列 + 唯一索引。
 -- ⚠️ 用「独立列 + 唯一索引」而不是直接给表加 UNIQUE 约束：

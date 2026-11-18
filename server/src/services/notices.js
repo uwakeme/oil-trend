@@ -14,37 +14,35 @@ const measure = require('./measure');
 var NOTICE_PAGE = 20;
 
 /**
- * 通知详情里的「调整后零售价」。
+ * 通知详情里的「调整前后零售价」。
  *
- * 采集入库时不存这张表（各地挂牌价是采集来的，公告里并没有写），
- * 这里只在「公告已生效」时用当前价倒推：
- *   after  = 当前挂牌价（已经包含这次调整）
- *   before = after - 本次调整幅度
- * 还没生效的公告不倒推 —— 那时当前价里还没有这次调整，倒推出来是错的。
- * 倒推不出来就留空，界面显示「暂无价格」，不编数字。
+ * ⚠️ 原来这里是拿**当前**挂牌价倒推的：after = 当前价，before = 当前价 - 幅度。
+ * 两个毛病：
+ *   1. 当前价可能已经是好几轮之后的价格了，倒推出来的 before 不是那一轮的价；
+ *   2. 幅度用的是**各省中位数**（或官方值），却和**本地区**的现价混着算 ——
+ *      两个口径拼在一起，得到的数谁也对不上账。
+ *
+ * 现在改成：从**本地区**的历史挂牌价里找这一轮前后的快照 ——
+ * 调价前最后一次价、调价后第一次价，差值就是本地区这一轮实际降了多少。
+ * 快照缺失就留空（界面显示「--」），不倒推、不猜。
+ *
+ * @param {object} snapshots 本地区这一轮的前后快照 { fuelId: {before,after,delta} }
  */
-function noticePricesOf(notice, priceMap, today, deltas) {
+function noticePricesOf(notice, snapshots, today) {
   if (notice.prices && Object.keys(notice.prices).length) return notice.prices;
   if (notice.kind !== 'official') return {};
   var executeAt = String(notice.executeAt || '').slice(0, 10);
   if (!executeAt || executeAt > today) return {};
   var out = {};
-  // 优先用官方公布的每升幅度，没有就用挂牌价测算值
-  var source = deltas || notice.changes || {};
-  Object.keys(priceMap).forEach(function (fuelId) {
-    var after = Number(priceMap[fuelId]);
-    if (!isFinite(after)) return;
-    var delta = source[fuelId];
-    // 幅度算不出来也要把这个油品列出来（delta 为 null）——
-    // 少列一个油品，用户会以为这个油品这轮没有调价。
-    if (typeof delta !== 'number' || !isFinite(delta)) {
-      out[fuelId] = { before: null, after: after, delta: null };
-      return;
-    }
+  Object.keys(snapshots || {}).forEach(function (fuelId) {
+    var s = snapshots[fuelId];
+    if (!s) return;
     out[fuelId] = {
-      before: Math.round((after - delta) * 100) / 100,
-      after: after,
-      delta: delta
+      before: s.before,
+      after: s.after,
+      delta: s.delta,
+      // 这是本地区挂牌价实测出来的差值，不是官方公布的每升幅度
+      measured: true
     };
   });
   return out;
@@ -59,19 +57,15 @@ function actionNotices(payload) {
   return Promise.all([
     dao.notices.listPublic(filter, NOTICE_PAGE, skip),
     query.getWindow(),
-    query.getPrices(regionCode),
     dao.runs.latest(),
     // 推算下一轮调价日的基准：最近一次实际调价日
     query.latestAdjustDate()
   ]).then(function (r0) {
     var notices = r0[0];
     var win = r0[1];
-    var prices = r0[2];
-    var lastRun = r0[3];
-    var lastAdjustDate = r0[4];
+    var lastRun = r0[2];
+    var lastAdjustDate = r0[3];
 
-    var priceMap = {};
-    prices.forEach(function (p) { priceMap[p.fuelId] = p.price; });
     var today = query.todayStr();
 
     // 挂牌价测算：一次查这一页所有公告的生效日
@@ -81,7 +75,14 @@ function actionNotices(payload) {
     notices.forEach(function (n) {
       if (n.executeAt) tonByDate[n.executeAt] = n.tonChanges || {};
     });
-    return measure.measureMany(execDates, tonByDate).then(function (measuredByDate) {
+    return Promise.all([
+      // 各省中位数（全国口径）：列表里那一行「每升幅度」
+      measure.measureMany(execDates, tonByDate),
+      // 本地区前后快照（本地区口径）：详情里的「调价前后各多少钱」
+      measure.localSnapshotsOf(execDates, regionCode)
+    ]).then(function (r1) {
+      var measuredByDate = r1[0];
+      var localByDate = r1[1];
       return {
         region: { code: region.code, fullName: region.name + ' · ' + region.city },
         window: query.buildWindow(win, lastAdjustDate),
@@ -115,7 +116,7 @@ function actionNotices(payload) {
             measuredChanges: measuredChanges,
             changesMeasured: Object.keys(measuredChanges).length > 0,
             summary: n.summary || '',
-            prices: noticePricesOf(n, priceMap, today, deltas),
+            prices: noticePricesOf(n, localByDate[n.executeAt] || {}, today),
             source: n.source || {}
           };
         }),

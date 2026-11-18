@@ -127,6 +127,92 @@ function boundOf(tonAmount, group) {
 }
 
 /**
+ * 找生效日附近的**最后一次价格变化**（变化点）。
+ *
+ * ⚠️ 不能按日期直接取行：来源站可能提前几天就把新挂牌价挂出来，
+ * 按「生效日当天的行」取会拿到新价，算出来是 0（误判成持平）。
+ *
+ * 找不到变化点 → null（这个地区这次没有可用的快照，不编数字）。
+ *
+ * @param {Array}  list 同一 (地区, 油品) 的历史价行，按日期升序
+ * @param {string} date  生效日 YYYY-MM-DD
+ * @returns {object|null} { before, after, delta, date }
+ */
+function changePointAt(list, date) {
+  var winStart = shiftDate(date, -EARLY_DAYS);
+  var winEnd = shiftDate(date, AFTER_DAYS);
+  var idx = -1;
+  for (var i = 1; i < list.length; i++) {
+    if (list[i].date < winStart) continue;
+    if (list[i].date > winEnd) break;
+    if (list[i].price !== list[i - 1].price) idx = i;
+  }
+  if (idx <= 0) return null;
+  var before = Number(list[idx - 1].price);
+  var after = Number(list[idx].price);
+  if (!isFinite(before) || !isFinite(after)) return null;
+  return {
+    before: before,
+    after: after,
+    delta: round2(after - before),
+    date: list[idx].date
+  };
+}
+
+/**
+ * 某个 (地区, 油品) 在生效日附近的本地区前后快照。
+ *
+ * 与各省中位数是**两回事**：这里给的是这个地区自己的挂牌价前后差值，
+ * 「本地区调整前多少钱、调整后多少钱」只能从这里来。
+ *
+ * @returns {Promise<object|null>} { before, after, delta, date }；没有快照返回 null
+ */
+async function localSnapshotOf(regionCode, fuelId, executeAt) {
+  var date = String(executeAt || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  var rows = await dao.history.listByRegionFuel(regionCode, fuelId, shiftDate(date, -BEFORE_DAYS));
+  var list = (rows || []).slice().sort(function (a, b) {
+    return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
+  });
+  return changePointAt(list, date);
+}
+
+/**
+ * 一次算出某个地区在若干生效日上的前后快照（按油品分组）。
+ *
+ * 通知详情要按「这一轮调价前后各多少钱」展示，
+ * 不能拿当前价倒推 —— 倒推出来的是猜的。
+ *
+ * @returns {Promise<object>} { 'YYYY-MM-DD': { fuelId: {before,after,delta,date} } }
+ */
+async function localSnapshotsOf(executeAtList, regionCode) {
+  var out = {};
+  var dates = [];
+  (executeAtList || []).forEach(function (d) {
+    var s = String(d || '').slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s) && dates.indexOf(s) === -1) dates.push(s);
+  });
+  if (!dates.length) return out;
+  var min = dates.reduce(function (a, b) { return a < b ? a : b; });
+  var max = dates.reduce(function (a, b) { return a > b ? a : b; });
+  var fuels = Object.keys(FUEL_GROUP);
+  for (var f = 0; f < fuels.length; f++) {
+    var rows = await dao.history.listByRegionFuel(regionCode, fuels[f], shiftDate(min, -BEFORE_DAYS));
+    var list = (rows || []).slice().sort(function (a, b) {
+      return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
+    });
+    for (var i = 0; i < dates.length; i++) {
+      var date = dates[i];
+      var point = changePointAt(list, date);
+      if (!point) continue;
+      if (!out[date]) out[date] = {};
+      out[date][fuels[f]] = point;
+    }
+  }
+  return out;
+}
+
+/**
  * 算一组生效日对应的四油品每升幅度。
  *
  * 返回 { 'YYYY-MM-DD': { '92': -0.13, '95': -0.13, ... } }
@@ -157,8 +243,6 @@ async function measureMany(executeAtList, tonByDate) {
 
   var out = {};
   dates.forEach(function (date) {
-    var winStart = shiftDate(date, -EARLY_DAYS);
-    var winEnd = shiftDate(date, AFTER_DAYS);
     // 这一轮官方给的汽/柴油吨价（没有就用绝对兜底）
     var ton = (tonByDate || {})[date] || {};
     var byFuel = {};
@@ -169,15 +253,10 @@ async function measureMany(executeAtList, tonByDate) {
         var list = fuels[fuelId].slice().sort(function (a, b) {
           return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
         });
-        // 窗口内最后一次价格变化
-        var idx = -1;
-        for (var i = 1; i < list.length; i++) {
-          if (list[i].date < winStart) continue;
-          if (list[i].date > winEnd) break;
-          if (list[i].price !== list[i - 1].price) idx = i;
-        }
-        if (idx <= 0) return;
-        var delta = round2(list[idx].price - list[idx - 1].price);
+        // 窗口内最后一次价格变化（与本地区快照同一套算法，别各写一遍）
+        var point = changePointAt(list, date);
+        if (!point) return;
+        var delta = point.delta;
         if (!isFinite(delta) || delta === 0) return;
         // 幅度要落在官方吨价换算出的合理区间里，否则当脏数据剔除。
         // ⚠️ 上限不能写死：645 元/吨那轮真实降幅就有 0.56 元/升，
@@ -246,6 +325,9 @@ function agreesWithDirection(measured, direction) {
 module.exports = {
   measureMany: measureMany,
   measureOne: measureOne,
+  localSnapshotOf: localSnapshotOf,
+  localSnapshotsOf: localSnapshotsOf,
+  changePointAt: changePointAt,
   median: median,
   agreesWithDirection: agreesWithDirection,
   shiftDate: shiftDate,

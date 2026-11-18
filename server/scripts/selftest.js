@@ -283,7 +283,8 @@ async function main() {
       officialDrop: true, targetEnabled: true, targetPrice: 7.5, forecastDrop: true },
     [{ regionCode: '440000', fuelId: '92', price: 7.36 }],
     { kind: 'official', executeAt: '2026-11-24', changes: { '92': -0.08 } },
-    { kind: 'forecast', executeAt: '2026-11-26', changes: { '92': -0.06 } }
+    // 预测是**整轮区间**（来源不给分油品幅度），不是分油品的每升值
+    { kind: 'forecast', executeAt: '2026-11-26', direction: 'down', literMin: 0.06, literMax: 0.08 }
   );
   var hitByType = {};
   tHits.forEach(function (h) { hitByType[h.type] = h; });
@@ -322,9 +323,114 @@ async function main() {
     check('预测下调的方向是「预计下调」', hitByType.forecastDrop.data.phrase1 === '预计下调',
       hitByType.forecastDrop.data.phrase1);
     check('预测下调的温馨提示标明非官方',
-      hitByType.forecastDrop.data.thing4.indexOf('以官方为准') > 0,
+      hitByType.forecastDrop.data.thing4.indexOf('非官方') > 0,
       hitByType.forecastDrop.data.thing4);
+    check('预测下调的温馨提示带整轮区间',
+      hitByType.forecastDrop.data.thing4.indexOf('0.06-0.08') > 0,
+      hitByType.forecastDrop.data.thing4);
+    check('预测下调的金额取来源给的区间下界（不编中值）',
+      hitByType.forecastDrop.data.amount2 === '0.06元',
+      hitByType.forecastDrop.data.amount2);
   }
+
+  console.log('\n--- 官方降价提醒：公告只给吨价时的口径 ---');
+  // ⚠️ 发改委公告入库时 changes 是空的（公告只给汽/柴油吨价）——
+  // 以前这里读 changes[fuelId]，命中数恒为 0，官方降价提醒从来没触发过。
+  var ndrcHits = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    { kind: 'official', executeAt: '2026-11-24', direction: 'down',
+      tonChanges: { gasoline: -645, diesel: -625 }, changes: {} },
+    null,
+    { localAmount: { before: 8.91, after: 8.39, delta: -0.52 } }
+  );
+  check('官方公告只有方向与吨价时也能命中（changes 为空）',
+    ndrcHits.some(function (h) { return h.type === 'officialDrop'; }),
+    JSON.stringify(ndrcHits));
+  check('官方降价的金额取本地区实测差值',
+    ndrcHits.length && ndrcHits[0].data.amount2 === '0.52元',
+    ndrcHits.length ? ndrcHits[0].data.amount2 : '没命中');
+  check('官方降价的温馨提示标明是本地区实测',
+    ndrcHits.length && ndrcHits[0].data.thing4.indexOf('本地区实测') > 0,
+    ndrcHits.length ? ndrcHits[0].data.thing4 : '');
+
+  var medianHits = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    { kind: 'official', executeAt: '2026-11-24', direction: 'down',
+      tonChanges: { gasoline: -645, diesel: -625 }, changes: {} },
+    null,
+    { medianAmounts: { '92': -0.52 } }
+  );
+  check('没有本地区快照时用各省中位数，并标明是测算',
+    medianHits.length && medianHits[0].data.thing4.indexOf('测算') > 0,
+    medianHits.length ? medianHits[0].data.thing4 : '没命中');
+
+  check('官方上调不算降价提醒', alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    { kind: 'official', executeAt: '2026-11-24', direction: 'up',
+      tonChanges: { gasoline: 645, diesel: 625 }, changes: {} },
+    null,
+    { medianAmounts: { '92': 0.52 } }
+  ).length === 0);
+
+  console.log('\n--- 预测提醒的数据入口：调价窗口 ---');
+  // 预测源只写 oil_windows，从不写 kind='forecast' 的通知 ——
+  // 以前去通知表里取最新预测，永远取不到，预测提醒在生产上没有入口。
+  var winForecast = alert.forecastOf(
+    { date: '2026-11-26', forecastDirection: 'down',
+      forecast: { direction: 'down', literMin: 0.08, literMax: 0.1, estimated: true } },
+    '2026-11-18');
+  check('预测提醒能从调价窗口里取出方向与区间',
+    !!winForecast && winForecast.direction === 'down' &&
+    winForecast.literMin === 0.08 && winForecast.literMax === 0.1,
+    JSON.stringify(winForecast));
+  check('已经过去的窗口不产生预测提醒（预测早就失效了）',
+    alert.forecastOf(
+      { date: '2026-11-10', forecastDirection: 'down', forecast: { direction: 'down' } },
+      '2026-11-18') === null);
+  check('窗口没有预测方向时不产生预测提醒',
+    alert.forecastOf({ date: '2026-11-26', forecast: {} }, '2026-11-18') === null);
+  check('预测提醒开关关掉时不命中', alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', forecastDrop: false },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    null,
+    { kind: 'forecast', executeAt: '2026-11-26', direction: 'down', literMin: 0.08, literMax: 0.1 }
+  ).length === 0);
+
+  console.log('\n--- 新规则不命中旧公告 ---');
+  var armedToday = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  check('规则生效前的旧公告不再触发提醒', alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true, armedAt: armedToday },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    { kind: 'official', executeAt: '2026-11-01', direction: 'down', changes: { '92': -0.08 } },
+    null
+  ).length === 0);
+  check('规则生效后的新公告照常触发', alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true, armedAt: armedToday },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    { kind: 'official', executeAt: '2099-01-01', direction: 'down', changes: { '92': -0.08 } },
+    null
+  ).length === 1);
+  check('没有 armedAt 的老规则不受限制', alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    { kind: 'official', executeAt: '2026-11-01', direction: 'down', changes: { '92': -0.08 } },
+    null
+  ).length === 1);
+
+  console.log('\n--- 目标价区间前后端一致 ---');
+  check('小程序端与服务端的目标价区间一致',
+    miniConfig.targetPriceMin === configModule.targetPriceMin &&
+    miniConfig.targetPriceMax === configModule.targetPriceMax,
+    miniConfig.targetPriceMin + '-' + miniConfig.targetPriceMax + ' vs ' +
+    configModule.targetPriceMin + '-' + configModule.targetPriceMax);
+  check('超出区间的目标价被服务端拒绝', expectCode(function () {
+    user.actionRulesSave('u-range', [{
+      regionCode: '440000', fuelId: '92', targetPrice: configModule.targetPriceMax + 1
+    }]);
+  }, 'INVALID_TARGET_PRICE'));
   check('地区名取自地区表（不是地区代码）', alert.regionNameOf('440000') === '广东',
     alert.regionNameOf('440000'));
   check('未知地区不静默回退成上海', alert.regionNameOf('999999') === '999999',
@@ -335,6 +441,25 @@ async function main() {
       [{ regionCode: '440000', fuelId: '92', price: 7.36 }],
       null, null
     ).length === 0);
+
+  console.log('\n--- 本地区前后快照：通知详情不再用当前价倒推 ---');
+  // ⚠️ 通知详情原来用「当前价 - 幅度」倒推调价前的价格：
+  // 当前价可能已经是好几轮之后的价格，倒推出来的数谁都对不上账。
+  // 现在从本地区的历史挂牌价里找这一轮前后的快照。
+  var measureService = require(path.join(ROOT, 'src', 'services', 'measure.js'));
+  var snapshot = await measureService.localSnapshotOf('440000', '92', '2026-11-10');
+  check('本地区快照能给出调价前后的价',
+    !!snapshot && typeof snapshot.before === 'number' && typeof snapshot.after === 'number',
+    JSON.stringify(snapshot));
+  check('本地区快照的差值就是前后价的差',
+    !!snapshot && Math.abs((snapshot.after - snapshot.before) - snapshot.delta) < 0.001,
+    JSON.stringify(snapshot));
+  check('本地区快照找不到时给 null（不倒推、不编数）',
+    (await measureService.localSnapshotOf('440000', '92', '2099-01-01')) === null);
+  var snapshots = await measureService.localSnapshotsOf(['2026-11-10'], '440000');
+  check('按生效日一次取多个油品的快照',
+    !!snapshots['2026-11-10'] && !!snapshots['2026-11-10']['92'],
+    JSON.stringify(snapshots));
 
   console.log('\n--- 提醒规则字段映射 ---');
   await user.actionRulesSave('openid-fields', [

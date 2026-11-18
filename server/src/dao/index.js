@@ -569,13 +569,16 @@ const rules = {
    */
   async upsert(rule) {
     await db.query(
-      'INSERT INTO alert_rules (user_id, region_code, fuel_id, official_drop, target_price, predict_drop, target_enabled, subscribe_granted, subscribe_used_at, extra, updated_at) ' +
-      'VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::boolean, FALSE), NULL, $9::jsonb, NOW()) ' +
+      'INSERT INTO alert_rules (user_id, region_code, fuel_id, official_drop, target_price, predict_drop, target_enabled, subscribe_granted, subscribe_used_at, armed_at, extra, updated_at) ' +
+      'VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8::boolean, FALSE), NULL, NOW(), $9::jsonb, NOW()) ' +
       'ON CONFLICT (user_id, region_code, fuel_id) DO UPDATE SET ' +
       'official_drop = EXCLUDED.official_drop, target_price = EXCLUDED.target_price, ' +
       'predict_drop = EXCLUDED.predict_drop, target_enabled = EXCLUDED.target_enabled, ' +
       'subscribe_granted = CASE WHEN $8::boolean IS NULL THEN alert_rules.subscribe_granted ELSE EXCLUDED.subscribe_granted END, ' +
       'subscribe_used_at = CASE WHEN $8::boolean = TRUE THEN NULL ELSE alert_rules.subscribe_used_at END, ' +
+      // ⚠️ armed_at 每次保存都刷新：规则从保存这一刻起才开始接收事件，
+      // 之前就已经发生的调价不该再补发通知。
+      'armed_at = NOW(), ' +
       'extra = EXCLUDED.extra, updated_at = NOW()',
       [
         rule.userId,
