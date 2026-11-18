@@ -267,6 +267,8 @@ Page({
         measured: rawDeltaSource.measured,
         // 口径说明（官方吨价 vs 挂牌价测算，四处展示共用同一句）
         measuredNote: fmt.MEASURED_NOTE,
+        // 价格表的口径（**本地区**挂牌价前后快照，与上面的全国中位数不是一回事）
+        priceNote: fmt.LOCAL_PRICE_NOTE,
         verb: rawMeta.verb,
         direction: rawMeta.direction,
         prices: prices,

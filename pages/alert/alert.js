@@ -2,16 +2,33 @@ const api = require('../../utils/api');
 const store = require('../../utils/store');
 const subscribe = require('../../utils/subscribe');
 const fmt = require('../../utils/format');
+const config = require('../../config/index');
 
 const STEP = 0.05;
-const MIN_TARGET = 5.00;
-const MAX_TARGET = 10.00;
+// ⚠️ 区间与服务端一致（server/src/config.js 的 targetPriceMin/Max）——
+// 两边各写一套的话，前端允许填的值服务端会拒收，用户只看到「保存失败」。
+const MIN_TARGET = Number(config.targetPriceMin);
+const MAX_TARGET = Number(config.targetPriceMax);
 
 function clamp(value) {
-  var v = Math.round(value * 100) / 100;
+  var v = Number(value);
+  if (!isFinite(v)) v = MIN_TARGET;
+  v = Math.round(v * 100) / 100;
   if (v < MIN_TARGET) v = MIN_TARGET;
   if (v > MAX_TARGET) v = MAX_TARGET;
   return v;
+}
+
+/**
+ * 默认目标价：按当前价往下让一点。
+ *
+ * ⚠️ 原来固定写死 7.20 元 —— 换个地区换个油品，这个数经常比现价还高，
+ * 界面于是显示「已低于目标价 0.00 元」，看着像坏了。
+ */
+function defaultTarget(price) {
+  var p = Number(price);
+  if (!isFinite(p) || p <= 0) return 7.20;   // 没有当前价时的兜底
+  return clamp(Math.floor((p - 0.30) * 100) / 100);
 }
 
 /**
@@ -88,6 +105,15 @@ Page({
     targetText: '7.20',
     targetCaption: '',
     targetWarn: false,
+    // 规则保存状态：saving / saved / failed
+    // ⚠️ 以前保存失败也被弹成「订阅已开启」，用户以为规则生效了。
+    saveState: 'idle',
+    saveText: '',
+    // 两段规则摘要：开关关掉时要如实写「已停用」，
+    // 不能不管开关状态都写「向我发送微信订阅消息」。
+    officialSummary: '',
+    targetSummary: '',
+    forecastSummary: '',
     history: [],
     // 历史记录是不是演示数据（后端返回的记录带 dedupKey）
     historyIsDemo: false,
@@ -172,11 +198,15 @@ Page({
           fuelId: prefs.fuelId,
           officialDrop: true,
           targetEnabled: true,
-          targetPrice: 7.20,
+          targetPrice: defaultTarget(price),
           forecastDrop: false,
           subscribeGranted: false,
           subscribeUsedAt: null
         };
+      } else if (rule.targetPrice === null || rule.targetPrice === undefined ||
+        !isFinite(Number(rule.targetPrice))) {
+        // 库里没存目标价（新建的规则）：按当前价给一个合理的默认值
+        rule = Object.assign({}, rule, { targetPrice: defaultTarget(price) });
       }
 
       self._rules = rules;
@@ -221,17 +251,40 @@ Page({
   applyRule() {
     var rule = this.data.rule;
     var price = this._price;
+    var hasPrice = price !== null && price !== undefined && isFinite(Number(price));
     var target = clamp(rule.targetPrice);
-    var diff = (price === null || price === undefined) ? 0 : price - target;
+    var diff = hasPrice ? Number(price) - target : null;
+
+    var caption;
+    if (!hasPrice) {
+      // ⚠️ 没有当前价时不能写「再降 0.00 元时提醒」——
+      // 那是把「不知道」当成「差 0 元」，看着像已经达到目标价了。
+      caption = '暂无当前价，无法计算差额';
+    } else if (diff >= 0) {
+      // diff = 当前价 - 目标价：差多少就还要再降多少
+      caption = '再降 ' + diff.toFixed(2) + ' 元时提醒';
+    } else {
+      caption = '已低于目标价 ' + Math.abs(diff).toFixed(2) + ' 元';
+    }
+
+    var where = (this.data.region && this.data.region.fullName) ? this.data.region.fullName : '本地区';
+    var fuel = this.data.fuelName || '该油品';
 
     this.setData({
       targetText: target.toFixed(2),
-      targetWarn: diff < 0,
-      // diff = 当前价 - 目标价：差多少就还要再降多少
-      targetCaption: diff >= 0
-        ? '再降 ' + diff.toFixed(2) + ' 元时提醒'
-        : '已低于目标价 ' + Math.abs(diff).toFixed(2) + ' 元',
-      subscription: this.subscriptionView(rule)
+      targetWarn: hasPrice && diff < 0,
+      targetCaption: caption,
+      subscription: this.subscriptionView(rule),
+      // 摘要要跟着开关走：开关关掉了还写「向我发送微信订阅消息」是在骗人
+      officialSummary: rule.officialDrop
+        ? ('当 ' + where + ' 的 ' + fuel + ' 出现正式降价公告时，向我发送微信订阅消息。')
+        : '官方降价提醒已停用，打开开关后才会通知。',
+      targetSummary: rule.targetEnabled
+        ? ('当 ' + where + ' 的 ' + fuel + ' 价格降到 ' + target.toFixed(2) + ' 元/升 或更低时，向我发送微信订阅消息。')
+        : '目标价提醒已停用，打开开关后才会通知。',
+      forecastSummary: rule.forecastDrop
+        ? ('当 ' + where + ' 的 ' + fuel + ' 出现预测下调时，向我发送微信订阅消息（预测非官方，以正式公告为准）。')
+        : '预测下调提醒已停用，打开开关后才会通知。'
     });
   },
 
@@ -287,6 +340,7 @@ Page({
    * 微信那边其实已经没额度了，界面却还显示「已开启」。
    */
   persist(nextRule, opts) {
+    var self = this;
     var grant = !!(opts && opts.grant);
     var rules = (this._rules || []).slice();
     var found = false;
@@ -300,14 +354,59 @@ Page({
     if (!found) rules.push(nextRule);
     this._rules = rules;
 
-    // 载荷和本地留存的副本要分开：载荷里只有授权那一次带 subscribeGranted
-    var payload = rules.map(function (r) {
-      var copy = Object.assign({}, r);
-      delete copy.subscribeGranted;
-      if (grant && r === nextRule) copy.subscribeGranted = true;
-      return copy;
+    // 只把当前这一条发给后端：服务端是 upsert 语义，
+    // 一次把整组规则发过去只是多写几行别人的规则。
+    //
+    // 载荷和本地留存的副本要分开：载荷里只有授权那一次带 subscribeGranted，
+    // 其余保存一律不带 —— 否则服务端把额度用掉之后，
+    // 界面上随便拨个开关就会把额度又续上，而微信那边其实已经没额度了。
+    var payloadRule = Object.assign({}, nextRule);
+    delete payloadRule.subscribeGranted;
+    if (grant) {
+      payloadRule.subscribeGranted = true;
+    } else if (this._pendingGrant && nextRule.subscribeGranted) {
+      // 上一次「拿到授权但没存上」，重试时要把授权带上 ——
+      // 微信的一次性授权用过就没了，补不回来。
+      payloadRule.subscribeGranted = true;
+    }
+    var payload = [payloadRule];
+
+    // 步进的延迟保存还没发出去就取消，避免同一条规则连发两次
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
+    }
+
+    this.setData({ saveState: 'saving', saveText: '保存中…' });
+    return api.saveAlertRules(rules, payload).then(function (res) {
+      var ok = !!(res && res.ok);
+      if (ok) {
+        self._pendingGrant = false;
+      } else if (grant) {
+        // 授权拿到了但没存上：记下来，重试时要带上 subscribeGranted
+        self._pendingGrant = true;
+      }
+      self.setData({
+        saveState: ok ? 'saved' : 'failed',
+        saveText: ok ? '已保存到服务器' : ((res && res.message) || '保存失败，请重试')
+      });
+      return res;
     });
-    api.saveAlertRules(rules, payload);
+  },
+
+  /**
+   * 保存并把失败说清楚。
+   *
+   * ⚠️ 以前保存失败也被弹成「订阅已开启」—— 用户以为规则生效了，
+   * 服务端一条都没写。
+   */
+  saveAndReport(nextRule, opts) {
+    return this.persist(nextRule, opts).then(function (res) {
+      if (!res || !res.ok) {
+        wx.showToast({ title: '规则未保存', icon: 'none' });
+      }
+      return res;
+    });
   },
 
   /* ---------- 开关 ---------- */
@@ -315,21 +414,21 @@ Page({
   onToggleOfficial() {
     var rule = Object.assign({}, this.data.rule, { officialDrop: !this.data.rule.officialDrop });
     this.setData({ rule: rule });
-    this.persist(rule);
+    this.saveAndReport(rule);
     this.applyRule();
   },
 
   onToggleTarget() {
     var rule = Object.assign({}, this.data.rule, { targetEnabled: !this.data.rule.targetEnabled });
     this.setData({ rule: rule });
-    this.persist(rule);
+    this.saveAndReport(rule);
     this.applyRule();
   },
 
   onToggleForecast() {
     var rule = Object.assign({}, this.data.rule, { forecastDrop: !this.data.rule.forecastDrop });
     this.setData({ rule: rule });
-    this.persist(rule);
+    this.saveAndReport(rule);
     this.applyRule();
   },
 
@@ -344,12 +443,20 @@ Page({
   },
 
   stepTarget(delta) {
+    var self = this;
     var rule = Object.assign({}, this.data.rule, {
       targetPrice: clamp((Number(this.data.rule.targetPrice) || 0) + delta)
     });
     this.setData({ rule: rule });
-    this.persist(rule);
     this.applyRule();
+    // ⚠️ 每点一下就存一次：连点十下就是十次请求，
+    // 服务端被无谓地打一遍，用户还看不到任何反馈。
+    // 改成停手 600ms 后存一次。
+    if (this._persistTimer) clearTimeout(this._persistTimer);
+    this._persistTimer = setTimeout(function () {
+      self._persistTimer = null;
+      self.saveAndReport(rule);
+    }, 600);
   },
 
   /* ---------- 订阅授权 ---------- */
@@ -375,9 +482,17 @@ Page({
         var rule = Object.assign({}, self.data.rule, { subscribeGranted: true });
         self.setData({ rule: rule });
         // grant: 只有这一次保存带 subscribeGranted=true
-        self.persist(rule, { grant: true });
-        self.applyRule();
-        wx.showToast({ title: '订阅已开启', icon: 'success' });
+        // ⚠️ 必须等保存结果再报喜：微信授权成功 ≠ 规则已生效。
+        // 以前是授权完立刻弹「订阅已开启」，后端写失败也照弹 ——
+        // 用户以为提醒已经开着，实际上服务端一条规则都没有。
+        self.persist(rule, { grant: true }).then(function (result) {
+          self.applyRule();
+          if (result && result.ok) {
+            wx.showToast({ title: '订阅已开启', icon: 'success' });
+          } else {
+            wx.showToast({ title: '授权成功，规则未保存', icon: 'none' });
+          }
+        });
       } else {
         wx.showToast({ title: res.message || '未获得订阅授权', icon: 'none' });
       }
@@ -386,5 +501,10 @@ Page({
 
   onRetry() {
     this.load();
+  },
+
+  /** 保存失败后的重试 */
+  onRetrySave() {
+    this.saveAndReport(this.data.rule);
   }
 });

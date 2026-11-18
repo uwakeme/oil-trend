@@ -21,6 +21,12 @@
       <text class="source-bar-text">{{sourceText}}</text>
     </view>
 
+    <!-- 规则保存状态：保存失败必须看得见，不能弹个「已保存」就完事 -->
+    <view class="save-hint {{saveState}}" wx:if="{{saveText}}" role="status" aria-live="polite">
+      <text class="micro">{{saveText}}</text>
+      <button class="secondary-button save-retry" wx:if="{{saveState === 'failed'}}" bindtap="onRetrySave">重试保存</button>
+    </view>
+
     <!-- 订阅状态 -->
     <view class="subscription-card {{subscription.active ? 'on' : ''}}">
       <view class="subscription-icon">
@@ -59,7 +65,7 @@
         </view>
       </view>
 
-      <view class="rule-summary">当 <text class="condition-value">{{region.fullName}}</text> 的 <text class="condition-value">{{fuelName}}</text> 出现正式降价公告时，向我发送微信订阅消息。</view>
+      <view class="rule-summary">{{officialSummary}}</view>
     </view>
 
     <!-- 目标价提醒 -->
@@ -82,7 +88,7 @@
       </view>
       <text class="target-caption {{targetWarn ? 'warn' : ''}}">{{targetCaption}}</text>
 
-      <view class="rule-summary">当 <text class="condition-value">{{region.fullName}}</text> 的 <text class="condition-value">{{fuelName}}</text> 价格降到 <text class="condition-value">{{targetText}} 元/升</text> 或更低时，向我发送微信订阅消息。</view>
+      <view class="rule-summary">{{targetSummary}}</view>
     </view>
 
     <!-- 预测下调提醒 -->
@@ -99,6 +105,8 @@
         </view>
         <view class="switch {{rule.forecastDrop ? 'on' : ''}}" bindtap="onToggleForecast"></view>
       </view>
+
+      <view class="rule-summary">{{forecastSummary}}</view>
     </view>
 
     <!-- 历史记录 -->

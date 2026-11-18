@@ -192,9 +192,16 @@ function windowMeta(win) {
   // 来源根本没给窗口（库里一条窗口记录都没有）时，主日期也只能来自推算值 ——
   // 标「推算 · 非官方」，不能装作是来源公布的。
   var noSource = !w.date;
-  // 来源过期（或压根没有）且有推算 → 用推算值当主日期；
+  // ⚠️ 推算值**自己**也可能已经过期：推算基准（最近一次实际调价日）太久没更新时，
+  // 推算出来的「下一轮」落在过去 —— 那不是「预计下次调价窗口」，
+  // 是一个早就过去的日期。继续用它，界面上就会出现
+  // 「预计下次调价窗口 · 已过 5 天」这种自相矛盾的话。
+  // 这种时候宁可退回来源那一轮（标「上一轮」），也不拿过期推算冒充下一轮。
+  var estDaysLeft = hasEstimate ? Number(est.daysLeft) : NaN;
+  var estimateExpired = hasEstimate && isFinite(estDaysLeft) && estDaysLeft < 0;
+  // 来源过期（或压根没有）且有**没过期的**推算 → 用推算值当主日期；
   // 否则一律用来源日期（来源优先）
-  var useEstimate = hasEstimate && (expired || noSource);
+  var useEstimate = hasEstimate && !estimateExpired && (expired || noSource);
 
   var dateStr = useEstimate ? est.nextAdjustDate : (w.date || '');
   var daysLeft = useEstimate ? (Number(est.daysLeft) || 0) : srcDaysLeft;
@@ -234,11 +241,14 @@ function windowMeta(win) {
     daysLeft: daysLeft,
     passedDays: Math.abs(daysLeft),
     expired: expired,
+    // 推算值本身已经过期（不能拿它当「下一轮」用）
+    estimateExpired: estimateExpired,
     // 主日期是不是推算值 —— 界面上要标出来，不能让人当官方值看
     estimated: useEstimate,
     titleText: useEstimate ? '预计下次调价窗口' : windowTitle(srcDaysLeft),
     // 日期下面那行小字
-    dateNote: useEstimate ? (est.note || '') : '预计时间 · 以官方公告为准',
+    dateNote: useEstimate ? (est.note || '')
+      : (expired ? '本轮已过 · 下一轮窗口待公布' : '预计时间 · 以官方公告为准'),
     countdownText: (expired && !useEstimate)
       ? ('已过 ' + Math.abs(srcDaysLeft) + ' 天 · 等待下一轮公布')
       : countdown(daysLeft),
@@ -342,6 +352,17 @@ function noticeOfficialText(notice) {
 var MEASURED_NOTE = '官方为标准品最高零售价（元/吨）；每升幅度取各省挂牌价前后快照差值的中位数';
 
 /**
+ * 通知详情里那张「调价前后价」表的口径说明。
+ *
+ * ⚠️ 与 MEASURED_NOTE 不是一回事，别混用：
+ *   MEASURED_NOTE 说的是**每升幅度**（各省中位数，全国口径）；
+ *   这张表里的价与差值是**本地区**挂牌价的前后快照（本地区口径）——
+ *   调价前最后一次挂牌价、调价后第一次挂牌价。
+ * 两句话混在一处会让人以为表里的差值也是中位数。
+ */
+var LOCAL_PRICE_NOTE = '该地区挂牌价快照：调价前最后一次与调价后第一次的挂牌价';
+
+/**
  * 每升四油品幅度取哪一份。
  *
  * 官方公布了每升幅度就用官方的；官方没公布（发改委公告不给这一项）
@@ -382,6 +403,7 @@ module.exports = {
   noticeOfficialText: noticeOfficialText,
   noticeDeltas: noticeDeltas,
   MEASURED_NOTE: MEASURED_NOTE,
+  LOCAL_PRICE_NOTE: LOCAL_PRICE_NOTE,
   SOURCE_MODE_TEXT: SOURCE_MODE_TEXT,
   SYNC_STATUS_META: SYNC_STATUS_META
 };

@@ -265,11 +265,31 @@ function getAlertRules() {
  */
 function saveAlertRules(rules, payload) {
   store.saveRules(rules);
-  if (!preferBackend()) return Promise.resolve(rules);
+  if (!preferBackend()) {
+    return Promise.resolve({
+      ok: true,
+      offline: true,
+      message: '未配置后端，规则只保存在本机'
+    });
+  }
   var body = payload || rules;
   return cloud.callFunction('oilApi', { action: 'rules.save', rules: body })
-    .then(function () { return rules; })
-    .catch(function () { return rules; });
+    .then(function () {
+      return { ok: true, offline: false, message: '' };
+    })
+    .catch(function (err) {
+      // ⚠️ 这里以前是 .catch(function () { return rules; }) ——
+      // 后端写失败也照样 resolve，页面紧接着弹「订阅已开启」。
+      // 用户以为规则生效了，服务端一条都没写，下次打开还是老样子。
+      // 现在把失败如实交回去，让页面显示「未保存」并允许重试。
+      return {
+        ok: false,
+        offline: true,
+        message: (err && err.message)
+          ? ('规则未保存到服务器：' + err.message)
+          : '规则未保存到服务器'
+      };
+    });
 }
 
 function getAlertHistory() {

@@ -26,6 +26,25 @@
 
 /* ---------- 文本 ---------- */
 .micro { font-size: 18rpx; color: var(--muted); line-height: 1.6; }
+
+/* ---------- 规则保存状态 ---------- */
+/* ⚠️ 规则没存上服务端时必须让人看见：
+   以前保存失败也被弹成「订阅已开启」，用户以为提醒已经开着。 */
+.save-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8rpx 4rpx 0;
+}
+.save-hint.saved .micro { color: var(--green); }
+.save-hint.failed .micro { color: var(--red); }
+.save-retry {
+  margin: 0 !important;
+  flex: 0 0 auto;
+  padding: 4rpx 16rpx;
+  font-size: 20rpx;
+  line-height: 1.6;
+}
 .num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
 .up { color: var(--red); }
 .down { color: var(--green); }

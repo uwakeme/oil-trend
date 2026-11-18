@@ -127,7 +127,12 @@ Page({
           dateText: fmt.shortDate(e.date),
           title: e.title,
           priceText: fmt.price(e.priceAfter),
-          deltaText: (Number(e.amount) > 0 ? '+' : '') + Number(e.amount || 0).toFixed(2),
+          // 幅度未知就写 '--'：Number(null) 是 0，
+          // 直接 toFixed 会显示成「0.00」—— 那是「持平」，不是「不知道」。
+          deltaText: (e.amountKnown === false ||
+            typeof e.amount !== 'number' || !isFinite(e.amount))
+            ? '--'
+            : ((e.amount > 0 ? '+' : '') + e.amount.toFixed(2)),
           direction: e.direction
         };
       })

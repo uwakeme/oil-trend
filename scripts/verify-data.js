@@ -9,7 +9,15 @@ out.push('今天(演示): ' + require('../utils/demo-clock').today());
 const home = demo.getHome('440000', '92');
 out.push('--- 广东·广州 当前价 ---');
 home.prices.forEach(p => out.push('  ' + p.name + ' = ' + p.price + '  (' + p.changeAmount + ', ' + p.changeAt + ')'));
-out.push('窗口: ' + home.window.date + '  剩 ' + home.window.daysLeft + ' 天  预测 ' + home.window.forecast['92']);
+// 预测是区间结构（direction / literMin / literMax / estimated），
+// 不是按油品 id 的字典 —— 以前这里读 forecast['92']，打出来永远是 undefined。
+var fc = home.window.forecast || {};
+var fcText = fc.direction
+  ? (fc.direction + ' ' + (typeof fc.literMin === 'number'
+    ? (fc.literMin.toFixed(2) + '-' + fc.literMax.toFixed(2) + ' 元/升')
+    : '幅度待公布'))
+  : '无';
+out.push('窗口: ' + home.window.date + '  剩 ' + home.window.daysLeft + ' 天  预测 ' + fcText);
 out.push('30天走势点数: ' + home.trend30['92'].points.length + ' 首末: ' + home.trend30['92'].points[0].value + ' -> ' + home.trend30['92'].points[29].value);
 out.push('最新通知: ' + home.latestNotice.title + '  92# ' + home.latestNotice.changes['92']);
 

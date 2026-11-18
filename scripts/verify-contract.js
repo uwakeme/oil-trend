@@ -334,9 +334,53 @@ function dayDiffOf(fromDate, toDate) {
   return Math.round((b - a) / 86400000);
 }
 
+/** 日期平移（天） */
+function shiftDay(dateStr, days) {
+  var t = Date.parse(String(dateStr || '').slice(0, 10) + 'T00:00:00Z');
+  if (!isFinite(t)) return '';
+  return new Date(t + days * 86400000).toISOString().slice(0, 10);
+}
+
+/**
+ * 固定的「今天」。
+ *
+ * ⚠️ 不固定时钟的话，这个自检会随日期漂移：夹具里的窗口（2026-11-20）过期后，
+ * 首页标题就从「下一次调价窗口」变成「上一轮调价窗口」，断言全红 ——
+ * 那是夹具过期，不是代码坏了。
+ *
+ * 取 2026-11-18：夹具的窗口（11-20）还没到，推算值（11-13）已经过去，
+ * 「来源已公布」与「推算已过期」两个分支都能稳定复现。
+ */
+var FIXED_TODAY = '2026-11-18';
+
+/**
+ * 把系统时间钉在 FIXED_TODAY。
+ *
+ * 装上之后不摘 —— 这个脚本跑完就结束，摘不摘没有区别；
+ * 但必须**在灌数据之前**装：演示数据集的日期是按「今天 - 锚点」平移的，
+ * 钉住时钟才能让夹具里的每个日期都固定下来。
+ */
+function installFixedClock(dateStr) {
+  var RealDate = Date;
+  var shifted = new RealDate(dateStr + 'T08:00:00Z');
+  function FakeDate() {
+    var args = Array.prototype.slice.call(arguments);
+    if (args.length === 0) return new RealDate(shifted.getTime());
+    return new (Function.prototype.bind.apply(RealDate, [null].concat(args)))();
+  }
+  FakeDate.prototype = RealDate.prototype;
+  FakeDate.now = function () { return shifted.getTime(); };
+  FakeDate.parse = RealDate.parse;
+  FakeDate.UTC = RealDate.UTC;
+  global.Date = FakeDate;
+}
+
 async function main() {
   process.env.OIL_ALLOW_NO_DATABASE = '1';
   process.env.OIL_TOKEN_SECRET = 'contract-test-secret-0123456789abcdef';
+
+  // 固定时钟：夹具里的日期全是写死的，不钉住「今天」的话断言会随日期漂移
+  installFixedClock(FIXED_TODAY);
 
   // ===== 后端：真库、真服务、真请求 =====
   var db = newDb();
@@ -634,54 +678,85 @@ async function main() {
     check('下次公告发布日与下一轮调价日同一天（实测 35 条公告均在调价当天发布）',
       home.window.estimate.nextNoticeDate === home.window.estimate.nextAdjustDate,
       home.window.estimate.nextNoticeDate + ' vs ' + home.window.estimate.nextAdjustDate);
-    // ⚠️ 这两条钉死的是「推算基准取执行日，不是挂牌价生效日」：
-    //   夹具里最近一次实际调价的执行日是 2026-11-12
-    //   （历史推导节点记的是生效日 11-13 —— 新价从次日 00:00 才开始挂牌），
-    //   10 个工作日之后是 2026-11-26。
-    //   基准取成 11-13 的话，下一轮会推成 11-27 —— 整体多一天。
+    // ⚠️ 期望值从夹具数据推导，不写死日期：
+    //   以前这里钉死 2026-11-12 / 2026-11-26，而夹具里最近一次调价是 11-02，
+    //   基准（执行日）自然是 11-01、下一轮自然是 11-13 ——
+    //   断言与夹具对不上，测的是「硬编码的日期过期了」，不是代码对不对。
+    //
+    //   基准的口径：官方公告的执行日 / 历史推导节点的**生效日减一天**
+    //   （新价从次日 00:00 才开始挂牌），且都不得晚于今天
+    //   （来源可能已经预告了下一轮，那不算「已发生」）。
+    var expectedBase = '';
+    (await dao.notices.listPublic('official', 60, 0)).forEach(function (n) {
+      var d = String(n.executeAt || '').slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d <= FIXED_TODAY && d > expectedBase) expectedBase = d;
+    });
+    (await dao.events.listAll()).forEach(function (e) {
+      var exec = shiftDay(String(e.date || '').slice(0, 10), -1);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(exec) && exec <= FIXED_TODAY && exec > expectedBase) expectedBase = exec;
+    });
     check('推算基准是最近一次实际调价的执行日',
-      home.window.estimate.basedOn === '2026-11-12',
-      '基准=' + home.window.estimate.basedOn);
+      home.window.estimate.basedOn === expectedBase,
+      '基准=' + home.window.estimate.basedOn + ' / 期望=' + expectedBase);
+    var expectedNext = shared.ADJUST_CYCLE.estimateNextAdjustDate(expectedBase);
     check('推算的下一轮调价日是 10 个工作日之后',
-      home.window.estimate.nextAdjustDate === '2026-11-26',
-      home.window.estimate.nextAdjustDate);
+      home.window.estimate.nextAdjustDate === expectedNext,
+      home.window.estimate.nextAdjustDate + ' / 期望=' + expectedNext);
 
     // 窗口已经过去（来源还没公布下一轮）：不能再写「下一次…距窗口 -1 天」
+    //
+    // ⚠️ 这里要分两种情况，原来只测了一种：
+    //   A. 推算值**有效**（基准新、推出来的下一轮在未来）→ 用推算值当主日期；
+    //   B. 推算值**自己也过期了**（基准太久没更新，推出来的「下一轮」在过去）→
+    //      拿它当「预计下次调价窗口」会写出「已过 5 天 · 等待下一轮公布」，
+    //      这种时候只能退回来源那一轮，标题写「上一轮调价窗口」。
+    var freshEstimate = JSON.parse(JSON.stringify(home.window.estimate));
+    freshEstimate.nextAdjustDate = '2026-11-28';
+    freshEstimate.nextNoticeDate = '2026-11-28';
+    freshEstimate.daysLeft = 10;
     var expiredHome = JSON.parse(JSON.stringify(home));
-    expiredHome.window = Object.assign({}, expiredHome.window || {}, { daysLeft: -1 });
+    expiredHome.window = Object.assign({}, expiredHome.window || {}, { daysLeft: -1, estimate: freshEstimate });
     indexPage.applyHome(expiredHome);
-    check('窗口过期时标题改成预计下次调价',
+    check('窗口过期但推算值有效时，标题是预计下次调价窗口',
       indexPage.data.window.titleText === '预计下次调价窗口', indexPage.data.window.titleText);
-    check('窗口过期时主日期换成推算值',
-      indexPage.data.window.dateText.indexOf(
-        home.window.estimate.nextAdjustDate.slice(5).replace('-', '月') + '日') >= 0,
-      indexPage.data.window.dateText + ' / 推算 ' + home.window.estimate.nextAdjustDate);
-    check('窗口过期时明确标了推算 · 非官方',
+    check('窗口过期但推算值有效时，主日期换成推算值',
+      indexPage.data.window.dateText.indexOf('11月28日') >= 0,
+      indexPage.data.window.dateText + ' / 推算 ' + freshEstimate.nextAdjustDate);
+    check('窗口过期但推算值有效时，明确标了推算 · 非官方',
       indexPage.data.window.dateNote.indexOf('推算') >= 0 &&
       indexPage.data.window.dateNote.indexOf('非官方') >= 0,
       indexPage.data.window.dateNote);
-    check('窗口过期时倒计时用推算的剩余天数，不是负数',
+    check('窗口过期但推算值有效时，倒计时用推算的剩余天数，不是负数',
       indexPage.data.window.daysLeft > 0 &&
-      indexPage.data.window.daysLeft === home.window.estimate.daysLeft,
+      indexPage.data.window.daysLeft === freshEstimate.daysLeft,
       String(indexPage.data.window.daysLeft));
-    check('窗口过期时不挂失效的预测',
+    check('窗口过期但推算值有效时，不挂失效的预测',
       indexPage.data.forecast.text.indexOf('预计') < 0, indexPage.data.forecast.text);
-    // 推算态下进度条必须按新周期算（上一轮调价日 → 推算的下一轮），
-    // 沿用来源那一轮的进度会出现「满格 + 还有 N 天」的自相矛盾。
-    // 进度条只画在调价页，所以断言放在那边。
-    var expTotal = dayDiffOf(home.window.estimate.basedOn, home.window.estimate.nextAdjustDate);
-    var expProgress = expTotal > 0
-      ? Math.round((expTotal - home.window.estimate.daysLeft) / expTotal * 100)
-      : -1;
+
+    // 推算值自己也过期了（夹具里的真实情况：推算日 11-13，今天 11-18）
+    var staleHome = JSON.parse(JSON.stringify(home));
+    staleHome.window = Object.assign({}, staleHome.window || {}, { daysLeft: -1 });
+    indexPage.applyHome(staleHome);
+    check('推算值也过期时退回「上一轮调价窗口」',
+      indexPage.data.window.titleText === '上一轮调价窗口', indexPage.data.window.titleText);
+    check('推算值也过期时倒计时不是负数',
+      indexPage.data.window.daysLeft === -1 && indexPage.data.window.passedDays === 1,
+      String(indexPage.data.window.daysLeft));
+    check('推算值也过期时不挂失效的预测',
+      indexPage.data.forecast.text.indexOf('预计') < 0, indexPage.data.forecast.text);
+    check('推算值也过期时不显示「预计下次通知」',
+      !indexPage.data.window.noticeText, indexPage.data.window.noticeText);
+    // 回到真实窗口状态：后面的用例按正常展示来断言
+    indexPage.applyHome(home);
 
     // 「下次通知」= 下一轮调价公告的发布日
     check('首页给出下次通知时间',
       indexPage.data.window.noticeText.indexOf('预计') >= 0 &&
       indexPage.data.window.noticeText.indexOf('发布公告') >= 0,
       indexPage.data.window.noticeText);
-    check('首页的下次通知与推算的公告发布日同一天',
+    check('首页的下次通知与窗口日期同一天',
       indexPage.data.window.noticeText.indexOf(
-        home.window.estimate.nextNoticeDate.slice(5).replace('-', '月') + '日') >= 0,
+        home.window.date.slice(5).replace('-', '月') + '日') >= 0,
       indexPage.data.window.noticeText);
     check('首页写明了公告发布时间口径',
       indexPage.data.window.noticeNote.indexOf('当天') >= 0, indexPage.data.window.noticeNote);
@@ -748,16 +823,36 @@ async function main() {
     check('来源已公布下一轮时不标推算',
       homeWindowNote.indexOf('推算') < 0, homeWindowNote);
 
-    // 调价页：来源过期时进度条要按新周期算
+    // 调价页：来源过期、推算值有效时，进度条要按新周期算
+    //
+    // ⚠️ 进度必须落在 0~100：推算值的剩余天数为负时（推算日已过去），
+    // 「已过去的天数」会超过整个周期，算出来是 142% —— 满格还要再显示天数，
+    // 自相矛盾。所以推算值过期时不按新周期算，改用来源那一轮的进度。
     var expiredNoticePayload = JSON.parse(JSON.stringify(noticeList));
     expiredNoticePayload.window.daysLeft = -1;
+    expiredNoticePayload.window.estimate = freshEstimate;
     noticePage.applyNotices(expiredNoticePayload);
+    var expTotal = dayDiffOf(freshEstimate.basedOn, freshEstimate.nextAdjustDate);
+    var expProgress = expTotal > 0
+      ? Math.round((expTotal - freshEstimate.daysLeft) / expTotal * 100)
+      : -1;
     check('调价页推算态下进度条按新周期算',
-      expProgress >= 0 && noticePage.data.window.progress === expProgress,
+      expProgress >= 0 && expProgress <= 100 && noticePage.data.window.progress === expProgress,
       '实际 ' + noticePage.data.window.progress + ' / 期望 ' + expProgress);
     check('调价页推算态下标题是预计下次调价窗口',
       noticePage.data.window.titleText === '预计下次调价窗口',
       noticePage.data.window.titleText);
+
+    // 推算值自己也过期时：退回上一轮，不能再写「预计下次调价窗口」
+    var staleNoticePayload = JSON.parse(JSON.stringify(noticeList));
+    staleNoticePayload.window.daysLeft = -1;
+    noticePage.applyNotices(staleNoticePayload);
+    check('调价页推算值也过期时退回上一轮窗口',
+      noticePage.data.window.titleText === '上一轮调价窗口',
+      noticePage.data.window.titleText);
+    check('调价页推算值也过期时进度条不超过 100',
+      noticePage.data.window.progress >= 0 && noticePage.data.window.progress <= 100,
+      String(noticePage.data.window.progress));
 
     // 详情弹层：幅度未知的油品要显示 '--'，不能显示 0.00（那是「持平」，不是「不知道」）
     noticePage.data.notices = [{
@@ -792,6 +887,24 @@ async function main() {
       }));
     check('走势页渲染里没有 undefined', hasBadToken(allText(trendPage.data)) === false);
 
+    // 幅度未知的调价节点要显示 '--'，不能显示 0.00（那是「持平」，不是「不知道」）
+    trendPage.applyTrend({
+      region: { code: '440000', fullName: '广东 · 广州' },
+      fuel: { id: '92', name: '92# 汽油' },
+      points: [{ date: '2026-11-01', value: 8.9 }, { date: '2026-11-02', value: 8.9 }],
+      axis: ['11/01', '11/01', '11/02'],
+      events: [{
+        date: '2026-11-02', title: '幅度未知的调价',
+        amount: null, amountKnown: false, direction: 'down', priceAfter: 8.9
+      }],
+      price: 8.9, deltaPercent: 0, direction: 'flat', rangeLabel: '近 3 个月',
+      low: 8.9, high: 8.9, count: 1,
+      source: { mode: 'live', name: '服务端定时采集' }
+    });
+    check('走势页幅度未知的节点显示 -- 而不是 0.00',
+      trendPage.data.events.length === 1 && trendPage.data.events[0].deltaText === '--',
+      JSON.stringify(trendPage.data.events));
+
     // 国际页
     var globalPage = makeInstance(loadPageDef('pages/global/global.js'));
     await globalPage.load();
@@ -813,6 +926,25 @@ async function main() {
     check('提醒页当前价不是 --', alertPage.data.currentPriceText !== '--',
       '实际：' + alertPage.data.currentPriceText);
     check('提醒页渲染里没有 undefined', hasBadToken(allText(alertPage.data)) === false);
+
+    // 开关关掉时，摘要必须如实写「已停用」
+    // ⚠️ 以前两段摘要写死「向我发送微信订阅消息」，开关关了也在说这句话。
+    alertPage.setData({
+      rule: Object.assign({}, alertPage.data.rule, { officialDrop: false, targetEnabled: false })
+    });
+    alertPage.applyRule();
+    check('官方降价开关关掉时摘要写「已停用」',
+      alertPage.data.officialSummary.indexOf('已停用') >= 0, alertPage.data.officialSummary);
+    check('目标价开关关掉时摘要写「已停用」',
+      alertPage.data.targetSummary.indexOf('已停用') >= 0, alertPage.data.targetSummary);
+
+    // 没有当前价时不能说「再降 0.00 元时提醒」（那是把「不知道」当成「差 0 元」）
+    alertPage._price = null;
+    alertPage.applyRule();
+    check('没有当前价时目标价差额写「暂无当前价」',
+      alertPage.data.targetCaption.indexOf('暂无当前价') >= 0 &&
+      alertPage.data.targetCaption.indexOf('0.00') < 0,
+      alertPage.data.targetCaption);
 
     /* ===== 四、空值不许冒充 0.00 ===== */
     console.log('\n--- 空值不许冒充 0.00 ---');
@@ -858,6 +990,22 @@ async function main() {
     check('回落时来源名是演示数据集',
       fallbackPage.data.sourceName === '演示数据集', fallbackPage.data.sourceName);
     check('回落时渲染里没有 undefined', hasBadToken(allText(fallbackPage.data)) === false);
+
+    // 提醒规则保存：后端不可达时必须如实报失败
+    // ⚠️ 以前 utils/api.js 的 saveAlertRules 吞掉后端错误，页面紧接着弹「订阅已开启」——
+    // 用户以为规则生效了，服务端一条都没写。
+    var savePage = makeInstance(loadPageDef('pages/alert/alert.js'));
+    savePage.setData({
+      rule: {
+        regionCode: '440000', fuelId: '92',
+        officialDrop: true, targetEnabled: true, targetPrice: 7.11
+      }
+    });
+    await savePage.saveAndReport(savePage.data.rule);
+    check('后端不可达时提醒规则保存报失败',
+      savePage.data.saveState === 'failed', savePage.data.saveState);
+    check('保存失败时写明没有存到服务器',
+      savePage.data.saveText.indexOf('未保存') >= 0, savePage.data.saveText);
     // 重新起服务，后面的用例还要用
     await new Promise(function (r) { server.listen(port, r); });
 
