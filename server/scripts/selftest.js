@@ -270,6 +270,17 @@ async function main() {
   // 不能拿一个平台不认的 ID 去发
   var configModule = require(path.join(ROOT, 'src', 'config.js'));
   var subscribeService = require(path.join(ROOT, 'src', 'services', 'subscribe.js'));
+  // 方向模板（调整幅度是文本类型的那个）三处也要同步：
+  // 服务端 .env（发消息用）、契约表（字段名）、小程序端 config（授权用）。
+  // ⚠️ 小程序端漏了 → 用户没给这个模板授权 → 服务器下发吃 43101，额度白废。
+  var savedDirectionTemplateId = configModule.subscribeDirectionTemplateId;
+  check('服务端配了方向模板时，小程序端必须一起授权',
+    !savedDirectionTemplateId ||
+    miniConfig.subscribeDirectionTemplateId === savedDirectionTemplateId,
+    miniConfig.subscribeDirectionTemplateId + ' vs ' + savedDirectionTemplateId);
+  check('服务端配了方向模板时，它必须在契约表里登记过',
+    !savedDirectionTemplateId || !!templates.templateOf(savedDirectionTemplateId),
+    savedDirectionTemplateId);
   var savedTemplateId = configModule.subscribeTemplateId;
   configModule.subscribeTemplateId = 'OaHgjTXIxhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg';
   check('手抄错的模板 ID 会回退到契约表默认模板',
@@ -374,6 +385,92 @@ async function main() {
     null,
     { medianAmounts: { '92': 0.52 } }
   ).length === 0);
+
+  console.log('\n--- 没有每升幅度时的官方方向提醒 ---');
+  // ⚠️ 发改委公告只给吨价：白天发公告时新挂牌价还没采到，
+  // 每升幅度拿不到 → 提醒发不出去，用户什么都收不到。
+  //
+  // 干净的做法是「方向模板」：它的「调整幅度」是**文本类型**，
+  // 能原样写「幅度待公布」。
+  // ⚠️ 不能填 0（那是冒充「持平」），也不能填吨价（那是混口径）。
+  var directionTemplateId = 'TEST-DIRECTION-TEMPLATE';
+  templates.registerTemplate(directionTemplateId, {
+    name: '油价调整方向提醒（自检用）',
+    kind: 'once',
+    fields: {
+      thing1: { type: 'thing', role: 'fuel', label: '油品种类', max: 20 },
+      thing2: { type: 'thing', role: 'amount', label: '调整幅度', max: 20 },
+      phrase3: { type: 'phrase', role: 'direction', label: '调整方向', max: 5 },
+      date4: { type: 'date', role: 'date', label: '调整日期' },
+      thing5: { type: 'thing', role: 'tip', label: '温馨提示', max: 20 }
+    }
+  });
+  var noAmountNotice = { kind: 'official', executeAt: '2026-11-24', direction: 'down',
+    tonChanges: { gasoline: -645, diesel: -625 }, changes: {} };
+  var noAmountPrices = [{ regionCode: '440000', fuelId: '92', price: 8.39 }];
+
+  // 没配方向模板：发不出去，但必须留下「为什么没发」的痕迹
+  var skippedNoTemplate = [];
+  var hitsNoTemplate = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
+    noAmountPrices, noAmountNotice, null,
+    { skipped: skippedNoTemplate }
+  );
+  check('没有每升幅度又没有方向模板时，这条提醒发不出去',
+    hitsNoTemplate.length === 0, JSON.stringify(hitsNoTemplate));
+  check('发不出去的原因被记下来（NO_LITER_AMOUNT）',
+    skippedNoTemplate.some(function (s) { return s.reason === 'NO_LITER_AMOUNT'; }),
+    JSON.stringify(skippedNoTemplate));
+
+  // 配了方向模板：官方方向明确是下调，就照发
+  var savedDirectionId = configModule.subscribeDirectionTemplateId;
+  configModule.subscribeDirectionTemplateId = directionTemplateId;
+  var skippedWithTemplate = [];
+  var hitsWithTemplate = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
+    noAmountPrices, noAmountNotice, null,
+    { skipped: skippedWithTemplate }
+  );
+  check('配了方向模板后，没有每升幅度也照发方向提醒',
+    hitsWithTemplate.length === 1, JSON.stringify(hitsWithTemplate));
+  var dirHit = hitsWithTemplate[0];
+  check('方向提醒用的是方向模板，不是主模板',
+    !!dirHit && dirHit.template.id === directionTemplateId,
+    dirHit ? dirHit.template.id : '没命中');
+  check('方向提醒的幅度写的是「幅度待公布」（不是 0.00元）',
+    !!dirHit && dirHit.data.thing2 === '幅度待公布',
+    dirHit ? JSON.stringify(dirHit.data) : '没命中');
+  check('方向提醒的字段全部通过模板契约',
+    !!dirHit && templates.validate(directionTemplateId, dirHit.data).ok,
+    dirHit ? templates.validate(directionTemplateId, dirHit.data).errors.join(',') : '没命中');
+  check('方向提醒里没有任何「0.00元」（那是冒充持平）',
+    !!dirHit && Object.keys(dirHit.data).every(function (k) {
+      return String(dirHit.data[k]).indexOf('0.00元') < 0;
+    }),
+    dirHit ? JSON.stringify(dirHit.data) : '没命中');
+  check('方向提醒的方向字段仍是「下调」',
+    !!dirHit && dirHit.data.phrase3 === '下调',
+    dirHit ? dirHit.data.phrase3 : '没命中');
+  configModule.subscribeDirectionTemplateId = savedDirectionId;
+
+  // 文本类型的幅度字段能放整句；amount 类型只认「数字+元」
+  var textAmount = templates.dataByRole(directionTemplateId, {
+    fuel: '92# 汽油', amountText: '每升下调0.52元', direction: '下调',
+    date: '2026-11-24', tip: '广东现价8.39元'
+  });
+  check('文本类型的幅度字段能放整句',
+    textAmount.thing2 === '每升下调0.52元', JSON.stringify(textAmount));
+  var primaryAmount = templates.dataByRole(templates.PRIMARY_TEMPLATE_ID, {
+    fuel: '92# 汽油', amount: 0.52, direction: '下调',
+    date: '2026-11-24', tip: '广东现价8.39元'
+  });
+  check('主模板的幅度字段只放「数字+元」',
+    primaryAmount.amount2 === '0.52元', JSON.stringify(primaryAmount));
+  check('主模板装不下整句（放进去会被契约挡住）',
+    !templates.validate(templates.PRIMARY_TEMPLATE_ID, {
+      thing5: '92# 汽油', amount2: '每升下调0.52元', phrase1: '下调',
+      date3: '2026年11月24日', thing4: '广东现价8.39元'
+    }).ok);
 
   console.log('\n--- 预测提醒的数据入口：调价窗口 ---');
   // 预测源只写 oil_windows，从不写 kind='forecast' 的通知 ——
@@ -1189,7 +1286,7 @@ async function main() {
     }
   };
 
-  var flat = alertService.buildData({
+  var flat = alertService.buildData(subscribeTemplates.PRIMARY_TEMPLATE_ID, {
     fuel: '92# 汽油', amount: 0.13, direction: '下调', date: '2026-11-24', tip: '广东现价8.39元'
   });
   var body = subscribeService.buildBody({
