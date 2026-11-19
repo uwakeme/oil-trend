@@ -20,6 +20,15 @@ module.exports = {
   // 换模板时这两处 + 服务端 .env 的 OIL_SUBSCRIBE_TEMPLATE_ID 要同步改。
   subscribeTemplateIds: ['OaHgjTXIhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg'],
 
+  // 「方向提醒」模板 ID（可选）：调整幅度是**文本类型**的那个模板。
+  // ⚠️ 每升幅度还拿不到时（官方只公布了吨价），主模板的「调整价格」
+  //   填不了 —— 填 0 等于冒充「持平」，填吨价等于把两个口径混在一起。
+  //   方向模板的「调整幅度」是文本类型，能原样写「幅度待公布」。
+  // 填了这里之后，这个 ID 也会一起被授权（用户点一次同意即可）。
+  // ⚠️ 必须与服务端 server/.env 的 OIL_SUBSCRIBE_DIRECTION_TEMPLATE_ID 一致，
+  //   并且登记在 server/src/services/subscribe-templates.js 的契约表里。
+  subscribeDirectionTemplateId: '',
+
   // 后端地址：自建服务器（server/ 部署的那台）。
   // 留空则一律使用本地演示数据。
   // ⚠️ 必须已在公众平台「服务器域名 → request 合法域名」里配好，

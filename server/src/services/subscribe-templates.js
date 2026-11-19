@@ -16,6 +16,13 @@
  * 换模板时只改这里，并同步改：
  *   小程序端 config/index.js 的 subscribeTemplateIds
  *   服务端 .env 的 OIL_SUBSCRIBE_TEMPLATE_ID
+ *
+ * ⚠️ 「调整幅度」字段有两种形态，差别很大：
+ *   amount 类型 —— 只能放「数字+元」，装不下区间，也不该拿 0 冒充「幅度未知」；
+ *   thing/phrase 类型 —— 能放整句（比如「每升下调0.52元」「幅度待公布」）。
+ *   官方公告只给吨价、每升幅度还拿不到时，只有文本类型的模板才发得了提醒，
+ *   这种模板在下面登记成**方向模板**（服务端 .env 的
+ *   OIL_SUBSCRIBE_DIRECTION_TEMPLATE_ID 指向它）。
  */
 
 /**
@@ -30,11 +37,11 @@ var TEMPLATES = {
     name: '油价调整提醒',
     kind: 'once',
     fields: {
-      thing5: { type: 'thing', label: '油品种类', max: 20 },
-      amount2: { type: 'amount', label: '调整价格', max: 10 },
-      phrase1: { type: 'phrase', label: '调整方向', max: 5 },
-      date3: { type: 'date', label: '调整日期' },
-      thing4: { type: 'thing', label: '温馨提示', max: 20 }
+      thing5: { type: 'thing', role: 'fuel', label: '油品种类', max: 20 },
+      amount2: { type: 'amount', role: 'amount', label: '调整价格', max: 10 },
+      phrase1: { type: 'phrase', role: 'direction', label: '调整方向', max: 5 },
+      date3: { type: 'date', role: 'date', label: '调整日期' },
+      thing4: { type: 'thing', role: 'tip', label: '温馨提示', max: 20 }
     }
   }
 };
@@ -45,6 +52,82 @@ var PRIMARY_TEMPLATE_ID = 'OaHgjTXIhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg';
 /** 取模板定义；模板 ID 没登记过就返回 null */
 function templateOf(templateId) {
   return TEMPLATES[templateId] || null;
+}
+
+/**
+ * 登记一个模板。
+ *
+ * ⚠️ 生产上平台模板的契约仍以本文件里的镜像为准：
+ *    平台换了模板，这里必须同步改，否则字段对不上，消息发不出去。
+ *    这个函数给「模板还没申请下来时先把链路跑通」用（自检就是）。
+ */
+function registerTemplate(templateId, spec) {
+  if (!templateId || !spec) return null;
+  TEMPLATES[templateId] = spec;
+  return TEMPLATES[templateId];
+}
+
+/**
+ * 模板里有没有某个角色。
+ *
+ * ⚠️ 不同模板的字段数与角色不一定一样：
+ *    主模板有独立的「调整方向」字段，方向模板不一定有 ——
+ *    没有的话，方向要写进「调整幅度」那一句里。
+ */
+function hasRole(templateId, role) {
+  var tpl = templateOf(templateId);
+  if (!tpl) return false;
+  return Object.keys(tpl.fields).some(function (key) {
+    return tpl.fields[key].role === role;
+  });
+}
+
+/**
+ * 按「角色」填模板字段。
+ *
+ * ⚠️ thing5 / amount2 / phrase1 这些只是**平台占位符的名字**，
+ * 换个模板就换成别的名字 —— 以前 buildData 直接写死它们，
+ * 换模板必错位（字段名对不上，平台一律 47003）。
+ * 现在字段的**角色**写在契约表里，这里按角色取值：
+ * 换模板只改契约表，不改业务代码。
+ *
+ * @param {string} templateId
+ * @param {object} values { fuel, amount, amountText, direction, date, tip }
+ * @returns {object} { 字段名: 格式化后的值 }
+ */
+function dataByRole(templateId, values) {
+  var tpl = templateOf(templateId);
+  var out = {};
+  if (!tpl) return out;
+  var v = values || {};
+  Object.keys(tpl.fields).forEach(function (key) {
+    var field = tpl.fields[key];
+    out[key] = formatByType(field.type, valueOfRole(field.role, field.type, v));
+  });
+  return out;
+}
+
+/** 角色 → 具体取值（角色决定取哪个值，类型决定怎么格式化） */
+function valueOfRole(role, type, values) {
+  var v = values || {};
+  switch (role) {
+    case 'fuel':
+      return v.fuel;
+    case 'direction':
+      return v.direction;
+    case 'date':
+      return v.date;
+    case 'tip':
+      return v.tip;
+    case 'amount':
+      // amount 类型的字段只认「数字+元」；
+      // 文本类型的字段能放整句（比如「每升下调0.52元」「幅度待公布」）
+      if (type === 'amount') return v.amount;
+      if (v.amountText !== undefined && v.amountText !== null) return v.amountText;
+      return v.amount;
+    default:
+      return undefined;
+  }
 }
 
 /* ---------------- 值格式化 ---------------- */
@@ -204,6 +287,9 @@ module.exports = {
   TEMPLATES: TEMPLATES,
   PRIMARY_TEMPLATE_ID: PRIMARY_TEMPLATE_ID,
   templateOf: templateOf,
+  registerTemplate: registerTemplate,
+  hasRole: hasRole,
+  dataByRole: dataByRole,
   toWeChatData: toWeChatData,
   validateWeChat: validateWeChat,
   formatAmount: formatAmount,

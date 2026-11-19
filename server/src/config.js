@@ -45,6 +45,12 @@ var port = Number(optional('PORT', 3000));
 var appId = optional('WX_APP_ID', '');
 var appSecret = optional('WX_APP_SECRET', '');
 var subscribeTemplateId = optional('OIL_SUBSCRIBE_TEMPLATE_ID', '');
+// 「方向提醒」模板：调整幅度是**文本类型**的模板。
+// ⚠️ 官方公告只给吨价时，每升幅度可能拿不到 ——
+// 主模板的「调整价格」是 amount 类型，只能填「数字+元」，
+// 幅度未知时填 0 等于冒充「持平」，留空平台直接拒收；
+// 只有文本类型的模板能把「幅度待公布」这种话原样发出去。
+var subscribeDirectionTemplateId = optional('OIL_SUBSCRIBE_DIRECTION_TEMPLATE_ID', '');
 var miniprogramState = optional('OIL_MINIPROGRAM_STATE', 'formal');
 var tokenSecret = optional('OIL_TOKEN_SECRET', '');
 var apiBaseUrl = optional('OIL_API_BASE_URL', '');
@@ -87,6 +93,14 @@ function validate() {
       warnings.push('OIL_SUBSCRIBE_TEMPLATE_ID (' + subscribeTemplateId + ') 不在契约表里，将回退到契约表默认模板 ' + templates.PRIMARY_TEMPLATE_ID);
     }
   }
+  // 方向模板：配了但契约表里没登记 → 提醒发不出去（字段对不上），
+  // 提前喊一声，别等到线上才发现「官方降价提醒一条都没发」。
+  if (subscribeDirectionTemplateId) {
+    var tpl2 = require('./services/subscribe-templates');
+    if (!tpl2.templateOf(subscribeDirectionTemplateId)) {
+      warnings.push('OIL_SUBSCRIBE_DIRECTION_TEMPLATE_ID (' + subscribeDirectionTemplateId + ') 不在契约表里，方向提醒不会发送（每升幅度缺失时仍不发提醒）');
+    }
+  }
 
   return { errors: errors, warnings: warnings };
 }
@@ -104,6 +118,10 @@ module.exports = {
   // ⚠️ 与 server/src/services/subscribe-templates.js 的契约表要同步：
   //   .env 里配的模板 ID 必须登记在契约表里，否则字段对不上，消息发不出去。
   subscribeTemplateId: subscribeTemplateId,
+
+  // 方向提醒模板 ID（调整幅度是文本类型的那个模板）
+  // ⚠️ 必须在契约表 subscribe-templates.js 里登记过，否则方向提醒不发。
+  subscribeDirectionTemplateId: subscribeDirectionTemplateId,
 
   // 小程序版本状态：formal 正式版 / developer 开发版 / trial 体验版。
   // 订阅消息下发时会写进 miniprogram_state：

@@ -14,6 +14,20 @@ function hasTemplate() {
   return Array.isArray(config.subscribeTemplateIds) && config.subscribeTemplateIds.length > 0;
 }
 
+/**
+ * 要请求授权的模板 ID 列表。
+ *
+ * ⚠️ 方向模板也要一起授权：微信的一次性订阅额度是**按模板**给的，
+ * 没授权过的模板，服务器拿它下发会吃 43101（用户没有订阅额度），
+ * 白白把那条额度废掉。
+ */
+function templateIds() {
+  var ids = Array.isArray(config.subscribeTemplateIds) ? config.subscribeTemplateIds.slice() : [];
+  var directionId = config.subscribeDirectionTemplateId;
+  if (directionId && ids.indexOf(directionId) === -1) ids.push(directionId);
+  return ids;
+}
+
 function isSupported() {
   return typeof wx.requestSubscribeMessage === 'function';
 }
@@ -43,7 +57,7 @@ function requestSubscribe() {
       return;
     }
     wx.requestSubscribeMessage({
-      tmplIds: config.subscribeTemplateIds,
+      tmplIds: templateIds(),
       success: function (res) {
         var granted = [];
         var denied = [];
@@ -71,6 +85,7 @@ function requestSubscribe() {
 
 module.exports = {
   hasTemplate: hasTemplate,
+  templateIds: templateIds,
   isSupported: isSupported,
   requestSubscribe: requestSubscribe
 };

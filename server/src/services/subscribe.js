@@ -155,5 +155,18 @@ module.exports = {
     var fromEnv = config.subscribeTemplateId;
     if (fromEnv && templates.templateOf(fromEnv)) return fromEnv;
     return templates.PRIMARY_TEMPLATE_ID;
+  },
+
+  /**
+   * 方向提醒模板 ID（每升幅度缺失时用）。
+   *
+   * ⚠️ 与主模板同样的规矩：.env 里配的必须在契约表里登记过才用。
+   * 没登记就返回空串 —— 这个模板不存在时，方向提醒不发，
+   * 不能拿一个平台不认的 ID 去发（会白白消耗用户的一次性额度）。
+   */
+  directionTemplateId: function () {
+    var fromEnv = config.subscribeDirectionTemplateId;
+    if (fromEnv && templates.templateOf(fromEnv)) return fromEnv;
+    return '';
   }
 };

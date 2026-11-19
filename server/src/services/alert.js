@@ -21,42 +21,72 @@ const templates = require('./subscribe-templates');
 const measure = require('./measure');
 
 /**
- * 模板字段映射
+ * 提醒用哪个模板
  *
- * ⚠️ 字段名必须与「微信公众平台 → 订阅消息 → 模板详情」里的占位符**一字不差**，
- * 自己起名（thing1、price…）平台一律拒收（errcode 47003）。
+ * ⚠️ 字段名（thing5 / amount2 / …）必须与「微信公众平台 → 订阅消息 → 模板详情」
+ * 里的占位符**一字不差**，自己起名平台一律拒收（errcode 47003）。
+ * 而且**换个模板占位符名就换了** —— 所以业务代码不再写死字段名，
+ * 只声明「这条提醒用哪一类模板」，具体字段由契约表按角色填
+ * （见 subscribe-templates.js 的 dataByRole）。
  *
- * 当前模板「油价调整提醒」（编号 1103，信息查询）只有 5 个字段：
- *   thing5  油品种类  thing  （≤20 字符）
- *   amount2 调整价格  amount （≤10 字符，形如 "0.13元"）
- *   phrase1 调整方向  phrase （≤5 字符）
- *   date3   调整日期  date   （"2026年11月24日"）
- *   thing4  温馨提示  thing  （≤20 字符）
+ * 两类模板：
+ *   primary   —— 主模板「油价调整提醒」：「调整价格」是 amount 类型，
+ *                只能放「数字+元」，所以必须有每升幅度才能发；
+ *   direction —— 方向模板：「调整幅度」是**文本类型**，
+ *                能原样写「幅度待公布」——
+ *                官方公告只给吨价、每升幅度还没采到时，靠它把提醒发出去。
  *
- * 模板里**没有**「地区」「当前价」「目标价」字段，
+ * ⚠️ 模板里没有「地区」「当前价」「目标价」字段，
  * 地区与当前价只能塞进「温馨提示」。
- *
- * 字段名的唯一真源是 subscribe-templates.js（平台模板的镜像），
- * 这里不再另写一份，换模板只改契约表。
  */
-function templateFieldsOf(templateId) {
-  var tpl = templates.templateOf(templateId);
-  if (!tpl) return null;
-  var fields = {};
-  Object.keys(tpl.fields).forEach(function (key) {
-    fields[key] = tpl.fields[key].label;
-  });
-  return fields;
+var TEMPLATE_FIELDS = {
+  officialDrop: { page: 'pages/index/index', kind: 'primary' },
+  targetPrice: { page: 'pages/index/index', kind: 'primary' },
+  forecastDrop: { page: 'pages/index/index', kind: 'primary' },
+  // 没有每升幅度时的官方降价提醒：走方向模板
+  officialDropDirection: { page: 'pages/index/index', kind: 'direction' }
+};
+
+/**
+ * 提醒用哪个模板 ID。
+ *
+ * primary   → 主模板（.env 可覆盖，但必须在契约表登记过）
+ * direction → 方向模板（没配 / 没登记 → 空串，这条提醒就发不出去）
+ */
+function templateIdOf(kind) {
+  if (kind === 'direction') return subscribe.directionTemplateId();
+  return subscribe.templateId();
 }
 
-var REMINDER_FIELDS = templateFieldsOf(templates.PRIMARY_TEMPLATE_ID);
+/**
+ * 这个模板的「调整幅度」字段能不能放整句文本。
+ *
+ * ⚠️ amount 类型的字段只认「数字+元」：
+ *    幅度未知时填 0 等于冒充「持平」，填吨价等于把两个口径混在一起，
+ *    留空平台直接拒收 —— 所以只有**文本类型**的字段能写「幅度待公布」。
+ */
+function canCarryText(templateId) {
+  var tpl = templates.templateOf(templateId);
+  if (!tpl) return false;
+  var amountField = null;
+  Object.keys(tpl.fields).forEach(function (key) {
+    if (tpl.fields[key].role === 'amount') amountField = tpl.fields[key];
+  });
+  return !!(amountField && amountField.type !== 'amount');
+}
 
-/** 三种提醒共用同一个模板：字段语义一样，只是填的值不同 */
-var TEMPLATE_FIELDS = {
-  officialDrop: { page: 'pages/index/index', fields: REMINDER_FIELDS },
-  targetPrice: { page: 'pages/index/index', fields: REMINDER_FIELDS },
-  forecastDrop: { page: 'pages/index/index', fields: REMINDER_FIELDS }
-};
+/**
+ * 方向模板能不能用。
+ *
+ * ⚠️ 必须确认它的「调整幅度」是**文本类型**，否则发不出「幅度待公布」，
+ * 与其白发一条，不如明确不发。
+ */
+function directionTemplateId() {
+  var id = templateIdOf('direction');
+  if (!id) return '';
+  if (!canCarryText(id)) return '';
+  return id;
+}
 
 function fuelName(id) {
   return { '92': '92# 汽油', '95': '95# 汽油', '98': '98# 汽油', '0': '0# 柴油' }[id] || id + '#';
@@ -234,14 +264,15 @@ function forecastTip(min, max) {
  *   date3   只能给中文年月日，"2026-11-24" 解析不了；
  *   phrase1 最多 5 个字符，thing 最多 20 个字符。
  */
-function buildData(opts) {
-  return {
-    thing5: templates.formatThing(opts.fuel),
-    amount2: templates.formatAmount(opts.amount),
-    phrase1: templates.formatPhrase(opts.direction),
-    date3: templates.formatDate(opts.date),
-    thing4: templates.formatThing(opts.tip)
-  };
+function buildData(templateId, opts) {
+  return templates.dataByRole(templateId, {
+    fuel: opts.fuel,
+    amount: opts.amount,
+    amountText: opts.amountText,
+    direction: opts.direction,
+    date: opts.date,
+    tip: opts.tip
+  });
 }
 
 /**
@@ -252,7 +283,8 @@ function buildData(opts) {
  * 自己先拦下来，日志里才有可读的原因。
  */
 function sendSubscribe(openid, template, templateData) {
-  var templateId = subscribe.templateId();
+  // 模板 ID 以「填数据时用的那个」为准 —— 换了模板，数据就填错了
+  var templateId = template.id || templateIdOf(template.kind);
   if (!templateId) {
     return Promise.resolve({ sent: false, reason: 'TEMPLATE_NOT_CONFIGURED' });
   }
@@ -270,6 +302,16 @@ function sendSubscribe(openid, template, templateData) {
     page: template.page,
     data: templateData
   });
+}
+
+/**
+ * 带上解析好的模板 ID。
+ *
+ * ⚠️ 数据是按某个模板的字段填的，发的时候必须用**同一个**模板 ——
+ * 换了模板，字段名对不上，平台一律 47003 拒收。
+ */
+function withTemplateId(template, templateId) {
+  return { page: template.page, kind: template.kind, id: templateId };
 }
 
 /**
@@ -302,16 +344,15 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
       (!noticeDir && typeof officialDelta === 'number' && officialDelta < 0);
     if (isDrop && eventAfterArmed(rule, latestNotice.executeAt)) {
       var amount = officialAmountOf(latestNotice, rule.fuelId, options);
-      // 每升幅度算不出来就不发：模板的「调整价格」填不了不能空着，
-      // 也不能拿吨价凑一个数字上去。
+      var primaryId = templateIdOf('primary');
       if (amount) {
         hits.push({
           type: 'officialDrop',
           dedupKey: [rule.userId, rule.regionCode, rule.fuelId, 'official', latestNotice.executeAt].join('::'),
           title: rule.fuelId + '# ' + fuelName(rule.fuelId) + ' 官方降价',
           price: priceDoc.price,
-          template: TEMPLATE_FIELDS.officialDrop,
-          data: buildData({
+          template: withTemplateId(TEMPLATE_FIELDS.officialDrop, primaryId),
+          data: buildData(primaryId, {
             fuel: fuelName(rule.fuelId),
             amount: Math.abs(amount.amount),
             direction: '下调',
@@ -320,17 +361,47 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
             tip: officialTip(regionName, currentText, amount.source)
           })
         });
-      } else if (options.skipped) {
-        // 公告方向明确是下调，但每升幅度一个都拿不到（快照还没采到 / 方向对不上）。
-        // 记一笔，让运维看得见「为什么这条提醒没发出去」，
-        // 而不是安静地什么都不发。
-        options.skipped.push({
-          type: 'officialDrop',
-          reason: 'NO_LITER_AMOUNT',
-          regionCode: rule.regionCode,
-          fuelId: rule.fuelId,
-          executeAt: latestNotice.executeAt
-        });
+      } else {
+        // 没有每升幅度，但官方方向明确是下调 —— 仍然值得提醒。
+        //
+        // ⚠️ 装不下「幅度待公布」的模板发不了这条：
+        //    主模板的「调整价格」是 amount 类型，只能放「数字+元」，
+        //    幅度未知时填 0 等于冒充「持平」，填吨价等于把两个口径混在一起。
+        //    所以看模板本身：主模板的「调整幅度」是文本类型就直接用主模板，
+        //    否则退到方向模板（它的「调整幅度」也是文本类型）。
+        var usePrimary = canCarryText(primaryId);
+        var dirId = usePrimary ? primaryId : directionTemplateId();
+        if (dirId) {
+          // 模板没有独立的「调整方向」字段时，方向要写进幅度那句话里
+          var hasDirField = templates.hasRole(dirId, 'direction');
+          hits.push({
+            type: 'officialDrop',
+            dedupKey: [rule.userId, rule.regionCode, rule.fuelId, 'official', latestNotice.executeAt].join('::'),
+            title: rule.fuelId + '# ' + fuelName(rule.fuelId) + ' 官方降价',
+            price: priceDoc.price,
+            template: withTemplateId(
+              usePrimary ? TEMPLATE_FIELDS.officialDrop : TEMPLATE_FIELDS.officialDropDirection,
+              dirId),
+            data: buildData(dirId, {
+              fuel: fuelName(rule.fuelId),
+              amountText: hasDirField ? '幅度待公布' : '下调·幅度待公布',
+              direction: '下调',
+              date: latestNotice.executeAt,
+              tip: '官方下调·幅度以公告为准'
+            })
+          });
+        } else if (options.skipped) {
+          // 连方向模板都没有 → 这条提醒发不出去。
+          // 记一笔，让运维看得见「为什么这条提醒没发出去」，
+          // 而不是安静地什么都不发。
+          options.skipped.push({
+            type: 'officialDrop',
+            reason: 'NO_LITER_AMOUNT',
+            regionCode: rule.regionCode,
+            fuelId: rule.fuelId,
+            executeAt: latestNotice.executeAt
+          });
+        }
       }
     }
   }
@@ -350,8 +421,8 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
         dedupKey: [rule.userId, rule.regionCode, rule.fuelId, 'target', rule.targetPrice, eventKey].join('::'),
         title: '已达目标价 ' + rule.targetPrice.toFixed(2),
         price: priceDoc.price,
-        template: TEMPLATE_FIELDS.targetPrice,
-        data: buildData({
+        template: withTemplateId(TEMPLATE_FIELDS.targetPrice, templateIdOf('primary')),
+        data: buildData(templateIdOf('primary'), {
           fuel: fuelName(rule.fuelId),
           // 「调整价格」在目标价场景填目标价，方向填「已达目标」
           amount: rule.targetPrice,
@@ -380,8 +451,8 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
         dedupKey: [rule.userId, rule.regionCode, rule.fuelId, 'forecast', forecastNotice.executeAt].join('::'),
         title: '预测下调（非官方）',
         price: priceDoc.price,
-        template: TEMPLATE_FIELDS.forecastDrop,
-        data: buildData({
+        template: withTemplateId(TEMPLATE_FIELDS.forecastDrop, templateIdOf('primary')),
+        data: buildData(templateIdOf('primary'), {
           fuel: fuelName(rule.fuelId),
           amount: fMin,
           direction: '预计下调',
