@@ -128,6 +128,18 @@ function eventAfterArmed(rule, eventDate) {
 }
 
 /**
+ * 官方方向 → 期望的涨跌符号：下调 -1 / 上调 1 / 不明 0。
+ *
+ * 用来筛掉方向相反的价格变化：窗口里可能混着上一轮遗留的价差，
+ * 方向不对就不是本轮的变化点。
+ */
+function signOfDirection(direction) {
+  if (direction === 'down') return -1;
+  if (direction === 'up') return 1;
+  return 0;
+}
+
+/**
  * 官方降价提醒里的「每升调整幅度」。
  *
  * ⚠️ 口径不能混算，优先级从准到粗：
@@ -142,17 +154,35 @@ function eventAfterArmed(rule, eventDate) {
  */
 function officialAmountOf(notice, fuelId, ctx) {
   var options = ctx || {};
+  var dir = notice.direction || '';
+  var candidates = [];
+
   var official = (notice.changes || {})[fuelId];
   if (typeof official === 'number' && isFinite(official)) {
-    return { amount: official, source: 'official' };
+    candidates.push({ amount: official, source: 'official' });
   }
   var local = options.localAmount;
   if (local && typeof local.delta === 'number' && isFinite(local.delta) && local.delta !== 0) {
-    return { amount: local.delta, source: 'local' };
+    candidates.push({ amount: local.delta, source: 'local' });
   }
   var median = options.medianAmounts ? options.medianAmounts[fuelId] : null;
   if (typeof median === 'number' && isFinite(median) && median !== 0) {
-    return { amount: median, source: 'median' };
+    candidates.push({ amount: median, source: 'median' });
+  }
+
+  // ⚠️ 方向一致性：幅度必须与公告方向**同向**。
+  // 脏快照或错窗口会给出反方向的差值（公告说下调，快照却是上涨）——
+  // 直接取绝对值发出去，等于把「上涨」包装成「官方降价」。
+  // 反向的一律不用；都反向了就一个都不用（宁可不发）。
+  var want = dir === 'up' ? 1 : (dir === 'down' ? -1 : 0);
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i];
+    if (!want) {
+      // 方向不明：只有**官方公布**的幅度可以用（官方给什么就是什么）
+      if (c.source === 'official') return c;
+      continue;
+    }
+    if (want > 0 ? c.amount > 0 : c.amount < 0) return c;
   }
   return null;
 }
@@ -290,6 +320,17 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
             tip: officialTip(regionName, currentText, amount.source)
           })
         });
+      } else if (options.skipped) {
+        // 公告方向明确是下调，但每升幅度一个都拿不到（快照还没采到 / 方向对不上）。
+        // 记一笔，让运维看得见「为什么这条提醒没发出去」，
+        // 而不是安静地什么都不发。
+        options.skipped.push({
+          type: 'officialDrop',
+          reason: 'NO_LITER_AMOUNT',
+          regionCode: rule.regionCode,
+          fuelId: rule.fuelId,
+          executeAt: latestNotice.executeAt
+        });
       }
     }
   }
@@ -297,9 +338,16 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
   /* --- 2. 目标价 --- */
   if (rule.targetEnabled && typeof rule.targetPrice === 'number') {
     if (priceDoc.price <= rule.targetPrice) {
+      // 去重键带上「价格事件」：
+      // ⚠️ 原来只带目标价，同一目标价发过一次之后，
+      // 用户重新授权也发不出来 —— 旧的 dedupKey 把它永久挡住了，
+      // 界面却提示「重新授权才能再收」。
+      // 口径：目标价提醒按**价格变化**触发 —— 同一轮价格变化只提醒一次，
+      // 下一轮价格变化后可以再次提醒。
+      var eventKey = priceDoc.changeAt || String(priceDoc.price);
       hits.push({
         type: 'targetPrice',
-        dedupKey: [rule.userId, rule.regionCode, rule.fuelId, 'target', rule.targetPrice].join('::'),
+        dedupKey: [rule.userId, rule.regionCode, rule.fuelId, 'target', rule.targetPrice, eventKey].join('::'),
         title: '已达目标价 ' + rule.targetPrice.toFixed(2),
         price: priceDoc.price,
         template: TEMPLATE_FIELDS.targetPrice,
@@ -464,6 +512,10 @@ function run() {
       : Promise.resolve({});
 
     return medianTask.then(function (medianAmounts) {
+      // 「为什么没发」也要看得见：公告说下调但每升幅度拿不到时，
+      // 安静地跳过会让人以为提醒链路坏了。
+      var skippedReasons = [];
+      summary.skipReasons = skippedReasons;
       return rules.reduce(function (chain, rule) {
         return chain.then(function () {
           summary.checked++;
@@ -481,7 +533,9 @@ function run() {
             var cacheKey = rule.regionCode + '|' + rule.fuelId + '|' + latestNotice.executeAt;
             if (!snapshotCache[cacheKey]) {
               snapshotCache[cacheKey] = measure.localSnapshotOf(
-                rule.regionCode, rule.fuelId, latestNotice.executeAt);
+                rule.regionCode, rule.fuelId, latestNotice.executeAt,
+                // 已知官方方向时，方向相反的价格变化不算本轮的变化点
+                { expectSign: signOfDirection(latestNotice.direction) });
             }
             localTask = snapshotCache[cacheKey];
           }
@@ -489,7 +543,8 @@ function run() {
           return localTask.then(function (localAmount) {
             var hits = matchRule(rule, prices, latestNotice, forecast, {
               medianAmounts: medianAmounts,
-              localAmount: localAmount
+              localAmount: localAmount,
+              skipped: skippedReasons
             });
             if (!hits.length) return null;
 

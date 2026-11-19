@@ -8,7 +8,7 @@
  * ⚠️ 这是测算值，不是官方公布值 —— 展示层必须标注清楚，不能混进官方字段。
  *
  * 算法：
- *   1. 对每个 (地区, 油品)，在历史价序列里找**生效日附近最后一次价格变化**；
+ *   1. 对每个 (地区, 油品)，在历史价序列里找**生效日附近的价格变化**；
  *   2. 变化点前一条 = 调价前挂牌价，变化点 = 调价后挂牌价，差值 = 本次幅度；
  *   3. 同一个油品在各省的差值取中位数（个别省份单独调价不影响整体）；
  *   4. 差值要落在「官方吨价换算出的合理区间」内，否则当脏数据剔除
@@ -18,6 +18,11 @@
  *   来源站可能提前几天就把新挂牌价挂出来（也可能在生效日当天才挂）。
  *   按日期取行会把「生效日当天的行」当成旧价，算出来是 0 —— 误判成「持平」。
  *   找变化点则两种情况都对。
+ *
+ * 为什么变化点取「离生效日最近」的，而不是窗口里的最后一个：
+ *   下一轮的价格可能提前挂出来，落进本轮的 +12 天窗口；
+ *   取最后一个就把下一轮的变化点算成本轮的 —— 归错轮次。
+ *   详见 changePointAt() 的注释。
  *
  * 找不到变化点 → 这个地区这次没有可用的快照 → 不参与测算。
  */
@@ -127,36 +132,80 @@ function boundOf(tonAmount, group) {
 }
 
 /**
- * 找生效日附近的**最后一次价格变化**（变化点）。
+ * 找生效日附近的**价格变化**（变化点）。
  *
  * ⚠️ 不能按日期直接取行：来源站可能提前几天就把新挂牌价挂出来，
  * 按「生效日当天的行」取会拿到新价，算出来是 0（误判成持平）。
+ *
+ * ⚠️ 也不能取窗口里的**最后一个**变化点：下一轮的价格可能提前挂出来，
+ * 落进本轮的 +12 天窗口，取最后一个就把下一轮的变化点算成本轮的 ——
+ * 历史通知的前后价、本地区幅度、各省中位数全都归错轮次。
+ *
+ * 现在的选取规则：
+ *   1. 窗口 = [生效日 - 7 天, 生效日 + 12 天]，且不得越过下一轮执行日；
+ *   2. 已知官方方向时，方向相反的候选直接剔掉
+ *      （窗口里可能混着上一轮遗留的价差，方向不对就不是本轮的变化）；
+ *   3. 剩下的候选取**离生效日最近**的那个；距离相同时取靠后的那个
+ *      —— 生效日前后的变化属于本轮，下一轮的提前挂价一定更靠后。
  *
  * 找不到变化点 → null（这个地区这次没有可用的快照，不编数字）。
  *
  * @param {Array}  list 同一 (地区, 油品) 的历史价行，按日期升序
  * @param {string} date  生效日 YYYY-MM-DD
+ * @param {object} [opts]
+ * @param {number} [opts.expectSign] 期望的涨跌方向：-1 降 / 1 涨 / 0 不限
+ * @param {string} [opts.nextDate]   下一轮执行日，变化点不得越过它
  * @returns {object|null} { before, after, delta, date }
  */
-function changePointAt(list, date) {
+function changePointAt(list, date, opts) {
+  opts = opts || {};
+  var expectSign = Number(opts.expectSign) || 0;
   var winStart = shiftDate(date, -EARLY_DAYS);
   var winEnd = shiftDate(date, AFTER_DAYS);
-  var idx = -1;
+  // 下一轮执行日之前才算本轮：变化点不得进入下一轮
+  if (opts.nextDate && opts.nextDate > date) {
+    var nextStart = shiftDate(opts.nextDate, -1);
+    if (nextStart < winEnd) winEnd = nextStart;
+  }
+  var bestIndex = -1;
+  var bestDist = Infinity;
   for (var i = 1; i < list.length; i++) {
     if (list[i].date < winStart) continue;
     if (list[i].date > winEnd) break;
-    if (list[i].price !== list[i - 1].price) idx = i;
+    if (list[i].price === list[i - 1].price) continue;
+    var before = Number(list[i - 1].price);
+    var after = Number(list[i].price);
+    if (!isFinite(before) || !isFinite(after)) continue;
+    var delta = round2(after - before);
+    if (!delta) continue;
+    // 方向与官方公布的方向相反 → 不是本轮的变化点
+    if (expectSign && (delta > 0 ? 1 : -1) !== expectSign) continue;
+    var dist = Math.abs(dayDiff(date, list[i].date));
+    // ⚠️ 取**离执行日最近**的变化点，不是最后一个；
+    // 距离相同时取靠后的那个（生效日前后的变化属于本轮，下一轮的提前挂价更靠后）。
+    if (dist <= bestDist) {
+      bestDist = dist;
+      bestIndex = i;
+    }
   }
-  if (idx <= 0) return null;
-  var before = Number(list[idx - 1].price);
-  var after = Number(list[idx].price);
-  if (!isFinite(before) || !isFinite(after)) return null;
+  if (bestIndex <= 0) return null;
+  var prevPrice = Number(list[bestIndex - 1].price);
+  var nextPrice = Number(list[bestIndex].price);
+  if (!isFinite(prevPrice) || !isFinite(nextPrice)) return null;
   return {
-    before: before,
-    after: after,
-    delta: round2(after - before),
-    date: list[idx].date
+    before: prevPrice,
+    after: nextPrice,
+    delta: round2(nextPrice - prevPrice),
+    date: list[bestIndex].date
   };
+}
+
+/** 两个 YYYY-MM-DD 之间差几天 */
+function dayDiff(fromDate, toDate) {
+  var a = Date.parse(String(fromDate || '').slice(0, 10) + 'T00:00:00Z');
+  var b = Date.parse(String(toDate || '').slice(0, 10) + 'T00:00:00Z');
+  if (!isFinite(a) || !isFinite(b)) return 0;
+  return Math.round((b - a) / 86400000);
 }
 
 /**
@@ -165,16 +214,17 @@ function changePointAt(list, date) {
  * 与各省中位数是**两回事**：这里给的是这个地区自己的挂牌价前后差值，
  * 「本地区调整前多少钱、调整后多少钱」只能从这里来。
  *
+ * @param {object} [opts] 透传给 changePointAt（expectSign 期望方向、nextDate 下一轮执行日）
  * @returns {Promise<object|null>} { before, after, delta, date }；没有快照返回 null
  */
-async function localSnapshotOf(regionCode, fuelId, executeAt) {
+async function localSnapshotOf(regionCode, fuelId, executeAt, opts) {
   var date = String(executeAt || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   var rows = await dao.history.listByRegionFuel(regionCode, fuelId, shiftDate(date, -BEFORE_DAYS));
   var list = (rows || []).slice().sort(function (a, b) {
     return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
   });
-  return changePointAt(list, date);
+  return changePointAt(list, date, opts);
 }
 
 /**
@@ -183,9 +233,13 @@ async function localSnapshotOf(regionCode, fuelId, executeAt) {
  * 通知详情要按「这一轮调价前后各多少钱」展示，
  * 不能拿当前价倒推 —— 倒推出来的是猜的。
  *
+ * @param {object} [opts]
+ * @param {object} [opts.expectSignByDate] { 'YYYY-MM-DD': -1|1 } 各生效日的官方方向
  * @returns {Promise<object>} { 'YYYY-MM-DD': { fuelId: {before,after,delta,date} } }
  */
-async function localSnapshotsOf(executeAtList, regionCode) {
+async function localSnapshotsOf(executeAtList, regionCode, opts) {
+  opts = opts || {};
+  var signByDate = opts.expectSignByDate || {};
   var out = {};
   var dates = [];
   (executeAtList || []).forEach(function (d) {
@@ -193,8 +247,8 @@ async function localSnapshotsOf(executeAtList, regionCode) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(s) && dates.indexOf(s) === -1) dates.push(s);
   });
   if (!dates.length) return out;
-  var min = dates.reduce(function (a, b) { return a < b ? a : b; });
-  var max = dates.reduce(function (a, b) { return a > b ? a : b; });
+  dates.sort();
+  var min = dates[0];
   var fuels = Object.keys(FUEL_GROUP);
   for (var f = 0; f < fuels.length; f++) {
     var rows = await dao.history.listByRegionFuel(regionCode, fuels[f], shiftDate(min, -BEFORE_DAYS));
@@ -203,7 +257,15 @@ async function localSnapshotsOf(executeAtList, regionCode) {
     });
     for (var i = 0; i < dates.length; i++) {
       var date = dates[i];
-      var point = changePointAt(list, date);
+      // 下一轮执行日：变化点不得越过它（否则下一轮的提前挂价会被算成本轮）
+      var nextDate = null;
+      for (var j = i + 1; j < dates.length; j++) {
+        if (dates[j] > date) { nextDate = dates[j]; break; }
+      }
+      var point = changePointAt(list, date, {
+        expectSign: Number(signByDate[date]) || 0,
+        nextDate: nextDate
+      });
       if (!point) continue;
       if (!out[date]) out[date] = {};
       out[date][fuels[f]] = point;
@@ -225,9 +287,10 @@ async function measureMany(executeAtList, tonByDate) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(s) && dates.indexOf(s) === -1) dates.push(s);
   });
   if (!dates.length) return {};
+  dates.sort();
 
-  var min = dates.reduce(function (a, b) { return a < b ? a : b; });
-  var max = dates.reduce(function (a, b) { return a > b ? a : b; });
+  var min = dates[0];
+  var max = dates[dates.length - 1];
   var rows = await dao.history.listBetween(
     shiftDate(min, -BEFORE_DAYS),
     shiftDate(max, AFTER_DAYS)
@@ -246,6 +309,11 @@ async function measureMany(executeAtList, tonByDate) {
     // 这一轮官方给的汽/柴油吨价（没有就用绝对兜底）
     var ton = (tonByDate || {})[date] || {};
     var byFuel = {};
+    // 下一轮执行日：变化点不得越过它
+    var nextDate = null;
+    for (var di = 0; di < dates.length; di++) {
+      if (dates[di] > date) { nextDate = dates[di]; break; }
+    }
 
     Object.keys(groups).forEach(function (regionCode) {
       var fuels = groups[regionCode];
@@ -253,15 +321,21 @@ async function measureMany(executeAtList, tonByDate) {
         var list = fuels[fuelId].slice().sort(function (a, b) {
           return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
         });
-        // 窗口内最后一次价格变化（与本地区快照同一套算法，别各写一遍）
-        var point = changePointAt(list, date);
+        // 窗口内的价格变化（与本地区快照同一套算法，别各写一遍）
+        // 官方方向已知时，方向相反的候选不算本轮的变化点
+        var group = FUEL_GROUP[fuelId];
+        var tonValue = Number(ton[group]);
+        var expectSign = (isFinite(tonValue) && tonValue !== 0) ? (tonValue > 0 ? 1 : -1) : 0;
+        var point = changePointAt(list, date, {
+          expectSign: expectSign,
+          nextDate: nextDate
+        });
         if (!point) return;
         var delta = point.delta;
         if (!isFinite(delta) || delta === 0) return;
         // 幅度要落在官方吨价换算出的合理区间里，否则当脏数据剔除。
         // ⚠️ 上限不能写死：645 元/吨那轮真实降幅就有 0.56 元/升，
         // 写死 0.5 会把这轮所有省的数据剔光。
-        var group = FUEL_GROUP[fuelId];
         var bound = boundOf(ton[group], group);
         var maxAbs = bound ? bound.max : MAX_REASONABLE;
         var minAbs = bound ? bound.min : 0;
@@ -328,6 +402,7 @@ module.exports = {
   localSnapshotOf: localSnapshotOf,
   localSnapshotsOf: localSnapshotsOf,
   changePointAt: changePointAt,
+  dayDiff: dayDiff,
   median: median,
   agreesWithDirection: agreesWithDirection,
   shiftDate: shiftDate,

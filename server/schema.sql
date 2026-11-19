@@ -176,6 +176,13 @@ ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS target_enabled BOOLEAN NOT NULL
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS subscribe_used_at TIMESTAMPTZ;
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS armed_at TIMESTAMPTZ;
 
+-- 老规则回填生效时间。
+-- ⚠️ 只加列不回填的话，老规则的 armed_at 是 NULL，
+-- 而提醒器对「没有 armedAt 的规则」是不做旧事件过滤的 ——
+-- 于是老用户仍会收到早已过去的调价通知，新用户却不会。
+-- 回填成这条规则最后一次更新时间，与新规则的口径一致。
+UPDATE alert_rules SET armed_at = COALESCE(updated_at, created_at, NOW()) WHERE armed_at IS NULL;
+
 -- 去重键补列 + 唯一索引。
 -- ⚠️ 用「独立列 + 唯一索引」而不是直接给表加 UNIQUE 约束：
 -- 老库里已有的行 dedup_key 是 NULL，Postgres 里多个 NULL 不算冲突，

@@ -28,6 +28,18 @@ var NOTICE_PAGE = 20;
  *
  * @param {object} snapshots 本地区这一轮的前后快照 { fuelId: {before,after,delta} }
  */
+/**
+ * 官方方向 → 期望的涨跌符号：下调 -1 / 上调 1 / 不明 0。
+ *
+ * 用来筛掉方向相反的价格变化：窗口里可能混着上一轮遗留的价差，
+ * 方向不对就不是本轮的变化点。
+ */
+function signOfDirection(direction) {
+  if (direction === 'down') return -1;
+  if (direction === 'up') return 1;
+  return 0;
+}
+
 function noticePricesOf(notice, snapshots, today) {
   if (notice.prices && Object.keys(notice.prices).length) return notice.prices;
   if (notice.kind !== 'official') return {};
@@ -72,14 +84,19 @@ function actionNotices(payload) {
     // 按生效日带上官方吨价 —— 测算的合理区间跟着公告走
     var execDates = notices.map(function (n) { return n.executeAt; });
     var tonByDate = {};
+    // 各生效日的官方方向：用来筛掉方向相反的价格变化（错轮次的价差）
+    var signByDate = {};
     notices.forEach(function (n) {
-      if (n.executeAt) tonByDate[n.executeAt] = n.tonChanges || {};
+      if (n.executeAt) {
+        tonByDate[n.executeAt] = n.tonChanges || {};
+        signByDate[n.executeAt] = signOfDirection(n.direction);
+      }
     });
     return Promise.all([
       // 各省中位数（全国口径）：列表里那一行「每升幅度」
       measure.measureMany(execDates, tonByDate),
       // 本地区前后快照（本地区口径）：详情里的「调价前后各多少钱」
-      measure.localSnapshotsOf(execDates, regionCode)
+      measure.localSnapshotsOf(execDates, regionCode, { expectSignByDate: signByDate })
     ]).then(function (r1) {
       var measuredByDate = r1[0];
       var localByDate = r1[1];
