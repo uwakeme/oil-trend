@@ -307,7 +307,7 @@ node scripts/verify-in-devtools.js
 
 ## 已知限制
 
-- 订阅消息的模板已对齐（模板 ID `OaHgjTXlhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg`，5 个字段），但线上还要补服务端 `.env` 的 `OIL_SUBSCRIBE_TEMPLATE_ID`；而且微信的订阅消息是**一次性**授权，用户每次同意只够收一条，用完要重新授权
+- 订阅消息的模板已对齐（模板 ID `OaHgjTXIhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg`，5 个字段），但线上还要补服务端 `.env` 的 `OIL_SUBSCRIBE_TEMPLATE_ID`；而且微信的订阅消息是**一次性**授权，用户每次同意只够收一条，用完要重新授权
 - 国际行情采集源还没启用（解析器已就绪，启用前还要验证可访问性与使用条款）
 - 现价与历史走 **HTTPS 的油价网**；**汽油价格网没有 HTTPS**（证书是 CDN 通用证书，不含该域名），只有「下次调价预测」走明文 HTTP —— 抓取层已做重定向白名单、总时限与价格交叉校验，但明文链路本身的风险消不掉
 - 服务端启动前会强校验 `OIL_TOKEN_SECRET`（≥32 位）与 `DATABASE_URL`，缺一直接拒绝启动；健康检查分两个：`/health` 只说明进程活着，`/ready` 才真的连库

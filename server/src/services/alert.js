@@ -257,6 +257,18 @@ function forecastTip(min, max) {
 }
 
 /**
+ * 每升幅度的整句表述 —— 给**文本类型**的「调整幅度」字段用。
+ *
+ * ⚠️ 数字类型的字段只能放「0.52元」，文本类型能写整句 ——
+ *    但别只写「0.52」：用户看不出是每升还是每吨，
+ *    「每升下调0.52元」把口径写清楚，才不会跟官方的吨价混在一起。
+ */
+function literText(amount, prefix) {
+  if (typeof amount !== 'number' || !isFinite(amount)) return '';
+  return (prefix || '每升') + Math.abs(amount).toFixed(2) + '元';
+}
+
+/**
  * 组装一条订阅消息的 data。
  *
  * 值一律走 subscribe-templates.js 的格式化函数：
@@ -355,6 +367,8 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
           data: buildData(primaryId, {
             fuel: fuelName(rule.fuelId),
             amount: Math.abs(amount.amount),
+            // 文本类型的幅度字段用整句（数字类型字段忽略这一项）
+            amountText: literText(Math.abs(amount.amount), '每升下调'),
             direction: '下调',
             date: latestNotice.executeAt,
             // 模板没有「地区」字段，地区和当前价只能写进温馨提示
@@ -426,6 +440,8 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
           fuel: fuelName(rule.fuelId),
           // 「调整价格」在目标价场景填目标价，方向填「已达目标」
           amount: rule.targetPrice,
+          // 文本类型的幅度字段写整句，别只留一个光秃秃的数字
+          amountText: '目标价' + rule.targetPrice.toFixed(2) + '元',
           direction: '已达目标',
           date: todayCN(),
           tip: regionName + '现价' + currentText + '元'
@@ -455,6 +471,8 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
         data: buildData(templateIdOf('primary'), {
           fuel: fuelName(rule.fuelId),
           amount: fMin,
+          // 文本类型的幅度字段装得下整个区间（数字类型只能放下界）
+          amountText: '每升预计下调' + fMin.toFixed(2) + '-' + fMax.toFixed(2) + '元',
           direction: '预计下调',
           date: forecastNotice.executeAt,
           tip: forecastTip(fMin, fMax)

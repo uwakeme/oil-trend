@@ -344,6 +344,48 @@ async function main() {
       hitByType.forecastDrop.data.amount2);
   }
 
+  console.log('\n--- 文本型「调整幅度」字段：三类提醒的取值 ---');
+  // 文本类型的幅度字段能写整句，数字类型只放得下一个「0.52元」。
+  // ⚠️ 文本类型也别只写「0.52」—— 用户看不出是每升还是每吨。
+  var textTemplateId = 'TEST-TEXT-TEMPLATE';
+  templates.registerTemplate(textTemplateId, {
+    name: '油价调整提醒（文本型幅度，自检用）',
+    kind: 'once',
+    fields: {
+      phrase1: { type: 'phrase', role: 'direction', label: '调整方向', max: 5 },
+      thing2: { type: 'thing', role: 'amount', label: '调整幅度', max: 20 },
+      date3: { type: 'date', role: 'date', label: '调整日期' },
+      thing4: { type: 'thing', role: 'tip', label: '温馨提示', max: 20 },
+      thing5: { type: 'thing', role: 'fuel', label: '油品种类', max: 20 }
+    }
+  });
+  var savedPrimaryTemplateId = configModule.subscribeTemplateId;
+  configModule.subscribeTemplateId = textTemplateId;
+  var textHits = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92',
+      officialDrop: true, targetEnabled: true, targetPrice: 7.5, forecastDrop: true },
+    [{ regionCode: '440000', fuelId: '92', price: 7.36 }],
+    { kind: 'official', executeAt: '2026-11-24', direction: 'down', changes: { '92': -0.08 } },
+    { kind: 'forecast', executeAt: '2026-11-26', direction: 'down', literMin: 0.06, literMax: 0.08 }
+  );
+  var textByType = {};
+  textHits.forEach(function (h) { textByType[h.type] = h; });
+  check('文本型幅度字段：官方降价写清楚是每升',
+    !!textByType.officialDrop && textByType.officialDrop.data.thing2 === '每升下调0.08元',
+    textByType.officialDrop ? textByType.officialDrop.data.thing2 : '没命中');
+  check('文本型幅度字段：目标价写清楚是目标价',
+    !!textByType.targetPrice && textByType.targetPrice.data.thing2 === '目标价7.50元',
+    textByType.targetPrice ? textByType.targetPrice.data.thing2 : '没命中');
+  check('文本型幅度字段：预测能把整个区间放下（数字类型只能放下界）',
+    !!textByType.forecastDrop && textByType.forecastDrop.data.thing2 === '每升预计下调0.06-0.08元',
+    textByType.forecastDrop ? textByType.forecastDrop.data.thing2 : '没命中');
+  check('文本型模板的三类提醒都通过契约',
+    Object.keys(textByType).length === 3 && Object.keys(textByType).every(function (k) {
+      return templates.validate(textTemplateId, textByType[k].data).ok;
+    }),
+    JSON.stringify(textByType));
+  configModule.subscribeTemplateId = savedPrimaryTemplateId;
+
   console.log('\n--- 官方降价提醒：公告只给吨价时的口径 ---');
   // ⚠️ 发改委公告入库时 changes 是空的（公告只给汽/柴油吨价）——
   // 以前这里读 changes[fuelId]，命中数恒为 0，官方降价提醒从来没触发过。
