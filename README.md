@@ -267,6 +267,7 @@ node scripts/verify-in-devtools.js
 | `WX_APP_SECRET` | 小程序 AppSecret，只在服务器上 | 必填 |
 | `OIL_TOKEN_SECRET` | 自签 token 的密钥，**至少 32 位**的随机字符 | 必填，缺了服务端拒绝启动 |
 | `OIL_SUBSCRIBE_TEMPLATE_ID` | 订阅消息模板 ID | 可选，默认取契约表里的主模板 |
+| `OIL_SUBSCRIBE_DIRECTION_TEMPLATE_ID` | 方向提醒模板 ID（调整幅度是文本类型的那个） | 可选，不配则每升幅度缺失时不发提醒 |
 | `OIL_MINIPROGRAM_STATE` | 订阅消息跳转的版本：`formal` / `developer` / `trial` | `formal` |
 | `OIL_API_BASE_URL` | 后端对外地址，流水线用它做健康检查 | 无 |
 | `PORT` | 服务端口 | `3000` |
@@ -274,6 +275,26 @@ node scripts/verify-in-devtools.js
 | `OIL_ALERT_CRON` | 提醒频率，六段 cron | `0 */10 * * * *` |
 
 建表结构在 [`server/schema.sql`](./server/schema.sql)，环境变量样例在 [`server/.env.example`](./server/.env.example)，流水线每一步在 [`.github/workflows/deploy-backend.yml`](./.github/workflows/deploy-backend.yml)。
+
+### 订阅消息模板
+
+模板在微信公众平台「订阅消息 → 我的模板」里申请。拿到**模板 ID**和**占位符名**（模板详情页上能看到，形如 `thing5`、`amount2`）之后，三处要同步：
+
+| 位置 | 放什么 |
+| --- | --- |
+| `server/src/services/subscribe-templates.js` | 模板契约：字段名、类型、角色。这是唯一真源 |
+| `server/.env`（服务器上） | `OIL_SUBSCRIBE_TEMPLATE_ID`：实际用的模板 ID |
+| `config/index.js`（小程序端） | `subscribeTemplateIds`：要向用户申请授权的模板 ID |
+
+契约表里每个字段都带一个**角色**（`fuel` / `amount` / `direction` / `date` / `tip`），业务代码只给语义值，字段名由契约表按角色填 —— 换个模板占位符名变了，也不用改业务代码。
+
+**方向模板**：发改委公告只给吨价，每升幅度要等各地新挂牌价采到才有值。主模板的「调整价格」是 `amount` 类型，只能填「数字+元」—— 填 `0` 是冒充「持平」，填吨价是把两个口径混在一起。这种时候需要一个**「调整幅度」是文本类型**的模板，由它把「幅度待公布」原样发出去：
+
+- 契约表里给它加一条登记，其中 `amount` 角色的字段类型不能是 `amount`；
+- 服务器 `.env` 填 `OIL_SUBSCRIBE_DIRECTION_TEMPLATE_ID`；
+- 小程序端 `config/index.js` 填 `subscribeDirectionTemplateId` —— 用户得授权它，一次性额度是按模板给的。
+
+两处不配也能跑：那轮「每升幅度还没拿到」的官方降价提醒就发不出去，服务端会在运行汇总里记一条 `NO_LITER_AMOUNT`，运维看得见原因，不会安静地什么都不发。
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
