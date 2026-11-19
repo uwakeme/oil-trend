@@ -461,6 +461,128 @@ async function main() {
     !!snapshots['2026-11-10'] && !!snapshots['2026-11-10']['92'],
     JSON.stringify(snapshots));
 
+  console.log('\n--- 方向一致性：反方向的快照不能包装成降价消息 ---');
+  // ⚠️ 以前这里对幅度取绝对值：公告说下调、快照却是上涨时，
+  // 会发出「下调 + 0.20元」这种自相矛盾的消息。
+  var reversedHits = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    { kind: 'official', executeAt: '2026-11-24', direction: 'down', changes: {} },
+    null,
+    { localAmount: { before: 8.19, after: 8.39, delta: 0.20 } }
+  );
+  check('官方下调 + 本地区正向 delta 不生成降价消息',
+    reversedHits.length === 0, JSON.stringify(reversedHits));
+  var reversedWithMedian = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    { kind: 'official', executeAt: '2026-11-24', direction: 'down', changes: {} },
+    null,
+    { localAmount: { before: 8.19, after: 8.39, delta: 0.20 }, medianAmounts: { '92': -0.52 } }
+  );
+  check('本地区快照反方向时改用各省中位数',
+    reversedWithMedian.length === 1 && reversedWithMedian[0].data.amount2 === '0.52元',
+    JSON.stringify(reversedWithMedian.map(function (h) { return h.data.amount2; })));
+  check('官方上调时不生成降价消息', alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    { kind: 'official', executeAt: '2026-11-24', direction: 'up', changes: {} },
+    null,
+    { medianAmounts: { '92': -0.52 } }
+  ).length === 0);
+
+  console.log('\n--- 目标价提醒：按价格事件去重 ---');
+  // ⚠️ 原来去重键只带目标价：同一目标价发过一次之后，
+  // 用户重新授权也发不出来（旧键把它永久挡住了）。
+  var targetEvent1 = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', targetEnabled: true, targetPrice: 8 },
+    [{ regionCode: '440000', fuelId: '92', price: 7.36, changeAt: '2026-11-10' }], null, null)[0];
+  var targetEvent2 = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', targetEnabled: true, targetPrice: 8 },
+    [{ regionCode: '440000', fuelId: '92', price: 7.36, changeAt: '2026-11-24' }], null, null)[0];
+  check('同一目标价、不同价格事件 → 去重键不同（下一轮还能再提醒）',
+    !!targetEvent1 && !!targetEvent2 && targetEvent1.dedupKey !== targetEvent2.dedupKey,
+    targetEvent1 && targetEvent2 ? (targetEvent1.dedupKey + ' vs ' + targetEvent2.dedupKey) : '没命中');
+  var targetEvent3 = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', targetEnabled: true, targetPrice: 8 },
+    [{ regionCode: '440000', fuelId: '92', price: 7.36, changeAt: '2026-11-10' }], null, null)[0];
+  check('同一个价格事件 → 去重键相同（不会反复提醒）',
+    !!targetEvent1 && !!targetEvent3 && targetEvent1.dedupKey === targetEvent3.dedupKey,
+    targetEvent1 && targetEvent3 ? (targetEvent1.dedupKey + ' vs ' + targetEvent3.dedupKey) : '没命中');
+
+  console.log('\n--- 快照变化点：不能归到下一轮 ---');
+  // 下一轮的价格提前挂出来，落进本轮的 +12 天窗口。
+  // 取「最后一个变化点」会归错轮次，取「离执行日最近的」才对。
+  var mixedPoint = measureService.changePointAt([
+    { date: '2026-10-25', price: 9.00 },
+    { date: '2026-11-02', price: 8.50 },
+    { date: '2026-11-10', price: 8.40 }
+  ], '2026-11-01');
+  check('下一轮提前挂价时，本轮取自己的变化点',
+    !!mixedPoint && mixedPoint.date === '2026-11-02' &&
+    Math.abs(mixedPoint.delta + 0.50) < 0.001,
+    JSON.stringify(mixedPoint));
+  check('只有本轮变化时取的就是本轮',
+    (function () {
+      var p = measureService.changePointAt([
+        { date: '2026-10-25', price: 9.00 },
+        { date: '2026-11-02', price: 8.50 }
+      ], '2026-11-01');
+      return !!p && p.date === '2026-11-02';
+    })());
+
+  // 窗口里混着上一轮遗留的价差（方向与官方相反）→ 不是本轮的变化点
+  var signPoint = measureService.changePointAt([
+    { date: '2026-10-25', price: 9.00 },
+    { date: '2026-11-01', price: 9.10 },
+    { date: '2026-11-03', price: 8.50 }
+  ], '2026-11-01', { expectSign: -1 });
+  check('方向与官方相反的价格变化不算本轮的变化点',
+    !!signPoint && signPoint.date === '2026-11-03' &&
+    Math.abs(signPoint.delta + 0.60) < 0.001,
+    JSON.stringify(signPoint));
+
+  // 离生效日一样近时取靠后的那个（生效日前后的变化属于本轮）
+  var tiePoint = measureService.changePointAt([
+    { date: '2026-10-25', price: 9.00 },
+    { date: '2026-10-31', price: 8.50 },
+    { date: '2026-11-02', price: 8.40 }
+  ], '2026-11-01');
+  check('离生效日同样近时取靠后的那个变化点',
+    !!tiePoint && tiePoint.date === '2026-11-02', JSON.stringify(tiePoint));
+
+  // 变化点不得越过下一轮执行日（下一轮迟挂的价不能算到本轮头上）
+  var boundedPoint = measureService.changePointAt([
+    { date: '2026-10-20', price: 9.00 },
+    { date: '2026-10-26', price: 8.50 },
+    { date: '2026-11-03', price: 8.40 }
+  ], '2026-11-01', { nextDate: '2026-11-02' });
+  check('变化点不得越过下一轮执行日',
+    !!boundedPoint && boundedPoint.date === '2026-10-26', JSON.stringify(boundedPoint));
+
+  console.log('\n--- 老规则回填生效时间 ---');
+  // ⚠️ 只加列不回填的话，老规则的 armed_at 是 NULL，
+  // 而提醒器对「没有 armedAt 的规则」不做旧事件过滤 ——
+  // 老用户仍会收到早已过去的调价通知。
+  await dbModule.pool.query(
+    "INSERT INTO alert_rules (user_id, region_code, fuel_id, armed_at) VALUES ('legacy-openid', '440000', '92', NULL)"
+  );
+  // 只跑 schema.sql 里那条回填语句（pg-mem 不支持重复执行 CREATE TABLE IF NOT EXISTS）
+  var backfill = (fs.readFileSync(path.join(ROOT, 'schema.sql'), 'utf8')
+    .match(/UPDATE\s+alert_rules\s+SET\s+armed_at[\s\S]*?;/i) || [])[0];
+  check('schema.sql 里有老规则回填 armed_at 的语句', !!backfill);
+  if (backfill) {
+    await dbModule.pool.query(backfill);
+  }
+  var legacyResult = await dbModule.pool.query(
+    "SELECT armed_at FROM alert_rules WHERE user_id = 'legacy-openid'"
+  );
+  // pg-mem 与 pg 的 query 都返回 { rows: [...] }，统一从 rows 里取
+  var legacyRows = (legacyResult && legacyResult.rows) ? legacyResult.rows : (legacyResult || []);
+  check('老规则回填出 armed_at（不再绕过旧事件过滤）',
+    legacyRows.length === 1 && legacyRows[0].armed_at !== null && legacyRows[0].armed_at !== undefined,
+    JSON.stringify(legacyRows));
+
   console.log('\n--- 提醒规则字段映射 ---');
   await user.actionRulesSave('openid-fields', [
     { regionCode: '440000', fuelId: '92', officialDrop: true, targetEnabled: false,
