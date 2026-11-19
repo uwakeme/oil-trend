@@ -150,6 +150,15 @@ function login(code) {
     e.code = 'NO_CODE';
     return Promise.reject(e);
   }
+  // ⚠️ 微信凭据没配 = 这项能力不可用，不是「内部错误」。
+  // 以前这里直接去打 code2session，失败后落到 500 ——
+  // 客户端只会看到「服务器内部错误」，看不出是服务没配微信凭据。
+  // 单独给一个错误码，对外返回 503（能力不可用），日志里写清原因。
+  if (!config.appId || !config.appSecret) {
+    var e2 = new Error('未配置 WX_APP_ID / WX_APP_SECRET');
+    e2.code = 'WX_NOT_CONFIGURED';
+    return Promise.reject(e2);
+  }
   return code2Session(code).then(function (s) {
     return { token: issueToken(s.openid), openid: s.openid };
   });

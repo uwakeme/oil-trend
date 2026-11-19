@@ -135,7 +135,10 @@ async function main() {
     console.log('\n--- 登录 ---');
     var login = await request(port, 'POST', '/api/login', { code: 'test-code' });
     // 微信接口没真调（没配 AppSecret），这里只验「请求被正确接收并返回明确错误」
-    check('登录缺配置时返回 ok:false（不是 500）', login.body && login.body.ok === false);
+    // 微信凭据没配 = 能力不可用，不是内部错误：应返回 503 + 明确错误码
+    check('登录缺配置时返回 503（能力不可用，不是 500）', login.status === 503, String(login.status));
+    check('登录缺配置时错误码是 WX_NOT_CONFIGURED',
+      !!(login.body && login.body.code === 'WX_NOT_CONFIGURED'), JSON.stringify(login.body));
     check('登录错误带 code', !!(login.body && login.body.code));
 
     var noCode = await request(port, 'POST', '/api/login', {});

@@ -17,6 +17,7 @@ var PUBLIC_ERRORS = {
   NOT_FOUND: '接口不存在',
   NO_CODE: '缺少登录凭证',
   LOGIN_FAILED: '登录失败，请稍后重试',
+  WX_NOT_CONFIGURED: '微信登录未配置',
   INVALID_REGION: '地区代码不存在',
   INVALID_RULES: '提醒规则格式不正确',
   INVALID_HISTORY: '提醒记录格式不正确',
@@ -48,6 +49,8 @@ var STATUS_BY_CODE = {
   NOT_FOUND: 404,
   NO_CODE: 400,
   LOGIN_FAILED: 401,
+  // 能力不可用（微信凭据没配）：503 —— 服务活着，但这项功能开不了
+  WX_NOT_CONFIGURED: 503,
   INVALID_REGION: 400,
   INVALID_RULES: 400,
   INVALID_HISTORY: 400,
