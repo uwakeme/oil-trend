@@ -75,10 +75,117 @@ function registerTemplate(templateId, spec) {
  *    没有的话，方向要写进「调整幅度」那一句里。
  */
 function hasRole(templateId, role) {
+  return !!fieldOfRole(templateId, role);
+}
+
+/**
+ * 模板里某个角色的字段定义（没有就 null）。
+ */
+function fieldOfRole(templateId, role) {
   var tpl = templateOf(templateId);
-  if (!tpl) return false;
-  return Object.keys(tpl.fields).some(function (key) {
-    return tpl.fields[key].role === role;
+  if (!tpl) return null;
+  var found = null;
+  Object.keys(tpl.fields).forEach(function (key) {
+    if (!found && tpl.fields[key].role === role) found = tpl.fields[key];
+  });
+  return found;
+}
+
+/**
+ * 这个角色的字段能不能装整句文本。
+ *
+ * ⚠️ amount（数字）类型只认「数字+元」，
+ *    装不下「每升下调0.52元」「幅度待公布」这种整句。
+ */
+function roleCarriesText(templateId, role) {
+  var field = fieldOfRole(templateId, role);
+  return !!(field && field.type !== 'amount');
+}
+
+/**
+ * 组一条消息的字段值。
+ *
+ * ⚠️ 平台要求**每个字段都有值**，漏一个就被拒收（47003）；
+ *    所以模板装不下的内容只能并进「温馨提示」（≤20 字符）。
+ *
+ * 分工规则：
+ *   - 幅度：字段能装文本 → 装字段；只能装数字 → 装数值（区间/未知由 extra 补）；
+ *   - 当前价格：模板有「当前价格」字段 → 装字段；没有 → 并进提示；
+ *   - 温馨提示 = 地区 + 额外说明 + 当前价（没字段时）+ 口径说明，
+ *     超长时从最不重要的开始丢，**口径说明必须保留**
+ *     （测算值、预测值不标口径就是误导）。
+ *
+ * @param {string} templateId
+ * @param {object} content {
+ *   fuel, amountNumber, amountText, direction, date,
+ *   priceNumber, priceText, region, scope, extra
+ * }
+ */
+function compose(templateId, content) {
+  var c = content || {};
+  var amountText = '';
+  var amountToTip = '';
+  var amountNumber = c.amountNumber;
+  if (!fieldOfRole(templateId, 'amount')) {
+    // 模板没有幅度字段 → 幅度整句只能并进提示
+    amountToTip = c.amountText === undefined || c.amountText === null ? '' : c.amountText;
+  } else if (roleCarriesText(templateId, 'amount')) {
+    // 字段能装整句 → 整句进字段
+    amountText = c.amountText === undefined || c.amountText === null ? '' : c.amountText;
+  }
+  var priceText = '';
+  var priceNumber = c.priceNumber;
+  if (fieldOfRole(templateId, 'price')) {
+    if (roleCarriesText(templateId, 'price')) {
+      priceText = c.priceText === undefined || c.priceText === null ? '' : c.priceText;
+    }
+  } else {
+    // 模板没有当前价格字段 → 并进提示
+    priceText = c.priceText === undefined || c.priceText === null ? '' : c.priceText;
+  }
+
+  // 提示的拼装：口径说明必留，其余按重要性取舍 ——
+  // 放不下时按 rank 从低到高丢：当前价 → 地区 → 额外说明 → 幅度整句。
+  // ⚠️ 口径说明（实测/测算/非官方）丢不得：
+  //    测算值、预测值不标口径就是误导。
+  var limit = 20;
+  var tipField = fieldOfRole(templateId, 'tip');
+  if (tipField && tipField.max) limit = tipField.max;
+  var scope = c.scope || '';
+  var parts = [];
+  if (c.region) parts.push({ text: c.region, rank: 2 });
+  if (amountToTip) parts.push({ text: amountToTip, rank: 4 });
+  // 幅度整句已经在提示里（或已经在字段里）时，额外的区间说明不重复
+  if (c.extra && !amountToTip && !amountText) parts.push({ text: c.extra, rank: 3 });
+  if (priceText) parts.push({ text: priceText, rank: 1 });
+  var tip = '';
+  var dropped = false;
+  while (true) {
+    var candidate = parts.map(function (p) { return p.text; });
+    if (scope) candidate.push(scope);
+    var text = candidate.join('·');
+    if (text.length <= limit) { tip = text; break; }
+    // 找出 rank 最小的（最不重要的）丢掉
+    var worst = -1;
+    var worstRank = Infinity;
+    parts.forEach(function (p, idx) {
+      if (p.rank < worstRank) { worstRank = p.rank; worst = idx; }
+    });
+    if (worst < 0) { tip = scope; break; }
+    parts.splice(worst, 1);
+    dropped = true;
+  }
+  if (!tip) tip = scope;
+
+  return dataByRole(templateId, {
+    fuel: c.fuel,
+    amount: amountNumber,
+    amountText: amountText,
+    direction: c.direction,
+    date: c.date,
+    price: priceNumber,
+    priceText: priceText,
+    tip: tip
   });
 }
 
@@ -119,6 +226,11 @@ function valueOfRole(role, type, values) {
       return v.date;
     case 'tip':
       return v.tip;
+    case 'price':
+      // 当前价格：数字型字段放数值，文本型字段放「现价8.39元」
+      if (type === 'amount') return v.price;
+      if (v.priceText !== undefined && v.priceText !== null) return v.priceText;
+      return v.price;
     case 'amount':
       // amount 类型的字段只认「数字+元」；
       // 文本类型的字段能放整句（比如「每升下调0.52元」「幅度待公布」）
@@ -289,6 +401,9 @@ module.exports = {
   templateOf: templateOf,
   registerTemplate: registerTemplate,
   hasRole: hasRole,
+  fieldOfRole: fieldOfRole,
+  roleCarriesText: roleCarriesText,
+  compose: compose,
   dataByRole: dataByRole,
   toWeChatData: toWeChatData,
   validateWeChat: validateWeChat,

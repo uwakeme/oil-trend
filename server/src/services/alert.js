@@ -217,12 +217,16 @@ function officialAmountOf(notice, fuelId, ctx) {
   return null;
 }
 
-/** 官方降价的温馨提示：地区、现价，以及幅度是什么口径 */
-function officialTip(regionName, currentText, source) {
-  var base = regionName + '现价' + currentText + '元';
-  if (source === 'local') return base + '·本地区实测';
-  if (source === 'median') return base + '·测算';
-  return base;
+/**
+ * 官方降价的口径说明。
+ *
+ * ⚠️ 测算值、本地区实测值、官方公布值必须标清楚 ——
+ *    混在一起就成了「编数字」，用户没法判断该信哪个。
+ */
+function officialScope(source) {
+  if (source === 'local') return '本地区实测';
+  if (source === 'median') return '测算';
+  return '官方公布';
 }
 
 /**
@@ -251,9 +255,9 @@ function forecastOf(windowDoc, today) {
   };
 }
 
-/** 预测提醒的温馨提示：区间 + 非官方 */
-function forecastTip(min, max) {
-  return '约' + min.toFixed(2) + '-' + max.toFixed(2) + '元·整轮·非官方';
+/** 预测提醒：区间写进提示，数字字段只能放下界，区间与「非官方」写进提示 */
+function forecastExtra(min, max) {
+  return '约' + min.toFixed(2) + '-' + max.toFixed(2) + '元';
 }
 
 /**
@@ -277,14 +281,7 @@ function literText(amount, prefix) {
  *   phrase1 最多 5 个字符，thing 最多 20 个字符。
  */
 function buildData(templateId, opts) {
-  return templates.dataByRole(templateId, {
-    fuel: opts.fuel,
-    amount: opts.amount,
-    amountText: opts.amountText,
-    direction: opts.direction,
-    date: opts.date,
-    tip: opts.tip
-  });
+  return templates.compose(templateId, opts);
 }
 
 /**
@@ -366,13 +363,17 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
           template: withTemplateId(TEMPLATE_FIELDS.officialDrop, primaryId),
           data: buildData(primaryId, {
             fuel: fuelName(rule.fuelId),
-            amount: Math.abs(amount.amount),
+            amountNumber: Math.abs(amount.amount),
             // 文本类型的幅度字段用整句（数字类型字段忽略这一项）
             amountText: literText(Math.abs(amount.amount), '每升下调'),
             direction: '下调',
             date: latestNotice.executeAt,
-            // 模板没有「地区」字段，地区和当前价只能写进温馨提示
-            tip: officialTip(regionName, currentText, amount.source)
+            // 当前价格：模板有「当前价格」字段就填字段，没有就并进提示
+            priceNumber: Number(priceDoc.price),
+            priceText: '现价' + currentText + '元',
+            region: regionName,
+            // 口径必须标清楚：官方公布 / 本地区实测 / 测算
+            scope: officialScope(amount.source)
           })
         });
       } else {
@@ -401,7 +402,10 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
               amountText: hasDirField ? '幅度待公布' : '下调·幅度待公布',
               direction: '下调',
               date: latestNotice.executeAt,
-              tip: '官方下调·幅度以公告为准'
+              priceNumber: Number(priceDoc.price),
+              priceText: '现价' + currentText + '元',
+              region: regionName,
+              scope: '官方公布'
             })
           });
         } else if (options.skipped) {
@@ -439,12 +443,14 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
         data: buildData(templateIdOf('primary'), {
           fuel: fuelName(rule.fuelId),
           // 「调整价格」在目标价场景填目标价，方向填「已达目标」
-          amount: rule.targetPrice,
+          amountNumber: rule.targetPrice,
           // 文本类型的幅度字段写整句，别只留一个光秃秃的数字
           amountText: '目标价' + rule.targetPrice.toFixed(2) + '元',
           direction: '已达目标',
           date: todayCN(),
-          tip: regionName + '现价' + currentText + '元'
+          priceNumber: Number(priceDoc.price),
+          priceText: '现价' + currentText + '元',
+          region: regionName
         })
       });
     }
@@ -470,12 +476,17 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
         template: withTemplateId(TEMPLATE_FIELDS.forecastDrop, templateIdOf('primary')),
         data: buildData(templateIdOf('primary'), {
           fuel: fuelName(rule.fuelId),
-          amount: fMin,
+          amountNumber: fMin,
           // 文本类型的幅度字段装得下整个区间（数字类型只能放下界）
           amountText: '每升预计下调' + fMin.toFixed(2) + '-' + fMax.toFixed(2) + '元',
           direction: '预计下调',
           date: forecastNotice.executeAt,
-          tip: forecastTip(fMin, fMax)
+          priceNumber: Number(priceDoc.price),
+          priceText: '现价' + currentText + '元',
+          region: regionName,
+          // 区间与「非官方」是口径的一部分，必须出现在看得见的地方
+          extra: forecastExtra(fMin, fMax),
+          scope: '整轮·非官方'
         })
       });
     }

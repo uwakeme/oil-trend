@@ -386,6 +386,50 @@ async function main() {
     JSON.stringify(textByType));
   configModule.subscribeTemplateId = savedPrimaryTemplateId;
 
+  console.log('\n--- 带「当前价格」字段的模板 ---');
+  // ⚠️ 当前模板没有当前价格字段，地区与现价全挤在 20 字的温馨提示里
+  //（「广东现价8.39元·本地区实测」）。模板里给了「当前价格」字段之后，
+  // 现价就该有自己的位置 —— 提示只留口径说明。
+  var priceTemplateId = 'TEST-PRICE-TEMPLATE';
+  templates.registerTemplate(priceTemplateId, {
+    name: '油价调整提醒（带当前价格，自检用）',
+    kind: 'once',
+    fields: {
+      thing5: { type: 'thing', role: 'fuel', label: '油品种类', max: 20 },
+      phrase1: { type: 'phrase', role: 'direction', label: '调整方向', max: 5 },
+      date3: { type: 'date', role: 'date', label: '调整日期' },
+      amount2: { type: 'amount', role: 'price', label: '当前价格', max: 10 },
+      thing4: { type: 'thing', role: 'tip', label: '温馨提示', max: 20 }
+    }
+  });
+  var savedPriceTemplateId = configModule.subscribeTemplateId;
+  configModule.subscribeTemplateId = priceTemplateId;
+  var priceHits = alert.matchRule(
+    { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
+    [{ regionCode: '440000', fuelId: '92', price: 8.39 }],
+    { kind: 'official', executeAt: '2026-11-24', direction: 'down',
+      tonChanges: { gasoline: -645, diesel: -625 }, changes: {} },
+    null,
+    { localAmount: { before: 8.91, after: 8.39, delta: -0.52 } }
+  );
+  var priceHit = priceHits[0];
+  check('有当前价格字段时，现价填自己的字段',
+    !!priceHit && priceHit.data.amount2 === '8.39元',
+    priceHit ? JSON.stringify(priceHit.data) : '没命中');
+  check('有当前价格字段时，提示不再重复现价',
+    !!priceHit && priceHit.data.thing4.indexOf('8.39') < 0,
+    priceHit ? priceHit.data.thing4 : '没命中');
+  check('模板没有幅度字段时，幅度并进提示（不能丢）',
+    !!priceHit && priceHit.data.thing4.indexOf('0.52') > 0,
+    priceHit ? priceHit.data.thing4 : '没命中');
+  check('口径说明仍然在提示里',
+    !!priceHit && priceHit.data.thing4.indexOf('本地区实测') > 0,
+    priceHit ? priceHit.data.thing4 : '没命中');
+  check('带当前价格字段的模板也能通过契约',
+    !!priceHit && templates.validate(priceTemplateId, priceHit.data).ok,
+    priceHit ? templates.validate(priceTemplateId, priceHit.data).errors.join(',') : '没命中');
+  configModule.subscribeTemplateId = savedPriceTemplateId;
+
   console.log('\n--- 官方降价提醒：公告只给吨价时的口径 ---');
   // ⚠️ 发改委公告入库时 changes 是空的（公告只给汽/柴油吨价）——
   // 以前这里读 changes[fuelId]，命中数恒为 0，官方降价提醒从来没触发过。
@@ -1329,7 +1373,8 @@ async function main() {
   };
 
   var flat = alertService.buildData(subscribeTemplates.PRIMARY_TEMPLATE_ID, {
-    fuel: '92# 汽油', amount: 0.13, direction: '下调', date: '2026-11-24', tip: '广东现价8.39元'
+    fuel: '92# 汽油', amountNumber: 0.13, direction: '下调', date: '2026-11-24',
+    priceNumber: 8.39, priceText: '现价8.39元', region: '广东'
   });
   var body = subscribeService.buildBody({
     openid: 'OPENID',
