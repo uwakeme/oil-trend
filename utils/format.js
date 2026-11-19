@@ -202,6 +202,10 @@ function windowMeta(win) {
   // 来源过期（或压根没有）且有**没过期的**推算 → 用推算值当主日期；
   // 否则一律用来源日期（来源优先）
   var useEstimate = hasEstimate && !estimateExpired && (expired || noSource);
+  // 既没有来源窗口、推算也过期了：既没有日期，也没有可信的下一轮时间。
+  // 这种组合不能显示「下一次调价窗口 / 就是今天」——
+  // 那是在没有日期的情况下说「就是今天」，看着像有结论。
+  var noSourceStale = noSource && estimateExpired;
 
   var dateStr = useEstimate ? est.nextAdjustDate : (w.date || '');
   var daysLeft = useEstimate ? (Number(est.daysLeft) || 0) : srcDaysLeft;
@@ -245,13 +249,16 @@ function windowMeta(win) {
     estimateExpired: estimateExpired,
     // 主日期是不是推算值 —— 界面上要标出来，不能让人当官方值看
     estimated: useEstimate,
-    titleText: useEstimate ? '预计下次调价窗口' : windowTitle(srcDaysLeft),
+    titleText: noSourceStale ? '调价窗口待确认'
+      : (useEstimate ? '预计下次调价窗口' : windowTitle(srcDaysLeft)),
     // 日期下面那行小字
-    dateNote: useEstimate ? (est.note || '')
-      : (expired ? '本轮已过 · 下一轮窗口待公布' : '预计时间 · 以官方公告为准'),
-    countdownText: (expired && !useEstimate)
-      ? ('已过 ' + Math.abs(srcDaysLeft) + ' 天 · 等待下一轮公布')
-      : countdown(daysLeft),
+    dateNote: noSourceStale ? '暂无可靠的下一轮日期 · 数据来源恢复后自动更新'
+      : (useEstimate ? (est.note || '')
+        : (expired ? '本轮已过 · 下一轮窗口待公布' : '预计时间 · 以官方公告为准')),
+    countdownText: noSourceStale ? '等待数据来源恢复'
+      : ((expired && !useEstimate)
+        ? ('已过 ' + Math.abs(srcDaysLeft) + ' 天 · 等待下一轮公布')
+        : countdown(daysLeft)),
     // 「下次通知」那一行
     noticeText: noticeDate ? ('预计 ' + cnDate(noticeDate) + ' 发布公告') : '',
     noticeNote: (est && est.noticeNote) ? est.noticeNote : '',

@@ -174,7 +174,11 @@ Page({
     ]).then(function (res) {
       if (seq !== self._reqSeq) return;
       var home = res[0] || {};
-      var rules = res[1] || [];
+      var rulesRes = res[1];
+      // ⚠️ 规则可能来自本地副本（后端读失败 / 演示模式）——
+      // 那不是服务端确认过的状态，订阅卡片不能据此显示「已开启」。
+      var rules = Array.isArray(rulesRes) ? rulesRes : ((rulesRes && rulesRes.rules) || []);
+      var rulesConfirmed = Array.isArray(rulesRes) ? true : !!(rulesRes && rulesRes.confirmed);
       var history = res[2] || [];
 
       var price = null;
@@ -210,6 +214,7 @@ Page({
       }
 
       self._rules = rules;
+      self._rulesConfirmed = rulesConfirmed;
       self._price = price;
 
       var fuelName = '92# 汽油';
@@ -300,6 +305,30 @@ Page({
         buttonText: '查看说明'
       };
     }
+    // ⚠️ 规则只存在本机（后端读失败 / 演示模式）：
+    // 本地副本不能当成「提醒已经开着」—— 服务端没有这条规则，提醒不会来。
+    if (this._rulesConfirmed === false) {
+      return {
+        active: false,
+        enabled: true,
+        icon: 'bell-muted',
+        title: '规则未同步到服务器',
+        text: '当前只有本机留存的副本，提醒不会触发',
+        buttonText: '重新同步'
+      };
+    }
+    // ⚠️ 授权拿到了但规则没存上：不能显示成「已开启」，
+    // 否则用户以为提醒开着，其实服务端一条规则都没有。
+    if (this._pendingGrant) {
+      return {
+        active: false,
+        enabled: true,
+        icon: 'bell-muted',
+        title: '授权已取得，服务端未生效',
+        text: '规则没能保存到服务器，重试成功前不会收到提醒',
+        buttonText: '重试保存'
+      };
+    }
     if (rule.subscribeGranted) {
       return {
         active: true,
@@ -378,17 +407,32 @@ Page({
     }
 
     this.setData({ saveState: 'saving', saveText: '保存中…' });
-    return api.saveAlertRules(rules, payload).then(function (res) {
+    // ⚠️ 串行化：同一页面的保存请求排队，后一次等前一次完成。
+    // 不排队的话，连点开关时两个请求可能反序到达服务端，
+    // 旧请求后写就把新状态盖掉了，而页面还显示「已保存」。
+    var prev = this._saveChain || Promise.resolve();
+    var next = prev.then(function () {
+      return api.saveAlertRules(rules, payload);
+    }, function () {
+      return api.saveAlertRules(rules, payload);
+    });
+    // 让后面的保存等这一次结束（成功失败都算）
+    this._saveChain = next.then(function () {}, function () {});
+    return next.then(function (res) {
       var ok = !!(res && res.ok);
-      if (ok) {
+      // 只有真的写到服务器才敢说「已保存到服务器」：
+      // 演示模式与离线只是存了本机副本，不能当成服务端已确认。
+      var online = !!(res && res.ok && !res.offline);
+      if (online) {
         self._pendingGrant = false;
       } else if (grant) {
-        // 授权拿到了但没存上：记下来，重试时要带上 subscribeGranted
+        // 授权拿到了但没存上：记下来，重试时要带上 subscribeGranted；
+        // 卡片据此显示「授权已取得，服务端未生效」，不再显示「已开启」
         self._pendingGrant = true;
       }
       self.setData({
         saveState: ok ? 'saved' : 'failed',
-        saveText: ok ? '已保存到服务器' : ((res && res.message) || '保存失败，请重试')
+        saveText: online ? '已保存到服务器' : ((res && res.message) || '保存失败，请重试')
       });
       return res;
     });

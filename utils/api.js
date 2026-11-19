@@ -239,18 +239,31 @@ function getMarket(symbol, period) {
 
 /* ---------- 提醒规则与记录 ---------- */
 
+/**
+ * 读取提醒规则。
+ *
+ * ⚠️ 额外返回 confirmed：这份规则是不是**服务端确认过**的。
+ * 后端不可达（或演示模式）时回落本地副本 —— 那份只是本机留存的，
+ * 不能当成「服务端已经有这条规则」：
+ * 否则界面会显示「微信提醒已开启」，而服务端其实一条规则都没有，
+ * 提醒永远不会来。
+ *
+ * @returns {Promise<{rules: Array, confirmed: boolean}>}
+ */
 function getAlertRules() {
   if (preferBackend()) {
     return cloud.callFunction('oilApi', { action: 'rules.list' }).then(function (data) {
-      if (data && Array.isArray(data.rules)) return data.rules;
+      if (data && Array.isArray(data.rules)) {
+        return { rules: data.rules, confirmed: true };
+      }
       // 后端没给规则 → 用本地留存的副本（提醒页的来源条按 home.source 显示，
       // 这里不再往全局状态里记 —— 那个状态没人消费，还会被并发请求带偏）
-      return store.getRules();
+      return { rules: store.getRules(), confirmed: false };
     }).catch(function () {
-      return store.getRules();
+      return { rules: store.getRules(), confirmed: false };
     });
   }
-  return Promise.resolve(store.getRules());
+  return Promise.resolve({ rules: store.getRules(), confirmed: false });
 }
 
 /**
