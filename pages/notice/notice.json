@@ -1,6 +1,6 @@
 {
   "enablePullDownRefresh": true,
-  "navigationBarTitleText": "油价势",
+  "navigationBarTitleText": "Wake油价势助手",
   "usingComponents": {
     "bottom-sheet": "/components/bottom-sheet/index"
   }

@@ -1,5 +1,5 @@
 {
-  "description": "油价势 · 微信小程序（油价监控 / 调价通知 / 降价提醒）",
+  "description": "Wake油价势助手 · 微信小程序（油价监控 / 调价通知 / 降价提醒）",
   "packOptions": {
     "ignore": [
       {
@@ -103,7 +103,7 @@
   "compileType": "miniprogram",
   "libVersion": "3.8.10",
   "appid": "touristappid",
-  "projectname": "oil-trend",
+  "projectname": "wake-oil-trend",
   "condition": {
     "search": {
       "list": []

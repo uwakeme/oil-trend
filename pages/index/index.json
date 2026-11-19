@@ -1,6 +1,6 @@
 {
   "enablePullDownRefresh": true,
-  "navigationBarTitleText": "油价势",
+  "navigationBarTitleText": "Wake油价势助手",
   "usingComponents": {
     "trend-chart": "/components/trend-chart/index",
     "bottom-sheet": "/components/bottom-sheet/index"

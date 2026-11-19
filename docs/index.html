@@ -3,18 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>油价势 · 微信油价与调价提醒小程序</title>
-<meta name="description" content="油价势是给车主用的油价微信小程序：本地 92#/95#/98#/0# 挂牌价、下一轮调价窗口、近一年阶梯线走势，降价还能提醒你。原生小程序 + Node/Express/PostgreSQL 自建后端。">
+<title>Wake油价势助手 · 微信油价与调价提醒小程序</title>
+<meta name="description" content="Wake油价势助手是给车主用的油价微信小程序：本地 92#/95#/98#/0# 挂牌价、下一轮调价窗口、近一年阶梯线走势，降价还能提醒你。原生小程序 + Node/Express/PostgreSQL 自建后端。">
 <meta property="og:type" content="website">
-<meta property="og:title" content="油价势 · 查本地油价，等下一轮调价">
+<meta property="og:title" content="Wake油价势助手 · 查本地油价，等下一轮调价">
 <meta property="og:description" content="给车主用的油价小程序：本地挂牌价、调价窗口、阶梯线走势、降价提醒。">
 <meta property="og:image" content="https://www.uwakeme.top/oil-trend/assets/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="油价势：全国 92# 汽油均价阶梯线">
+<meta property="og:image:alt" content="Wake油价势助手：全国 92# 汽油均价阶梯线">
 <meta property="og:url" content="https://www.uwakeme.top/oil-trend/">
 <meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="油价势 · 查本地油价，等下一轮调价">
+<meta name="twitter:title" content="Wake油价势助手 · 查本地油价，等下一轮调价">
 <meta name="twitter:description" content="给车主用的油价小程序：本地挂牌价、调价窗口、阶梯线走势、降价提醒。">
 <meta name="twitter:image" content="https://www.uwakeme.top/oil-trend/assets/og.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23142c23'/%3E%3Cpath d='M5 22h7v-7h7v-5h8' fill='none' stroke='%23e9a928' stroke-width='2.6' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
@@ -24,8 +24,8 @@
 {
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
-  "name": "油价势",
-  "alternateName": "Oil Trend",
+  "name": "Wake油价势助手",
+  "alternateName": "Wake Oil Trend",
   "description": "给车主用的油价微信小程序：本地挂牌价、下一轮调价窗口、近一年阶梯线走势与降价提醒。",
   "applicationCategory": "UtilitiesApplication",
   "operatingSystem": "微信小程序",
@@ -40,7 +40,7 @@
 </script>
 <style>
 /* ===========================================================
- * 油价势项目主页 —— 视觉沿用小程序的设计令牌
+ * Wake油价势助手项目主页 —— 视觉沿用小程序的设计令牌
  * 能源行情杂志 + 车载仪表：暖灰纸面 / 深墨绿 / 琥珀强调
  * =========================================================== */
 :root {
@@ -112,7 +112,7 @@ img { max-width: 100%; display: block; }
 }
 .brand { display: flex; align-items: center; gap: 9px; text-decoration: none; }
 .brand img { width: 26px; height: 26px; border-radius: 6px; }
-.brand b { font-family: var(--font-title); font-size: 17px; letter-spacing: 2px; }
+.brand b { font-family: var(--font-title); font-size: 17px; letter-spacing: 2px; white-space: nowrap; }
 .brand span { font-family: var(--font-num); font-size: 10px; letter-spacing: 2.4px; color: var(--muted); padding-top: 3px; }
 .topnav { margin-left: auto; display: flex; align-items: center; gap: 22px; }
 .topnav a { font-size: 13.5px; color: var(--muted); text-decoration: none; transition: color .18s ease; }
@@ -431,6 +431,9 @@ img { max-width: 100%; display: block; }
   .band { padding: 64px 0; }
   .wrap, .topbar-in, .hero-in, .foot-in { padding-left: 20px; padding-right: 20px; }
   .topnav a:not(.gh-btn) { display: none; }
+  /* 名字变长后移动端品牌区会折行：小屏只留中文名，英文副名让位给 GitHub 按钮 */
+  .brand b { font-size: 15px; letter-spacing: 1px; }
+  .brand span { display: none; }
   .spread { grid-template-columns: minmax(0, 1fr); gap: 22px; }
   .sources { grid-template-columns: minmax(0, 1fr); }
   .shots {
@@ -463,8 +466,8 @@ img { max-width: 100%; display: block; }
 <header class="topbar">
   <div class="topbar-in">
     <a class="brand" href="#top">
-      <img src="assets/app-icon.png" alt="油价势图标">
-      <b>油价势</b><span>OIL TREND</span>
+      <img src="assets/app-icon.png" alt="Wake油价势助手图标">
+      <b>Wake油价势助手</b><span>WAKE OIL TREND</span>
     </a>
     <nav class="topnav">
       <a href="#screens">界面</a>
@@ -484,7 +487,7 @@ img { max-width: 100%; display: block; }
 <section class="hero">
   <div class="hero-in">
     <div class="hero-copy reveal">
-      <p class="eyebrow">油价势 · 原生微信小程序</p>
+      <p class="eyebrow">Wake油价势助手 · 原生微信小程序</p>
       <h1>你的车加几号油，<br>今天该付多少</h1>
       <p class="hero-lede">本地 92# / 95# / 98# / 0# 挂牌价、下一轮调价窗口、近一年调价走势，还能写一条「降到 7.5 就提醒我」的规则。</p>
       <div class="hero-cta">
@@ -722,8 +725,8 @@ npm start</code><button class="copy" data-copy-target="#cmd-server">复制</butt
 <footer class="foot">
   <div class="foot-in">
     <div>
-      <div class="foot-brand">油价势</div>
-      <p class="foot-ver">OIL TREND · v0.1.0 · MIT</p>
+      <div class="foot-brand">Wake油价势助手</div>
+      <p class="foot-ver">WAKE OIL TREND · v0.1.0 · MIT</p>
     </div>
     <nav class="foot-nav">
       <a href="https://github.com/uwakeme/oil-trend" target="_blank" rel="noopener">仓库</a>
