@@ -36,8 +36,10 @@ const measure = require('./measure');
  *                能原样写「幅度待公布」——
  *                官方公告只给吨价、每升幅度还没采到时，靠它把提醒发出去。
  *
- * ⚠️ 模板里没有「地区」「当前价」「目标价」字段，
- * 地区与当前价只能塞进「温馨提示」。
+ * ⚠️ 模板里没有「地区」「目标价」字段，
+ * 地区与口径说明只能塞进「温馨提示」；
+ * 当前在用的模板连「温馨提示」都没有（第 6 个关键词换成了「实时油价」），
+ * 于是它们并进「油品种类」那一行（≤20 字符，装不下时按重要性取舍）。
  */
 var TEMPLATE_FIELDS = {
   officialDrop: { page: 'pages/index/index', kind: 'primary' },
@@ -255,9 +257,17 @@ function forecastOf(windowDoc, today) {
   };
 }
 
-/** 预测提醒：区间写进提示，数字字段只能放下界，区间与「非官方」写进提示 */
+/**
+ * 预测提醒的区间文本。
+ *
+ * ⚠️ 不写「约」—— 「调整方向」字段已经写着「预计下调」，
+ *    再加个「约」既占地方又重复（能承载整句的文本字段只有 20 字符）。
+ * ⚠️ 也不写「元」：旁边的「调整价格」字段写的就是「0.06元」，
+ *    单位在那儿摆着；「整轮」两个字同理让位给「非官方」这个口径。
+ *    —— 口径丢不得，「整轮」让位。
+ */
 function forecastExtra(min, max) {
-  return '约' + min.toFixed(2) + '-' + max.toFixed(2) + '元';
+  return min.toFixed(2) + '-' + max.toFixed(2);
 }
 
 /**
@@ -486,7 +496,7 @@ function matchRule(rule, prices, latestNotice, forecastNotice, ctx) {
           region: regionName,
           // 区间与「非官方」是口径的一部分，必须出现在看得见的地方
           extra: forecastExtra(fMin, fMax),
-          scope: '整轮·非官方'
+          scope: '非官方'
         })
       });
     }

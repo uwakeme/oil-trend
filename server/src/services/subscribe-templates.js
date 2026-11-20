@@ -4,7 +4,8 @@
  * ⚠️ 这里是微信公众平台「订阅消息 → 我的模板 → 模板详情」的**镜像**。
  *
  * 平台的硬规则（踩过就回不来）：
- *   1. data 的 key 必须**严格等于**模板占位符名（thing5 / amount2 / phrase1 / date3 / thing4）。
+ *   1. data 的 key 必须**严格等于**模板占位符名
+ *      （当前模板：thing5 / amount2 / amount6 / phrase1 / date3）。
  *      自己起名（thing1、price…）一律被拒，errcode 47003。
  *   2. value 要符合字段类型：
  *      thing  —— 纯文本，最多 20 字符
@@ -23,6 +24,11 @@
  *   官方公告只给吨价、每升幅度还拿不到时，只有文本类型的模板才发得了提醒，
  *   这种模板在下面登记成**方向模板**（服务端 .env 的
  *   OIL_SUBSCRIBE_DIRECTION_TEMPLATE_ID 指向它）。
+ *
+ * ⚠️ 有些模板**没有「温馨提示」字段**（当前在用的就是：
+ *   第 6 个关键词换成了「实时油价」）。地区与口径说明没地方放时，
+ *   只能并进唯一装得下整句的文本字段「油品种类」（≤20 字符），
+ *   装不下就按重要性取舍 —— 口径说明丢不得（见 compose）。
  */
 
 /**
@@ -33,8 +39,23 @@
  *   一次性订阅消息 —— 用户每次授权只够发一条，发完要重新授权
  */
 var TEMPLATES = {
-  'OaHgjTXIhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg': {
+  // 当前在用：带「实时油价」的版本。
+  // ⚠️ 这个模板**没有「温馨提示」字段** —— 地区与口径说明只能并进
+  //    「油品种类」（thing 类型，20 字符，可含汉字数字符号）。
+  'OaHgjTXIhVAUOtdvqE_yxVbqLaHLbFN5MJS3lNFQVt0': {
     name: '油价调整提醒',
+    kind: 'once',
+    fields: {
+      thing5: { type: 'thing', role: 'fuel', label: '油品种类', max: 20 },
+      phrase1: { type: 'phrase', role: 'direction', label: '调整方向', max: 5 },
+      amount2: { type: 'amount', role: 'amount', label: '调整价格', max: 10 },
+      amount6: { type: 'amount', role: 'price', label: '实时油价', max: 10 },
+      date3: { type: 'date', role: 'date', label: '调整日期' }
+    }
+  },
+  // 旧版本：带「温馨提示」，口径说明有地方写，但现价只能挤在提示里。
+  'OaHgjTXIhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg': {
+    name: '油价调整提醒（带温馨提示）',
     kind: 'once',
     fields: {
       thing5: { type: 'thing', role: 'fuel', label: '油品种类', max: 20 },
@@ -47,7 +68,7 @@ var TEMPLATES = {
 };
 
 /** 当前在用的模板 ID（与服务端 .env 的 OIL_SUBSCRIBE_TEMPLATE_ID 一致） */
-var PRIMARY_TEMPLATE_ID = 'OaHgjTXIhVAUOtdvqE_yxWZkt8r0cZdbhwuD4kq9Rqg';
+var PRIMARY_TEMPLATE_ID = 'OaHgjTXIhVAUOtdvqE_yxVbqLaHLbFN5MJS3lNFQVt0';
 
 /** 取模板定义；模板 ID 没登记过就返回 null */
 function templateOf(templateId) {
@@ -106,12 +127,14 @@ function roleCarriesText(templateId, role) {
  * 组一条消息的字段值。
  *
  * ⚠️ 平台要求**每个字段都有值**，漏一个就被拒收（47003）；
- *    所以模板装不下的内容只能并进「温馨提示」（≤20 字符）。
+ *    所以模板装不下的内容只能并进某个装得下整句的文本字段。
  *
  * 分工规则：
  *   - 幅度：字段能装文本 → 装字段；只能装数字 → 装数值（区间/未知由 extra 补）；
  *   - 当前价格：模板有「当前价格」字段 → 装字段；没有 → 并进提示；
- *   - 温馨提示 = 地区 + 额外说明 + 当前价（没字段时）+ 口径说明，
+ *   - 附加内容（地区 + 额外说明 + 口径说明）：
+ *       模板有「温馨提示」字段 → 装那个字段；
+ *       没有 → 并进「油品种类」（当前模板唯一的文本字段，≤20 字符）。
  *     超长时从最不重要的开始丢，**口径说明必须保留**
  *     （测算值、预测值不标口径就是误导）。
  *
@@ -127,58 +150,65 @@ function compose(templateId, content) {
   var amountToTip = '';
   var amountNumber = c.amountNumber;
   if (!fieldOfRole(templateId, 'amount')) {
-    // 模板没有幅度字段 → 幅度整句只能并进提示
-    amountToTip = c.amountText === undefined || c.amountText === null ? '' : c.amountText;
+    // 模板没有幅度字段 → 幅度整句只能并进附加内容
+    amountToTip = textOrEmpty(c.amountText);
   } else if (roleCarriesText(templateId, 'amount')) {
     // 字段能装整句 → 整句进字段
-    amountText = c.amountText === undefined || c.amountText === null ? '' : c.amountText;
+    amountText = textOrEmpty(c.amountText);
   }
   var priceText = '';
   var priceNumber = c.priceNumber;
   if (fieldOfRole(templateId, 'price')) {
     if (roleCarriesText(templateId, 'price')) {
-      priceText = c.priceText === undefined || c.priceText === null ? '' : c.priceText;
+      priceText = textOrEmpty(c.priceText);
     }
   } else {
-    // 模板没有当前价格字段 → 并进提示
-    priceText = c.priceText === undefined || c.priceText === null ? '' : c.priceText;
+    // 模板没有当前价格字段 → 并进附加内容
+    priceText = textOrEmpty(c.priceText);
   }
 
-  // 提示的拼装：口径说明必留，其余按重要性取舍 ——
-  // 放不下时按 rank 从低到高丢：当前价 → 地区 → 额外说明 → 幅度整句。
-  // ⚠️ 口径说明（实测/测算/非官方）丢不得：
-  //    测算值、预测值不标口径就是误导。
-  var limit = 20;
-  var tipField = fieldOfRole(templateId, 'tip');
-  if (tipField && tipField.max) limit = tipField.max;
-  var scope = c.scope || '';
+  // 附加内容的片段：口径说明必留，其余按重要性取舍 ——
+  // 放不下时按 rank 从低到高丢：现价 → 地区 → 额外说明 → 幅度整句。
   var parts = [];
   if (c.region) parts.push({ text: c.region, rank: 2 });
   if (amountToTip) parts.push({ text: amountToTip, rank: 4 });
-  // 幅度整句已经在提示里（或已经在字段里）时，额外的区间说明不重复
+  // 幅度整句已经在附加内容里（或已经在字段里）时，额外的区间说明不重复
   if (c.extra && !amountToTip && !amountText) parts.push({ text: c.extra, rank: 3 });
   if (priceText) parts.push({ text: priceText, rank: 1 });
+
+  var scope = c.scope || '';
+  var tipField = fieldOfRole(templateId, 'tip');
+  var fuel = c.fuel || '';
   var tip = '';
-  var dropped = false;
-  while (true) {
-    var candidate = parts.map(function (p) { return p.text; });
-    if (scope) candidate.push(scope);
-    var text = candidate.join('·');
-    if (text.length <= limit) { tip = text; break; }
-    // 找出 rank 最小的（最不重要的）丢掉
-    var worst = -1;
-    var worstRank = Infinity;
-    parts.forEach(function (p, idx) {
-      if (p.rank < worstRank) { worstRank = p.rank; worst = idx; }
-    });
-    if (worst < 0) { tip = scope; break; }
-    parts.splice(worst, 1);
-    dropped = true;
+  var packed;
+
+  if (tipField) {
+    packed = packText('', parts, scope, tipField.max || 20);
+    tip = packed.text;
+  } else {
+    // ⚠️ 模板没有「温馨提示」字段（当前在用的模板就是这种：
+    //    第 6 个关键词是「实时油价」，把「温馨提示」换掉了）——
+    //    地区与口径说明只能并进「油品种类」那个装得下整句的文本字段。
+    var carrier = carrierOf(templateId);
+    if (carrier) {
+      packed = packText(fuel, parts, scope, carrier.field.max || 20);
+      fuel = packed.text;
+    } else {
+      // 既没有提示字段，也没有能承载的文本字段 → 保不住
+      packed = {
+        text: '',
+        dropped: parts.map(function (p) { return p.text; }).concat(scope ? [scope] : [])
+      };
+    }
   }
-  if (!tip) tip = scope;
+
+  if (packed.dropped.length) {
+    // 丢了内容不能闷声不响：模板装不下是产品侧的约束，得看得见
+    console.warn('[subscribe] 模板 ' + templateId + ' 装不下，已丢弃: ' + packed.dropped.join(' / '));
+  }
 
   return dataByRole(templateId, {
-    fuel: c.fuel,
+    fuel: fuel,
     amount: amountNumber,
     amountText: amountText,
     direction: c.direction,
@@ -187,6 +217,82 @@ function compose(templateId, content) {
     priceText: priceText,
     tip: tip
   });
+}
+
+/**
+ * 空值转空串（组装阶段先统一成字符串，格式化交给各类型的格式化函数）。
+ */
+function textOrEmpty(value) {
+  return value === undefined || value === null ? '' : String(value);
+}
+
+/**
+ * 没有「温馨提示」字段时，附加内容往哪儿放。
+ *
+ * ⚠️ 当前在用的模板把「温馨提示」换成了「实时油价」——
+ *    只剩「油品种类」（thing 类型，20 字符）装得下整句，
+ *    地区、口径说明、区间全挤在这一行里。
+ *
+ * 返回 { key, field }，找不到就返回 null。
+ */
+function carrierOf(templateId) {
+  var tpl = templateOf(templateId);
+  if (!tpl) return null;
+  var found = null;
+  Object.keys(tpl.fields).forEach(function (key) {
+    var f = tpl.fields[key];
+    if (!found && f.role === 'fuel' && f.type !== 'amount') found = { key: key, field: f };
+  });
+  return found;
+}
+
+/**
+ * 把「固定内容 + 可丢片段 + 口径说明」拼进一个限长字段。
+ *
+ * ⚠️ 口径说明（实测/测算/非官方）**丢不得** ——
+ *    测算值、预测值不标口径就是误导。
+ *    放不下时按 rank 从低到高丢片段（rank 小的先丢）。
+ *
+ * @param {string} prefix 固定内容（如油品名），最后才动它
+ * @param {Array} parts [{ text, rank }]
+ * @param {string} scope 口径说明，必留
+ * @param {number} limit 字段长度上限
+ * @returns {{ text: string, dropped: string[] }}
+ */
+function packText(prefix, parts, scope, limit) {
+  var list = [];
+  (parts || []).forEach(function (p) {
+    if (p && p.text) list.push({ text: String(p.text), rank: p.rank });
+  });
+  var dropped = [];
+  var scopeText = scope || '';
+  var max = limit || 20;
+  while (true) {
+    var ordered = [];
+    if (prefix) ordered.push(prefix);
+    list.forEach(function (p) { ordered.push(p.text); });
+    if (scopeText) ordered.push(scopeText);
+    var text = ordered.join('·');
+    if (text.length <= max) return { text: text, dropped: dropped };
+    if (!list.length) {
+      // 只剩「固定内容 + 口径」还放不下 → 砍固定内容，口径说明留着
+      var room = max - (scopeText ? scopeText.length + 1 : 0);
+      if (prefix && room > 0) {
+        return {
+          text: prefix.slice(0, room) + (scopeText ? '·' + scopeText : ''),
+          dropped: dropped
+        };
+      }
+      return { text: scopeText ? scopeText.slice(0, max) : '', dropped: dropped };
+    }
+    // 找出 rank 最小的（最不重要的）丢掉
+    var worst = 0;
+    list.forEach(function (p, i) {
+      if (p.rank < list[worst].rank) worst = i;
+    });
+    dropped.push(list[worst].text);
+    list.splice(worst, 1);
+  }
 }
 
 /**
@@ -403,6 +509,7 @@ module.exports = {
   hasRole: hasRole,
   fieldOfRole: fieldOfRole,
   roleCarriesText: roleCarriesText,
+  carrierOf: carrierOf,
   compose: compose,
   dataByRole: dataByRole,
   toWeChatData: toWeChatData,

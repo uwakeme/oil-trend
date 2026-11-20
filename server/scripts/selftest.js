@@ -218,8 +218,8 @@ async function main() {
   var templateId = templates.PRIMARY_TEMPLATE_ID;
   var tpl = templates.templateOf(templateId);
   check('主模板已登记在契约表里', !!tpl);
-  check('模板字段与平台一致（thing5/amount2/phrase1/date3/thing4）',
-    !!tpl && Object.keys(tpl.fields).sort().join(',') === 'amount2,date3,phrase1,thing4,thing5',
+  check('模板字段与平台一致（thing5/amount2/amount6/phrase1/date3）',
+    !!tpl && Object.keys(tpl.fields).sort().join(',') === 'amount2,amount6,date3,phrase1,thing5',
     tpl ? Object.keys(tpl.fields).sort().join(',') : '无');
 
   check('金额带「元」且不带「元/升」', templates.formatAmount(0.13) === '0.13元',
@@ -232,7 +232,7 @@ async function main() {
 
   var baseData = {
     thing5: '92# 汽油', amount2: '0.13元', phrase1: '下调',
-    date3: '2026年11月24日', thing4: '广东现价7.36元'
+    date3: '2026年11月24日', amount6: '7.36元'
   };
   function withField(key, value) {
     var copy = Object.assign({}, baseData);
@@ -316,10 +316,15 @@ async function main() {
       hitByType.officialDrop.data.phrase1);
     check('官方降价的日期是执行日', hitByType.officialDrop.data.date3 === '2026年11月24日',
       hitByType.officialDrop.data.date3);
-    check('官方降价的温馨提示带地区与现价',
-      hitByType.officialDrop.data.thing4.indexOf('广东') === 0 &&
-      hitByType.officialDrop.data.thing4.indexOf('7.36') > 0,
-      hitByType.officialDrop.data.thing4);
+    // ⚠️ 当前模板没有「温馨提示」字段：地区与口径并进「油品种类」，
+    //    现价有自己的「实时油价」字段。
+    check('官方降价的内容带地区与口径说明',
+      hitByType.officialDrop.data.thing5.indexOf('广东') > 0 &&
+      hitByType.officialDrop.data.thing5.indexOf('官方公布') > 0,
+      hitByType.officialDrop.data.thing5);
+    check('官方降价的现价有自己的字段',
+      hitByType.officialDrop.data.amount6 === '7.36元',
+      hitByType.officialDrop.data.amount6);
   }
   if (hitByType.targetPrice) {
     check('目标价的金额填的是目标价', hitByType.targetPrice.data.amount2 === '7.50元',
@@ -333,16 +338,52 @@ async function main() {
   if (hitByType.forecastDrop) {
     check('预测下调的方向是「预计下调」', hitByType.forecastDrop.data.phrase1 === '预计下调',
       hitByType.forecastDrop.data.phrase1);
-    check('预测下调的温馨提示标明非官方',
-      hitByType.forecastDrop.data.thing4.indexOf('非官方') > 0,
-      hitByType.forecastDrop.data.thing4);
-    check('预测下调的温馨提示带整轮区间',
-      hitByType.forecastDrop.data.thing4.indexOf('0.06-0.08') > 0,
-      hitByType.forecastDrop.data.thing4);
+    check('预测下调标明非官方',
+      hitByType.forecastDrop.data.thing5.indexOf('非官方') > 0,
+      hitByType.forecastDrop.data.thing5);
+    check('预测下调带来源给的区间',
+      hitByType.forecastDrop.data.thing5.indexOf('0.06-0.08') > 0,
+      hitByType.forecastDrop.data.thing5);
     check('预测下调的金额取来源给的区间下界（不编中值）',
       hitByType.forecastDrop.data.amount2 === '0.06元',
       hitByType.forecastDrop.data.amount2);
   }
+
+  console.log('\n--- 模板没有「温馨提示」字段时：口径并进「油品种类」 ---');
+  // ⚠️ 当前在用的模板把第 6 个关键词换成了「实时油价」——
+  //    「温馨提示」没有了，地区、口径说明、区间全挤进「油品种类」（≤20 字符）。
+  check('当前模板确实没有提示字段', !templates.hasRole(templateId, 'tip'), '有');
+  check('当前模板有「实时油价」字段', templates.hasRole(templateId, 'price'), '没有');
+  check('承载附加内容的字段是「油品种类」',
+    !!templates.carrierOf(templateId) && templates.carrierOf(templateId).key === 'thing5',
+    templates.carrierOf(templateId) ? templates.carrierOf(templateId).key : '没有');
+  check('地区与口径并进「油品种类」，且没超 20 字',
+    !!hitByType.officialDrop && hitByType.officialDrop.data.thing5.length <= 20 &&
+    hitByType.officialDrop.data.thing5.indexOf('广东') > 0 &&
+    hitByType.officialDrop.data.thing5.indexOf('官方公布') > 0,
+    hitByType.officialDrop ? hitByType.officialDrop.data.thing5 : '没命中');
+  // 装不下时按重要性取舍：地区先让位，区间与口径必须留着
+  check('装不下的内容按重要性取舍（区间与口径留着，地区让位）',
+    !!hitByType.forecastDrop &&
+    hitByType.forecastDrop.data.thing5.indexOf('0.06-0.08') > 0 &&
+    hitByType.forecastDrop.data.thing5.indexOf('非官方') > 0 &&
+    hitByType.forecastDrop.data.thing5.indexOf('广东') < 0,
+    hitByType.forecastDrop ? hitByType.forecastDrop.data.thing5 : '没命中');
+  // 丢了内容要有日志，不能闷声丢掉
+  var warns = [];
+  var origWarn = console.warn;
+  try {
+    console.warn = function (msg) { warns.push(String(msg)); };
+    alert.matchRule(
+      { userId: 'u1', regionCode: '440000', fuelId: '92', forecastDrop: true },
+      [{ regionCode: '440000', fuelId: '92', price: 7.36 }],
+      null,
+      { kind: 'forecast', executeAt: '2026-11-26', direction: 'down', literMin: 0.06, literMax: 0.08 });
+  } finally {
+    console.warn = origWarn;
+  }
+  check('装不下的内容会记日志（不能闷声丢掉）',
+    warns.some(function (w) { return w.indexOf('装不下') > 0; }), warns.join(' | '));
 
   console.log('\n--- 文本型「调整幅度」字段：三类提醒的取值 ---');
   // 文本类型的幅度字段能写整句，数字类型只放得下一个「0.52元」。
@@ -447,9 +488,9 @@ async function main() {
   check('官方降价的金额取本地区实测差值',
     ndrcHits.length && ndrcHits[0].data.amount2 === '0.52元',
     ndrcHits.length ? ndrcHits[0].data.amount2 : '没命中');
-  check('官方降价的温馨提示标明是本地区实测',
-    ndrcHits.length && ndrcHits[0].data.thing4.indexOf('本地区实测') > 0,
-    ndrcHits.length ? ndrcHits[0].data.thing4 : '');
+  check('官方降价标明是本地区实测',
+    ndrcHits.length && ndrcHits[0].data.thing5.indexOf('本地区实测') > 0,
+    ndrcHits.length ? ndrcHits[0].data.thing5 : '');
 
   var medianHits = alert.matchRule(
     { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
@@ -460,8 +501,8 @@ async function main() {
     { medianAmounts: { '92': -0.52 } }
   );
   check('没有本地区快照时用各省中位数，并标明是测算',
-    medianHits.length && medianHits[0].data.thing4.indexOf('测算') > 0,
-    medianHits.length ? medianHits[0].data.thing4 : '没命中');
+    medianHits.length && medianHits[0].data.thing5.indexOf('测算') > 0,
+    medianHits.length ? medianHits[0].data.thing5 : '没命中');
 
   check('官方上调不算降价提醒', alert.matchRule(
     { userId: 'u1', regionCode: '440000', fuelId: '92', officialDrop: true },
@@ -555,7 +596,7 @@ async function main() {
   check('主模板装不下整句（放进去会被契约挡住）',
     !templates.validate(templates.PRIMARY_TEMPLATE_ID, {
       thing5: '92# 汽油', amount2: '每升下调0.52元', phrase1: '下调',
-      date3: '2026年11月24日', thing4: '广东现价8.39元'
+      date3: '2026年11月24日', amount6: '8.39元'
     }).ok);
 
   console.log('\n--- 预测提醒的数据入口：调价窗口 ---');
