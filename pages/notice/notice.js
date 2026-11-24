@@ -194,7 +194,9 @@ Page({
         statusText: syncMeta.text,
         className: syncMeta.style,
         // 没有采集发生就没有检查时刻，别显示「 检查更新」这种空壳
-        checkedText: sync.lastCheckedAt ? (fmt.dateTime(sync.lastCheckedAt) + ' 检查更新') : ''
+        checkedText: sync.lastCheckedAt ? (fmt.dateTime(sync.lastCheckedAt) + ' 检查更新') : '',
+        // 主源不可用、备源接管时要说明白（数据是新的，但来源变了）
+        hintText: fmt.syncSourceHint(sync.sources)
       },
       notices: notices,
       dataEmpty: dataEmpty,

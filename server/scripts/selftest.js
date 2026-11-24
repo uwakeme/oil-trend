@@ -1690,6 +1690,119 @@ async function main() {
   var known = errorsModule.publicError({ code: 'INVALID_REGION', message: 'whatever' });
   check('白名单里的业务错误透出友好文案', known.message === '地区代码不存在' && known.code === 'INVALID_REGION');
 
+  console.log('\n--- 站点拒绝访问：识别、熔断、状态诚实化 ---');
+  var httpClient = require(path.join(ROOT, 'src', 'services', 'http-client.js'));
+  var collector = require(path.join(ROOT, 'src', 'services', 'collector.js'));
+  var sourceCfg = require(path.join(ROOT, 'src', 'services', 'sources.js'));
+
+  // 软 403：HTTP 状态是 200，正文却是 nginx 的 403 错误页
+  var nginx403 = '<html>\n<head><title>403 Forbidden</title></head>\n<body>\n' +
+    '<center><h1>403 Forbidden</h1></center>\n<hr><center>nginx</center>\n</body>\n</html>';
+  check('HTTP 200 + nginx 403 页被认成「被拒」', !!httpClient.detectBlockPage(nginx403));
+  check('真实页面不会被误判成被拒',
+    httpClient.detectBlockPage('<div class="price-card n92"><span class="price-value">8.39</span></div>') === null);
+  check('长正文里出现关键词也不判为被拒',
+    httpClient.detectBlockPage('<p>403 Forbidden</p>' + 'x'.repeat(5000)) === null);
+
+  // 熔断：连续被拒才熔断，抓成功就解除
+  httpClient.resetBlocked();
+  httpClient.markBlocked('selftest-src', '403 Forbidden');
+  httpClient.markBlocked('selftest-src', '403 Forbidden');
+  check('连着两次被拒还不熔断', httpClient.isBlocked('selftest-src') === false);
+  httpClient.markBlocked('selftest-src', '403 Forbidden');
+  check('第三次被拒熔断', httpClient.isBlocked('selftest-src') === true);
+  check('被拒次数记着', httpClient.blockedInfo('selftest-src').count === 3);
+  httpClient.clearBlocked('selftest-src');
+  check('抓成功后解除熔断', httpClient.isBlocked('selftest-src') === false);
+  httpClient.resetBlocked();
+
+  // 内部源失败不进 needsReview
+  check('内部源失败进 advisory 桶', collector.resultBucket({ status: 'failed', internal: true }) === 'advisory');
+  check('用户侧来源失败进 needsReview 桶', collector.resultBucket({ status: 'failed' }) === 'needsReview');
+  check('正常结果不进任何桶', collector.resultBucket({ status: 'ok' }) === null);
+  var timelineSrc = sourceCfg.SOURCES.filter(function (x) { return x.id === 'xmgcn-timeline'; })[0];
+  check('时间表源是内部源', !!timelineSrc && timelineSrc.internal === true);
+  check('油价网是用户侧来源', collector.isUserFacingSource(
+    sourceCfg.SOURCES.filter(function (x) { return x.id === 'xmgcn'; })[0]) === true);
+  check('发改委公告是用户侧来源', collector.isUserFacingSource(
+    sourceCfg.SOURCES.filter(function (x) { return x.id === 'ndrc-notice'; })[0]) === true);
+
+  // 官方吨价 → 互校轮次（执行日 +1 天 = 挂牌价生效日）
+  var tonRows = await dao.notices.listApprovedWithTon(60);
+  var tonRounds = collector.tonRoundsFromNotices(tonRows);
+  check('能从已入库公告里取出官方吨价轮次', tonRounds.length > 0, '实际 ' + tonRounds.length);
+  function shiftDay(d) {
+    var t = Date.parse(d + 'T00:00:00Z');
+    if (!isFinite(t)) return null;
+    return new Date(t + 86400000).toISOString().slice(0, 10);
+  }
+  var bigRound = tonRounds.filter(function (r) { return r.gasolineDelta === -645; })[0];
+  check('645 元/吨那一轮的汽油吨价取到了', !!bigRound);
+  check('柴油吨价也带上了', !!bigRound && bigRound.dieselDelta === -625);
+  // 日期口径：公告写「X月X日24时起」，新挂牌价从**次日** 00:00 才开始挂，
+  // 所以互校用的日期是执行日 +1 天（不能直接拿执行日去对历史表的生效日）
+  var execRow = tonRows.filter(function (n) { return (n.tonChanges || {}).gasoline === -645; })[0];
+  var execDate = execRow ? String(execRow.executeAt || '').slice(0, 10) : '';
+  check('执行日 +1 天 = 挂牌价生效日', !!execDate && !!bigRound && bigRound.date === shiftDay(execDate),
+    '执行日 ' + execDate + '，算出来 ' + (bigRound && bigRound.date));
+  check('搁浅轮次（没有吨价）不参与互校',
+    tonRounds.every(function (r) { return r.gasolineDelta !== 0; }));
+
+  // 主源被拒时，调价节点改用库内历史推导（不能静默停更）
+  var builtDb = await collector.buildSeries({
+    adopted: { '440000': { parsed: { prices: { '92': 8.39 } } } }
+  });
+  check('来源没有历史时回落到库内历史', builtDb.from === 'db');
+  check('库内历史里有广东的数据', Object.keys(builtDb.series['440000'] || {}).length > 0);
+  var builtSrc = await collector.buildSeries({
+    adopted: { '440000': { parsed: { prices: { '92': 8.39 }, history: [{ date: '2026-01-01', prices: { '92': 8.0 } }] } } }
+  });
+  check('有来源历史时优先用来源历史', builtSrc.from === 'source');
+
+  // 只有内部告警时，同步状态不能变成「等待人工核对」
+  await dao.runs.insert({
+    startedAt: new Date().toISOString(),
+    finishedAt: new Date().toISOString(),
+    status: 'ok',
+    sourceName: '服务端定时采集',
+    results: [{
+      sourceId: 'xmgcn-timeline',
+      status: 'degraded',
+      reason: 'SOURCE_BLOCKED',
+      message: '站点在拒绝访问',
+      internal: true
+    }],
+    needsReview: [],
+    advisories: [{
+      sourceId: 'xmgcn-timeline',
+      reason: 'SOURCE_BLOCKED',
+      message: '站点在拒绝访问'
+    }]
+  });
+  var syncAfter = await notices.actionSyncStatus();
+  check('只有内部告警时同步状态仍是 ok（不是 pending）', syncAfter.status === 'ok', '实际 ' + syncAfter.status);
+  check('内部告警照样能查到', Array.isArray(syncAfter.advisories) && syncAfter.advisories.length === 1);
+  check('来源健康能查到是哪个源出的问题',
+    Array.isArray(syncAfter.sources) && syncAfter.sources.length === 1 &&
+    syncAfter.sources[0].id === 'xmgcn-timeline' && syncAfter.sources[0].internal === true);
+  check('被拒的来源在健康信息里标得出来', syncAfter.sources[0].reason === 'SOURCE_BLOCKED');
+
+  // 降级的用户侧来源（主源被拒、备源接管）不能被当成内部源 ——
+  // 否则「来源变了」这句话就永远说不出口
+  var health = notices.sourceHealth({
+    results: [{
+      sourceId: 'xmgcn',
+      sourceName: '油价网',
+      status: 'degraded',
+      advisory: true,
+      degraded: [{ regionCode: '440000' }, { regionCode: '370000' }]
+    }]
+  });
+  check('降级的用户侧来源不被标成内部源', health[0].internal === false);
+  check('降级省份数被记下来', health[0].degraded === 2, String(health[0].degraded));
+  check('被备源接住的省份数单独记（没接住就是 0）', health[0].takenOver === 0, String(health[0].takenOver));
+  check('降级的来源名能显示出来', health[0].name === '油价网', health[0].name);
+
   console.log('\n--- 汇总 ---');
   console.log('检查 ' + checks + ' 项，失败 ' + failures.length + ' 项');
   if (failures.length) {

@@ -163,12 +163,16 @@ CREATE TABLE IF NOT EXISTS collector_runs (
   status        TEXT NOT NULL DEFAULT 'idle',
   source_name   TEXT,
   results       JSONB NOT NULL DEFAULT '[]'::jsonb,
-  needs_review  JSONB NOT NULL DEFAULT '[]'::jsonb
+  needs_review  JSONB NOT NULL DEFAULT '[]'::jsonb,
+  -- 内部源（口径互校之类）的告警：不影响对外数据，单独放一栏，
+  -- 不能混进 needs_review —— 混进去会把用户看到的「等待人工核对」点亮
+  advisories    JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 
 -- 老库补列：CREATE TABLE IF NOT EXISTS 不会改动已存在的表，
 -- 部署脚本每次都会跑这个文件，所以补列放这里（重复执行安全）。
 ALTER TABLE oil_windows ADD COLUMN IF NOT EXISTS forecast_direction TEXT;
+ALTER TABLE collector_runs ADD COLUMN IF NOT EXISTS advisories JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE oil_notices ADD COLUMN IF NOT EXISTS announced_at DATE;
 ALTER TABLE oil_notices ADD COLUMN IF NOT EXISTS direction TEXT;
 ALTER TABLE oil_notices ADD COLUMN IF NOT EXISTS ton_changes JSONB NOT NULL DEFAULT '{}'::jsonb;

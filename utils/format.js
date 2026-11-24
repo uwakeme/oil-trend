@@ -111,6 +111,39 @@ var SYNC_STATUS_META = {
 };
 
 /**
+ * 来源健康提示：主源不可用、备源接管时说一句。
+ *
+ * ⚠️ 为什么要说：价格改由备源供数时，数据照样是新的，
+ *    但「数据来自哪里」变了。项目铁律是**如实展示当前来源**，
+ *    不说的话用户会以为一切正常 —— 2026-11-24 主源被站点拒绝时就是这样：
+ *    31 个省全在用备源的价，界面一个字都没提。
+ *
+ * ⚠️ 内部源（口径互校之类）的问题不进界面：它的数据根本不展示给用户，
+ *    报出来只会让人以为自己的价有问题。
+ *
+ * @param {Array} sources 后端给的来源健康列表
+ * @returns {string} 空串 = 没有需要提示的
+ */
+function syncSourceHint(sources) {
+  if (!sources || !sources.length) return '';
+  var bad = sources.filter(function (s) {
+    if (s.internal) return false;
+    return s.blocked || s.status === 'degraded' || s.status === 'failed';
+  });
+  if (!bad.length) return '';
+  var names = bad.map(function (s) { return s.name || s.id; });
+  var text = names.join('、') + '暂不可用';
+  // ⚠️ 只有「确实被备源接住了」才说「已由备源供数」——
+  //    「这个源没抓到」不等于「备源接住了」（全都失败时不能这么说）
+  var takenOver = 0;
+  bad.forEach(function (s) {
+    if (typeof s.takenOver === 'number') takenOver += s.takenOver;
+  });
+  if (takenOver) text += '，已由备源供数';
+  return text;
+}
+
+/**
  * 同步状态的展示信息；未知状态给中性文案，不要报异常。
  *
  * @param {string} status 后端给的同步状态（payload.sync.status）
@@ -404,6 +437,7 @@ module.exports = {
   windowTitle: windowTitle,
   windowMeta: windowMeta,
   syncStatus: syncStatus,
+  syncSourceHint: syncSourceHint,
   sourceLine: sourceLine,
   sourceName: sourceName,
   directionText: directionText,

@@ -70,23 +70,126 @@ function fetchSource(source) {
     headers: Object.assign({ 'User-Agent': 'oil-trend-collector/1.0' }, source.headers || {}),
     timeout: 15000,
     // 重定向只允许跳到白名单里的主机
-    allowedHosts: source.allowedHosts || []
+    allowedHosts: source.allowedHosts || [],
+    // 熔断按来源记：这个来源连续被拒到阈值，冷却期内一个请求都不再发
+    scope: source.id || ''
   }).then(function (res) {
+    // ⚠️ 站点可能用「HTTP 200 + 错误页」拒绝访问（2026-11-24 实测 xmgcn 如此）。
+    //    状态码是 200，不看正文就会当成「抓取成功」，然后报「解析不出字段」——
+    //    排查方向会被引到解析器上，而真正的原因是**站点在拒绝我们**。
+    if (res.blocked) {
+      return {
+        ok: false,
+        reason: 'SOURCE_BLOCKED',
+        message: '来源返回错误页（' + res.blocked + '），站点在拒绝访问，不是页面结构变了'
+      };
+    }
     if (res.statusCode !== 200) {
       return { ok: false, reason: 'HTTP_' + res.statusCode, message: '接口返回异常状态码' };
     }
     return { ok: true, body: res.body };
   }).catch(function (err) {
     var msg = (err && err.message) || String(err);
-    var reason = msg === 'TIMEOUT' ? 'FETCH_TIMEOUT'
-      : (msg === 'TOTAL_TIMEOUT' ? 'FETCH_TIMEOUT'
-      : (msg === 'RESPONSE_TOO_LARGE' ? 'RESPONSE_TOO_LARGE'
-      : (msg === 'URL_INVALID' ? 'URL_INVALID'
-      : (msg === 'TOO_MANY_REDIRECTS' ? 'TOO_MANY_REDIRECTS'
-      : (msg === 'REDIRECT_BLOCKED' ? 'REDIRECT_BLOCKED'
-      : (msg === 'PROTOCOL_UNSUPPORTED' ? 'PROTOCOL_UNSUPPORTED' : 'FETCH_ERROR'))))));
-    return { ok: false, reason: reason, message: msg };
+    var reason = 'FETCH_ERROR';
+    var message = msg;
+    if (msg === 'TIMEOUT' || msg === 'TOTAL_TIMEOUT') {
+      reason = 'FETCH_TIMEOUT';
+    } else if (msg === 'SOURCE_BLOCKED_COOLDOWN') {
+      reason = 'SOURCE_BLOCKED_COOLDOWN';
+      message = '来源处于拒绝冷却期，本轮不再请求它（上一轮连续被拒）';
+    } else if (msg === 'RESPONSE_TOO_LARGE') {
+      reason = 'RESPONSE_TOO_LARGE';
+    } else if (msg === 'URL_INVALID') {
+      reason = 'URL_INVALID';
+    } else if (msg === 'TOO_MANY_REDIRECTS') {
+      reason = 'TOO_MANY_REDIRECTS';
+    } else if (msg === 'REDIRECT_BLOCKED') {
+      reason = 'REDIRECT_BLOCKED';
+    } else if (msg === 'PROTOCOL_UNSUPPORTED') {
+      reason = 'PROTOCOL_UNSUPPORTED';
+    }
+    return { ok: false, reason: reason, message: message };
   });
+}
+
+/**
+ * 一条采集结果该进哪个桶。
+ *
+ * ⚠️ 内部源（只做口径互校之类）的失败进 advisory 桶，**不进 needsReview**：
+ *    它的数据根本不进界面，它挂了用户看到的价还是对的。
+ *    以前 xmgcn 的调价时间表被站点拒绝，每轮都往待核对队列塞一条，
+ *    于是调价页长期显示「等待人工核对（1 条）」，而价格与公告全都正常。
+ *
+ * @param {object} result 采集结果
+ * @returns {'needsReview'|'advisory'|null} null = 没问题
+ */
+function resultBucket(result) {
+  if (!result) return null;
+  if (result.status === 'degraded') return 'advisory';
+  if (result.status !== 'needsReview' && result.status !== 'failed') return null;
+  return result.internal === true ? 'advisory' : 'needsReview';
+}
+
+/**
+ * 这个来源的数据会不会展示给用户。
+ *
+ * ⚠️ 内部源（口径互校之类）失败**不能**把用户看到的「等待人工核对」点亮：
+ * 它的数据根本不进界面，它挂了用户看到的价还是对的。
+ * 以前 xmgcn 的调价时间表被站点拒绝，每轮都往待核对队列塞一条，
+ * 于是调价页长期显示「等待人工核对（1 条）」，而价格与公告全都正常。
+ *
+ * 判定顺序：显式 internal 标记 → provides 里有没有用户侧数据 → kind。
+ */
+var USER_FACING_PROVIDES = ['price', 'history', 'notice', 'forecast', 'window', 'market'];
+
+function isUserFacingSource(source) {
+  if (!source) return false;
+  if (source.internal === true) return false;
+  var provides = source.provides || [];
+  if (provides.length) {
+    return provides.some(function (p) { return USER_FACING_PROVIDES.indexOf(p) >= 0; });
+  }
+  // 没写 provides 的源按 kind 判：价格/公告/预测/行情都是用户侧数据
+  return ['price', 'notice', 'forecast', 'market'].indexOf(source.kind) >= 0;
+}
+
+/**
+ * 从已入库的官方公告里取出「每轮调价的官方吨价」，供口径互校使用。
+ *
+ * ⚠️ 日期口径：公告写「自11月12日24时起」→ executeAt = 11-12，
+ *    而新挂牌价从**次日** 00:00 才开始挂（历史表的生效日是 11-13）。
+ *    互校要跟历史表的日期对齐，所以这里 +1 天。
+ *
+ * 为什么用公告而不是第三方时间表：公告是权威一手来源、我们已经在采集了
+ * （零额外请求），而且不会因为某个站点关页面就整个失效 ——
+ * 2026-11-24 xmgcn 的调价时间表页就变成了「HTTP 200 + nginx 403 错误页」。
+ *
+ * @param {Array} notices 已入库的公告（approved）
+ * @returns {Array} [{ date, gasolineDelta, dieselDelta }]，按日期升序
+ */
+function tonRoundsFromNotices(notices) {
+  var out = [];
+  (notices || []).forEach(function (n) {
+    var exec = String(n.executeAt || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(exec)) return;
+    var ton = n.tonChanges || {};
+    // 搁浅轮次没有吨价；没有吨价就不参与互校（不猜）
+    if (typeof ton.gasoline !== 'number' || !ton.gasoline) return;
+    out.push({
+      date: shiftDate(exec, 1),
+      gasolineDelta: ton.gasoline,
+      dieselDelta: typeof ton.diesel === 'number' ? ton.diesel : null
+    });
+  });
+  out.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+  return out;
+}
+
+/** 日期平移（天）。解析不出来返回 null。 */
+function shiftDate(dateStr, days) {
+  var t = Date.parse(dateStr + 'T00:00:00Z');
+  if (!isFinite(t)) return null;
+  return new Date(t + days * 86400000).toISOString().slice(0, 10);
 }
 
 /* ---------------- 地区路径名 ---------------- */
@@ -322,6 +425,7 @@ async function fetchRegionPages(source, regions, cache) {
       var fail = { reason: 'PARSE_FAILED', message: '页面抓取成功但解析不出四油品价格' };
       for (var attempt = 0; attempt < 2; attempt++) {
         var fetched = await fetchSource({
+          id: source.id,
           url: regionUrl(source, region),
           headers: source.headers,
           allowedHosts: source.allowedHosts
@@ -392,13 +496,27 @@ async function collectPriceChain(priceSources, options) {
   result.stale = pending.length;
 
   var lastFailure = {};
+  // 每个来源各自记账：主源被站点拒绝、备源接管了多少省份，要看得见
+  // （以前只看最终结果，主源全挂、备源全接也看不出来）
+  var srcStats = [];
   for (var si = 0; si < priceSources.length && pending.length; si++) {
     var src = priceSources[si];
+    var stat = {
+      sourceId: src.id,
+      name: src.name,
+      tried: pending.length,
+      ok: 0,
+      failed: 0,
+      failedRegions: [],
+      reasons: {}
+    };
+    srcStats.push(stat);
     var fetched = await fetchRegionPages(src, pending, cache);
     var stillPending = [];
     pending.forEach(function (region) {
       var r = fetched[region.code];
       if (r && r.ok) {
+        stat.ok++;
         result.adopted[region.code] = { source: src, parsed: r.parsed };
         // 主源失败、被备源接管的，要留一条告警（不阻断，但要看得到）
         if (si > 0) {
@@ -410,6 +528,10 @@ async function collectPriceChain(priceSources, options) {
           });
         }
       } else {
+        stat.failed++;
+        stat.failedRegions.push(region.code);
+        var reason = r ? r.reason : 'UNKNOWN';
+        stat.reasons[reason] = (stat.reasons[reason] || 0) + 1;
         stillPending.push(region);
         lastFailure[region.code] = {
           regionCode: region.code,
@@ -421,6 +543,7 @@ async function collectPriceChain(priceSources, options) {
     });
     pending = stillPending;
   }
+  result.sourceStats = srcStats;
   pending.forEach(function (region) {
     var f = lastFailure[region.code] || {
       regionCode: region.code,
@@ -648,6 +771,50 @@ function historySeries(parsed) {
 }
 
 /**
+ * 历史序列（各省 → 日期 → 油品价），给入库闸门与调价节点推导用。
+ *
+ * 优先用**当轮解析出来的来源历史**（油价网的 30 期表，最准）；
+ * 解析不出来时（主源被站点拒绝、备源接管 —— 备源没有历史表），
+ * 回落到**库里累积的历史**：那是历次采集攒下来的，不依赖某一个源还在。
+ *
+ * ⚠️ 不回落的后果：主源一被拒，序列就是空的，deriveAdjustEvents 拿不到东西，
+ *    调价节点再也不更新（走势页的拐点停在最后一次成功采集那一刻），
+ *    而且**没有任何报错** —— 节点数恒为 0，
+ *    分不清是「这段时间没调价」还是「根本没数据」。
+ *
+ * @returns {Promise<{series:object, from:string}>} from = 'source' | 'db'
+ */
+async function buildSeries(chain) {
+  var series = {};
+  var adopted = (chain && chain.adopted) || {};
+  var codes = Object.keys(adopted);
+  // ⚠️ 这一轮**一个地区都没采到**（全部在新鲜期内跳过、或价格源全挂）→
+  //    没有新数据，就不该拿库里的历史重新推导节点：
+  //    那是把「这轮没采到」变成「节点变了」，还会动到推算下一轮调价日的基准。
+  if (!codes.length) return { series: series, from: 'none' };
+  codes.forEach(function (code) {
+    var ser = historySeries(adopted[code].parsed);
+    if (Object.keys(ser).length) series[code] = ser;
+  });
+  if (Object.keys(series).length) return { series: series, from: 'source' };
+
+  // 主源被站点拒绝、备源接管（备源没有历史表）→ 回落用库里累积的历史
+  var rows = await dao.history.listAll();
+  var dbSeries = {};
+  (rows || []).forEach(function (h) {
+    var code = h.regionCode;
+    var date = String(h.date || '').slice(0, 10);
+    if (!code || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    var price = Number(h.price);
+    if (!isFinite(price)) return;
+    if (!dbSeries[code]) dbSeries[code] = {};
+    if (!dbSeries[code][date]) dbSeries[code][date] = {};
+    dbSeries[code][date][h.fuelId] = price;
+  });
+  return { series: dbSeries, from: 'db' };
+}
+
+/**
  * 跨省一致性统计。
  *
  * 对每个 (日期, 油品)：算各省相对**自己上一期**的变化幅度，取跨省中位数与 MAD。
@@ -855,7 +1022,12 @@ async function saveHistory(source, region, parsed, stats) {
  * ⚠️ 幅度口径：写进 oil_adjust_events 的 deltas 是「各省挂牌价实测差值」，
  * 展示层必须标「据各地挂牌价测算」，不能写成官方公布值。
  */
-function deriveAdjustEvents(seriesByCode) {
+function deriveAdjustEvents(seriesByCode, origin) {
+  // origin 决定节点记到哪个来源名下：走来源历史表记 xmgcn，
+  // 走库内累积历史记 measured-history（别把混合来源的数据说成某一个源的）
+  var from = origin || {};
+  var dedupSource = from.dedupSource || 'xmgcn-history';
+  var sourceId = from.source || 'xmgcn';
   var codes = Object.keys(seriesByCode);
   if (!codes.length) return [];
   var dates = {};
@@ -890,11 +1062,11 @@ function deriveAdjustEvents(seriesByCode) {
       deltas[fuel.id] = median(list);
     });
     out.push({
-      dedupKey: shared.dedupKey('xmgcn-history', '国内成品油价格调整', d),
+      dedupKey: shared.dedupKey(dedupSource, '国内成品油价格调整', d),
       date: d,
       title: '国内成品油价格调整',
       deltas: deltas,
-      source: 'xmgcn'
+      source: sourceId
     });
   });
   return out;
@@ -1288,17 +1460,24 @@ function run(options) {
 
   var results = [];
   var needsReview = [];
+  var advisories = [];
 
   function push(result) {
-    results.push(result);
-    if (result.status === 'needsReview' || result.status === 'failed') {
-      needsReview.push({
-        sourceId: result.sourceId,
-        reason: result.reason,
-        message: result.message,
-        at: nowIso()
-      });
+    var bucket = resultBucket(result);
+    if (bucket === 'advisory') {
+      // 内部源的失败：状态降级为 degraded，不进 needsReview
+      result.status = 'degraded';
+      result.advisory = true;
     }
+    results.push(result);
+    var entry = {
+      sourceId: result.sourceId,
+      reason: result.reason,
+      message: result.message,
+      at: nowIso()
+    };
+    if (bucket === 'needsReview') needsReview.push(entry);
+    else if (bucket === 'advisory') advisories.push(entry);
   }
 
   var enabled = sources.SOURCES.filter(function (s) { return s.enabled; });
@@ -1367,76 +1546,87 @@ function run(options) {
     .then(function () {
       if (!chain) return null;
       // ---- 3. 历史入库（五道闸门）----
-      var series = {};
-      var codes = Object.keys(chain.adopted);
-      codes.forEach(function (code) {
-        var ser = historySeries(chain.adopted[code].parsed);
-        if (Object.keys(ser).length) series[code] = ser;
-      });
-      if (!Object.keys(series).length) return null;
-      var stats = crossProvinceStats(series);
-      var historyAdvisories = [];
-      var historyDropped = [];
-      var historySaved = 0;
-      var promise = Promise.resolve();
-      codes.forEach(function (code) {
-        promise = promise.then(function () {
-          var region = shared.REGIONS.filter(function (r) { return r.code === code; })[0];
-          if (!region) return;
-          var item = chain.adopted[code];
-          return saveHistory(item.source, region, item.parsed, stats).then(function (res) {
-            historySaved += res.saved || 0;
-            if (res.advisories && res.advisories.length) {
-              historyAdvisories = historyAdvisories.concat(res.advisories);
-            }
-            if (res.dropped && res.dropped.length) {
-              historyDropped = historyDropped.concat(res.dropped);
-            }
+      // 序列优先取当轮解析出来的来源历史；主源被站点拒绝时回落到库内累积历史
+      // （见 buildSeries 的说明：不回落的话调价节点会静默停更）
+      return buildSeries(chain).then(function (built) {
+        var series = built.series;
+        if (!Object.keys(series).length) return null;
+        var stats = crossProvinceStats(series);
+        var historyAdvisories = [];
+        var historyDropped = [];
+        var historySaved = 0;
+        var promise = Promise.resolve();
+        var codes = Object.keys(chain.adopted);
+        codes.forEach(function (code) {
+          promise = promise.then(function () {
+            var region = shared.REGIONS.filter(function (r) { return r.code === code; })[0];
+            if (!region) return;
+            var item = chain.adopted[code];
+            return saveHistory(item.source, region, item.parsed, stats).then(function (res) {
+              historySaved += res.saved || 0;
+              if (res.advisories && res.advisories.length) {
+                historyAdvisories = historyAdvisories.concat(res.advisories);
+              }
+              if (res.dropped && res.dropped.length) {
+                historyDropped = historyDropped.concat(res.dropped);
+              }
+            });
           });
         });
-      });
-      return promise.then(function () {
-        chain.historySaved = historySaved;
-        chain.historyAdvisories = historyAdvisories;
-        chain.historyDropped = historyDropped;
-        // ---- 4. 调价节点：从历史实测推导全年节点 ----
-        var events = deriveAdjustEvents(series);
-        return dao.events.upsertMany(events).then(function () {
-          chain.adjustEvents = events.length;
-          chain.stats = stats;
+        return promise.then(function () {
+          chain.historySaved = historySaved;
+          chain.historyAdvisories = historyAdvisories;
+          chain.historyDropped = historyDropped;
+          chain.seriesFrom = built.from;
+          // ---- 4. 调价节点：从历史实测推导全年节点 ----
+          // ⚠️ 去重键两条路径共用（'xmgcn-history'）：同一个调价日算出来的节点
+          //    日期与幅度是一样的，换键会在库里留下两行同一天的节点。
+          var origin = built.from === 'db'
+            ? { source: 'measured-history', dedupSource: 'xmgcn-history' }
+            : { source: 'xmgcn', dedupSource: 'xmgcn-history' };
+          var events = deriveAdjustEvents(series, origin);
+          return dao.events.upsertMany(events).then(function () {
+            chain.adjustEvents = events.length;
+            chain.stats = stats;
+          });
         });
       });
     })
     .then(function () {
-      // ---- 5. 官方调价时间表：口径互校 ----
-      if (!timelineSources.length) return null;
-      var src = timelineSources[0];
-      return fetchSource({ url: src.url, headers: src.headers, allowedHosts: src.allowedHosts })
-        .then(function (fetched) {
-          if (!fetched.ok) {
-            push({ sourceId: src.id, status: 'failed', reason: fetched.reason, message: fetched.message });
-            return null;
-          }
-          var parsed = null;
-          try {
-            parsed = sources.PARSERS[src.parser](fetched.body);
-          } catch (err) {
-            parsed = null;
-          }
-          if (!parsed) {
+      // ---- 5. 口径互校：官方吨价 → 每升，跟各省实测中位数比一比 ----
+      //
+      // ⚠️ 主路径用**发改委公告里的官方吨价**（已经在库里，零额外请求）：
+      //     权威一手来源，不会因为某个第三方站点关页面就整个失效 ——
+      //     2026-11-24 实测 xmgcn 的调价时间表页返回「HTTP 200 + nginx 403 错误页」。
+      //
+      // xmgcn 的时间表只作**补充**（它覆盖的历史轮次更多，拿得到就多校几轮）。
+      // 它是内部互校源：失败只记告警，不把用户看到的「等待人工核对」点亮 ——
+      // 它的数据根本不进界面，它挂了用户看到的价还是对的。
+      var stats = chain && chain.stats ? chain.stats : {};
+      var promise = Promise.resolve();
+
+      // ---- 5a. 发改委公告吨价（主路径）----
+      promise = promise.then(function () {
+        return dao.notices.listApprovedWithTon(60).then(function (rows) {
+          var rounds = tonRoundsFromNotices(rows);
+          var check = timelineCrossCheck(rounds, stats);
+          if (!check.checked) {
+            // 没有可比对的轮次 → 说清楚是「没得比」，不能报「互证通过」
             push({
-              sourceId: src.id,
-              status: 'needsReview',
-              reason: 'PARSE_FAILED',
-              message: '时间表抓取成功但解析不出调价轮次，已转人工核对'
+              sourceId: 'ndrc-ton',
+              sourceName: '发改委公告吨价',
+              status: 'skipped',
+              rounds: rounds.length,
+              checked: 0,
+              message: '官方吨价轮次 ' + rounds.length + ' 条，但没有可互校的历史实测值'
             });
             return null;
           }
-          var check = timelineCrossCheck(parsed.items, chain && chain.stats ? chain.stats : {});
           push({
-            sourceId: src.id,
+            sourceId: 'ndrc-ton',
+            sourceName: '发改委公告吨价',
             status: check.advisories.length ? 'needsReview' : 'ok',
-            rounds: parsed.items.length,
+            rounds: rounds.length,
             checked: check.checked,
             advisories: check.advisories,
             message: check.advisories.length
@@ -1445,6 +1635,64 @@ function run(options) {
           });
           return null;
         });
+      });
+
+      // ---- 5b. 第三方调价时间表（补充，内部源）----
+      timelineSources.forEach(function (src) {
+        promise = promise.then(function () {
+          return fetchSource({
+            id: src.id,
+            url: src.url,
+            headers: src.headers,
+            allowedHosts: src.allowedHosts
+          }).then(function (fetched) {
+            if (!fetched.ok) {
+              push({
+                sourceId: src.id,
+                sourceName: src.name,
+                status: 'failed',
+                internal: true,
+                reason: fetched.reason,
+                message: fetched.message
+              });
+              return null;
+            }
+            var parsed = null;
+            try {
+              parsed = sources.PARSERS[src.parser](fetched.body);
+            } catch (err) {
+              parsed = null;
+            }
+            if (!parsed) {
+              push({
+                sourceId: src.id,
+                sourceName: src.name,
+                status: 'needsReview',
+                internal: true,
+                reason: 'PARSE_FAILED',
+                message: '时间表抓取成功但解析不出调价轮次（内部互校源，不影响对外数据）'
+              });
+              return null;
+            }
+            var check = timelineCrossCheck(parsed.items, stats);
+            push({
+              sourceId: src.id,
+              sourceName: src.name,
+              status: check.advisories.length ? 'needsReview' : 'ok',
+              internal: true,
+              rounds: parsed.items.length,
+              checked: check.checked,
+              advisories: check.advisories,
+              message: check.advisories.length
+                ? '官方吨价与各省实测口径对不上（补充互校）'
+                : '官方吨价与各省实测互证通过（' + check.checked + ' 轮，补充互校）'
+            });
+            return null;
+          });
+        });
+      });
+
+      return promise;
     })
     .then(function () {
       // ---- 6. 预测源 + 交叉校核 ----
@@ -1468,6 +1716,37 @@ function run(options) {
     })
     .then(function () {
       // ---- 8. 汇总价格链结果 ----
+      // 先按来源分别报一遍：主源被拒、备源接管了多少省份，
+      // 必须能从「来源健康」里看出来（以前只看最终结果，主源全挂也看不出来）
+      if (chain && chain.sourceStats) {
+        chain.sourceStats.forEach(function (st) {
+          var reasons = Object.keys(st.reasons || {}).map(function (k) {
+            return k + '×' + st.reasons[k];
+          }).join('、');
+          // 这个源没抓到的地区里，有多少是被**别的源接住**的 ——
+          // 「没抓到」和「备源接住了」是两回事，界面不能混着说
+          var takenOver = (st.failedRegions || []).filter(function (code) {
+            var adopted = chain.adopted[code];
+            return !!adopted && adopted.source && adopted.source.id !== st.sourceId;
+          }).length;
+          push({
+            sourceId: st.sourceId,
+            sourceName: st.name,
+            status: st.failed ? 'degraded' : 'ok',
+            saved: st.ok,
+            tried: st.tried,
+            failed: st.failed,
+            takenOver: takenOver,
+            degraded: (st.failedRegions || []).map(function (code) {
+              return { regionCode: code };
+            }),
+            message: st.failed
+              ? (st.name + ' 有 ' + st.failed + ' 个地区抓不到（' + (reasons || '未知原因') + '）' +
+                (takenOver ? '，其中 ' + takenOver + ' 个由备源接住' : ''))
+              : (st.name + ' 供数 ' + st.ok + ' 个地区')
+          });
+        });
+      }
       if (chain) {
         var priceStatus = (chain.failures && chain.failures.length) ? 'needsReview' : 'ok';
         push({
@@ -1494,10 +1773,13 @@ function run(options) {
       var runDoc = {
         startedAt: startedAt,
         finishedAt: nowIso(),
+        // needsReview 里只剩**用户侧**来源的失败：内部源的问题走 advisories，
+        // 不该让用户看到「等待人工核对」。
         status: allSkipped ? 'idle' : (needsReview.length ? 'partial' : 'ok'),
         sourceName: '服务端定时采集',
         results: results,
-        needsReview: needsReview
+        needsReview: needsReview,
+        advisories: advisories
       };
       return dao.runs.insert(runDoc).then(function () { return runDoc; });
     })
@@ -1517,6 +1799,12 @@ function run(options) {
 module.exports = {
   run: run,
   collectFromSource: collectFromSource,
+  // 下面这几个是给自检钉住行为的纯函数
+  fetchSource: fetchSource,
+  resultBucket: resultBucket,
+  isUserFacingSource: isUserFacingSource,
+  tonRoundsFromNotices: tonRoundsFromNotices,
+  buildSeries: buildSeries,
   saveNotice: saveNotice,
   saveWindow: saveWindow,
   saveRegionPrices: saveRegionPrices,

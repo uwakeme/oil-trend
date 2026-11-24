@@ -141,6 +141,17 @@ const history = {
     return mapRows(rows);
   },
 
+  /**
+   * 全量历史价（所有地区、所有油品、所有日期）。
+   *
+   * 用途：主源被站点拒绝、拿不到来源自己的历史表时，用库里累积的历史
+   * 推导调价节点 —— 库里的历史不依赖某一个源还在不在。
+   */
+  async listAll() {
+    var rows = await db.query('SELECT * FROM oil_price_history ORDER BY region_code, fuel_id, date');
+    return mapRows(rows);
+  },
+
   async listByRegion(regionCode, fromDate) {
     var params = [regionCode];
     var sql = 'SELECT * FROM oil_price_history WHERE region_code = $1';
@@ -263,6 +274,24 @@ const notices = {
       }
     }
     var rows = await db.query(sql, params);
+    return mapRows(rows);
+  },
+
+  /**
+   * 已复核、且带官方吨价的公告（按执行日倒序）。
+   *
+   * 口径互校要用「官方公布的每吨涨跌」换算成每升，跟各省挂牌价实测比一比。
+   * ⚠️ 用公告而不是第三方时间表：公告是权威一手来源、采集时已经在库里了
+   *    （零额外请求），也不会因为某个站点关页面就整个失效。
+   */
+  async listApprovedWithTon(limit) {
+    var lim = Math.max(1, Math.floor(Number(limit) || 60));
+    // LIMIT 直接内联数字，不走占位符（见上面的说明）
+    var rows = await db.query(
+      "SELECT * FROM oil_notices WHERE kind = 'official' AND review_status = 'approved' " +
+      "AND execute_at IS NOT NULL AND ton_changes IS NOT NULL AND ton_changes <> '{}'::jsonb " +
+      'ORDER BY execute_at DESC LIMIT ' + lim
+    );
     return mapRows(rows);
   },
 
@@ -761,15 +790,16 @@ const runs = {
 
   async insert(run) {
     await db.query(
-      'INSERT INTO collector_runs (started_at, finished_at, status, source_name, results, needs_review) ' +
-      'VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)',
+      'INSERT INTO collector_runs (started_at, finished_at, status, source_name, results, needs_review, advisories) ' +
+      'VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb)',
       [
         run.startedAt || new Date().toISOString(),
         run.finishedAt || new Date().toISOString(),
         run.status || 'idle',
         run.sourceName || null,
         JSON.stringify(run.results || []),
-        JSON.stringify(run.needsReview || [])
+        JSON.stringify(run.needsReview || []),
+        JSON.stringify(run.advisories || [])
       ]
     );
   }

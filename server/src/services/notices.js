@@ -8,6 +8,8 @@ const shared = require('../shared/shared');
 const query = require('./query');
 // 挂牌价测算：公告只给吨价，每升四油品幅度靠各地挂牌价的前后快照差值
 const measure = require('./measure');
+const sources = require('./sources');
+const httpClient = require('./http-client');
 
 /* ---------------- 调价通知 ---------------- */
 
@@ -108,7 +110,11 @@ function actionNotices(payload) {
           status: lastRun ? (lastRun.needsReview && lastRun.needsReview.length ? 'pending' : (lastRun.status || 'idle')) : 'idle',
           lastCheckedAt: lastRun ? lastRun.finishedAt : '',
           sourceName: lastRun ? lastRun.sourceName : '服务端定时采集',
-          sourceUrl: ''
+          sourceUrl: '',
+          // 内部源的问题：不影响对外数据，但要能查到
+          advisories: lastRun ? (lastRun.advisories || []) : [],
+          // 每个来源这一轮的状态（主源被拒、备源接管一眼看得出）
+          sources: sourceHealth(lastRun)
         },
         notices: notices.map(function (n) {
           var measured = (measuredByDate[n.executeAt] || {});
@@ -271,6 +277,48 @@ function quoteTimeOf(sliced) {
 /* ---------------- 同步状态 ---------------- */
 
 /**
+ * 来源健康：每个来源这一轮是什么状态。
+ *
+ * ⚠️ 为什么要有：主源被站点拒绝时，价格会由备源顶上，数据照样是新的 ——
+ *    但如果没人看得见，就会一直以为「一切正常」。
+ *    2026-11-24 实测就是这样：主源被拒、31 个省全在用备源的价，
+ *    而界面上一个字都没提。
+ *
+ * 被拒的来源还会带上熔断信息（冷却到什么时候、被拒几次）。
+ */
+function sourceHealth(lastRun) {
+  var list = [];
+  var results = (lastRun && lastRun.results) || [];
+  results.forEach(function (r) {
+    var cfg = sources.SOURCES.filter(function (x) { return x.id === r.sourceId; })[0] || null;
+    var blocked = httpClient.blockedInfo(r.sourceId);
+    list.push({
+      id: r.sourceId,
+      name: r.sourceName || (cfg ? cfg.name : r.sourceId),
+      status: r.status,
+      reason: r.reason || '',
+      message: r.message || '',
+      saved: typeof r.saved === 'number' ? r.saved : null,
+      checked: typeof r.checked === 'number' ? r.checked : null,
+      // 主源挂掉时有多少省份改由备源供数
+      takenOver: typeof r.takenOver === 'number' ? r.takenOver : 0,
+      degraded: Array.isArray(r.degraded) ? r.degraded.length : 0,
+      // 内部源：数据不展示给用户，它的问题不算「对外数据有问题」
+      // ⚠️ 只看 source 自己声明的 internal，**不能**把 advisory 也算进去 ——
+      //    advisory 的意思是「降级了但不进待核对队列」，
+      //    主源被拒、备源接管就是这种情况，它照样要告诉用户「来源变了」。
+      internal: r.internal === true,
+      // 被拒 / 熔断信息
+      blocked: !!blocked,
+      blockedLabel: blocked ? blocked.label : '',
+      blockedCount: blocked ? blocked.count : 0,
+      blockedAt: blocked ? blocked.at : ''
+    });
+  });
+  return list;
+}
+
+/**
  * 采集同步状态。
  * 早期是 actionHome 顺带返回的，这里拆成独立接口 ——
  * 它只被调价页用，不必混进首页响应。
@@ -291,6 +339,10 @@ function actionSyncStatus() {
       sourceName: lastRun.sourceName || '服务端定时采集',
       lastCheckedAt: lastRun.finishedAt || '',
       needsReview: lastRun.needsReview || [],
+      // 内部源（口径互校之类）的问题：不进 needsReview，但要让运维看得见
+      advisories: lastRun.advisories || [],
+      // 每个来源这一轮的状态（主源被拒、备源接管一眼看得出）
+      sources: sourceHealth(lastRun),
       source: { mode: 'server', name: lastRun.sourceName || '服务端定时采集', note: '数据来自服务端采集的官方公告' }
     };
   });
@@ -300,6 +352,7 @@ module.exports = {
   actionNotices: actionNotices,
   actionMarket: actionMarket,
   actionSyncStatus: actionSyncStatus,
+  sourceHealth: sourceHealth,
   sliceSeries: sliceSeries,
   seriesTime: seriesTime
 };

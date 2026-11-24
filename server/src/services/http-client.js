@@ -22,6 +22,113 @@ const { URL } = require('url');
 
 var MAX_BYTES = 5 * 1024 * 1024;
 
+/* ---------------- 软 403 / 错误页识别 ---------------- */
+
+/**
+ * 站点「拒绝访问」的几种常见表现。
+ *
+ * ⚠️ 关键：**不一定回 HTTP 403**。
+ * xmgcn.com 在 2026-11-24 实测：请求任何路径都回 **HTTP 200**，
+ * 正文却是 nginx 的 403 错误页（138 字节静态文件，last-modified 2025-06-05）。
+ * 抓取层只看状态码就会把它当成「抓取成功」，解析器再报「解析不出字段」——
+ * 排查的人会去查解析器，而真正的问题是**站点在拒绝我们**。
+ *
+ * 所以正文也要看：命中特征就是「被拒」，不是「页面结构变了」。
+ */
+var BLOCK_SIGNATURES = [
+  { re: /403\s*Forbidden/i, label: '403 Forbidden' },
+  { re: /<title>\s*[45]\d\d\b/i, label: 'nginx 错误页' },
+  { re: /Access\s+Denied/i, label: 'Access Denied' },
+  { re: /502\s+Bad\s+Gateway|503\s+Service\s+Unavailable|504\s+Gateway/i, label: '网关错误页' },
+  { re: /Just a moment/i, label: 'WAF 人机校验页' },
+  { re: /滑动验证|人机验证|安全验证/, label: 'WAF 人机校验页' }
+];
+
+/**
+ * 判断正文是不是「错误页 / 拦截页」。
+ *
+ * ⚠️ 只在**短页面**上判定：真实页面几十 KB，错误页几百字节。
+ * 不加长度限制的话，一篇正文里出现「安全验证」四个字就会误判成被拦。
+ *
+ * @param {string} body 响应正文
+ * @returns {string|null} 命中的特征名；不是错误页返回 null
+ */
+function detectBlockPage(body) {
+  var html = String(body || '');
+  if (!html) return null;
+  if (html.length > 4096) return null;
+  for (var i = 0; i < BLOCK_SIGNATURES.length; i++) {
+    if (BLOCK_SIGNATURES[i].re.test(html)) return BLOCK_SIGNATURES[i].label;
+  }
+  return null;
+}
+
+/* ---------------- 来源级熔断 ---------------- */
+
+/**
+ * 被拒的来源要停下来，别再敲。
+ *
+ * ⚠️ 为什么必须有：价格源一次要抓 31 个省，每个省还会重试一次 ——
+ * 站点在拒绝我们的时候，这套流程等于每 30 分钟往对方脸上打 62 个请求，
+ * 轻则白跑，重则把我们的出口 IP 也拉黑，连兜底源一起赔进去。
+ *
+ * 所以连续被拒就熔断：冷却期内这个来源**一个请求都不发**，
+ * 直接让降级链的下一个源接手。
+ *
+ * 熔断按**来源**记，不按主机记：站点可能只拦某条路径
+ * （xmgcn 的调价时间表被拦，省份页照常），按主机记会误伤还在正常工作的路径。
+ */
+var BLOCK_THRESHOLD = 3;                  // 连续几次被拒才熔断（别被偶发一次误伤）
+var BLOCK_COOLDOWN_MS = 6 * 3600 * 1000;  // 熔断后冷却 6 小时再试（与价格源 6 小时新鲜期一致）
+var blockedScopes = {};
+
+function scopeKey(scope) {
+  return String(scope || '');
+}
+
+/**
+ * 记一次「被拒」。连续到阈值就开熔断。
+ * @returns {object} 当前状态 { count, until, label, at }
+ */
+function markBlocked(scope, label) {
+  var key = scopeKey(scope);
+  if (!key) return null;
+  var cur = blockedScopes[key] || { count: 0, until: 0, label: '', at: '' };
+  cur.count += 1;
+  cur.label = label || cur.label;
+  cur.at = new Date().toISOString();
+  if (cur.count >= BLOCK_THRESHOLD) {
+    cur.until = Date.now() + BLOCK_COOLDOWN_MS;
+  }
+  blockedScopes[key] = cur;
+  return cur;
+}
+
+/** 该来源是否处于冷却期（冷却期内不再发请求） */
+function isBlocked(scope) {
+  var cur = blockedScopes[scopeKey(scope)];
+  return !!(cur && cur.until > Date.now());
+}
+
+/** 该来源的被拒记录（给运维看） */
+function blockedInfo(scope) {
+  return blockedScopes[scopeKey(scope)] || null;
+}
+
+/** 抓成功了：清掉被拒计数（站点恢复了就别再熔断） */
+function clearBlocked(scope) {
+  var key = scopeKey(scope);
+  if (!key) return;
+  if (blockedScopes[key]) {
+    blockedScopes[key] = { count: 0, until: 0, label: '', at: '' };
+  }
+}
+
+/** 清空全部熔断状态（测试用） */
+function resetBlocked() {
+  blockedScopes = {};
+}
+
 /**
  * 发起一次 GET 请求
  * @param {string} url 地址
@@ -35,6 +142,10 @@ function get(url, options) {
   var opts = options || {};
   var timeout = opts.timeout || 15000;
   var maxRedirects = opts.maxRedirects === undefined ? 3 : opts.maxRedirects;
+  // 熔断期内的来源一个请求都不发：站点在拒绝我们时，再打 62 次只会把出口 IP 也搭进去
+  if (opts.scope && isBlocked(opts.scope)) {
+    return Promise.reject(new Error('SOURCE_BLOCKED_COOLDOWN'));
+  }
   // 总预算 = 单跳超时的两倍，至少覆盖一次跳转
   var deadline = Date.now() + (opts.totalTimeout || timeout * 2);
   var firstHost = null;
@@ -129,9 +240,19 @@ function get(url, options) {
           });
           res.on('end', function () {
             if (tooLarge) return;
+            var body = Buffer.concat(chunks).toString('utf8');
+            // 站点可能用「HTTP 200 + 错误页」拒绝访问（xmgcn 就是这么干的），
+            // 状态码看不出被拒，得看正文。命中就把这次记成「被拒」并计入熔断。
+            var blocked = detectBlockPage(body);
+            if (blocked) {
+              markBlocked(opts.scope, blocked);
+            } else if (opts.scope) {
+              clearBlocked(opts.scope);
+            }
             settle(resolve, {
               statusCode: status,
-              body: Buffer.concat(chunks).toString('utf8'),
+              body: body,
+              blocked: blocked,
               url: target.toString()
             });
           });
@@ -160,4 +281,12 @@ function get(url, options) {
   return attempt(url, maxRedirects);
 }
 
-module.exports = { get: get };
+module.exports = {
+  get: get,
+  detectBlockPage: detectBlockPage,
+  markBlocked: markBlocked,
+  isBlocked: isBlocked,
+  blockedInfo: blockedInfo,
+  clearBlocked: clearBlocked,
+  resetBlocked: resetBlocked
+};

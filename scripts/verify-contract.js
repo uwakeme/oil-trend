@@ -817,6 +817,36 @@ async function main() {
     check('调价页与首页的窗口口径说明同一口径',
       noticePage.data.window.dateNote === homeWindowNote,
       noticePage.data.window.dateNote + ' vs ' + homeWindowNote);
+
+    // 来源健康：主源被拒、备源接管时要说一句（数据是新的，但来源变了）
+    check('同步状态带来源健康列表',
+      Array.isArray(noticeList.sync.sources) && noticeList.sync.sources.length > 0,
+      JSON.stringify(noticeList.sync.sources));
+    var degradedPayload = JSON.parse(JSON.stringify(noticeList));
+    degradedPayload.sync.sources = [
+      { id: 'xmgcn', name: '油价网', status: 'degraded', blocked: true, internal: false, takenOver: 31 }
+    ];
+    noticePage.applyNotices(degradedPayload);
+    check('主源不可用时调价页说明白',
+      noticePage.data.sync.hintText.indexOf('油价网') >= 0 &&
+      noticePage.data.sync.hintText.indexOf('备源') >= 0, noticePage.data.sync.hintText);
+    // 「这个源没抓到」不等于「备源接住了」：全都失败时不能这么说
+    var noBackupPayload = JSON.parse(JSON.stringify(noticeList));
+    noBackupPayload.sync.sources = [
+      { id: 'xmgcn', name: '油价网', status: 'degraded', blocked: true, internal: false, takenOver: 0 }
+    ];
+    noticePage.applyNotices(noBackupPayload);
+    check('没有备源接住时不谎称「已由备源供数」',
+      noticePage.data.sync.hintText.indexOf('备源') < 0, noticePage.data.sync.hintText);
+    var internalPayload = JSON.parse(JSON.stringify(noticeList));
+    internalPayload.sync.sources = [
+      { id: 'xmgcn-timeline', name: '油价网·官方调价时间表', status: 'degraded', blocked: true, internal: true, takenOver: 0 }
+    ];
+    noticePage.applyNotices(internalPayload);
+    check('内部源（口径互校）出问题不提示给用户',
+      noticePage.data.sync.hintText === '', noticePage.data.sync.hintText);
+    // 回到真实响应，后面的用例按真实数据断言
+    noticePage.applyNotices(noticeList);
     // 来源已公布下一轮时：标题是「下一次调价窗口」，不标推算
     check('来源已公布下一轮时标题是下一次调价窗口',
       homeWindowTitle === '下一次调价窗口', homeWindowTitle);

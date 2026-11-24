@@ -76,13 +76,18 @@ const SOURCES = [
     kind: 'timeline',
     enabled: true,
     provides: ['timeline'],
+    // ⚠️ 内部源：数据只做口径互校，**不展示给用户**。
+    //    它挂了不该把用户看到的「等待人工核对」点亮 —— 用户看到的价还是对的。
+    internal: true,
     url: 'https://www.xmgcn.com/tiaozheng/',
     allowedHosts: ['www.xmgcn.com'],
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
     },
     parser: 'xmgcnTimeline',
-    note: '全国调价时间表（各省最高零售价元/吨与涨跌）。只做口径互校，不对外展示。'
+    note: '全国调价时间表（各省最高零售价元/吨与涨跌）。只做口径互校，不对外展示。' +
+      '2026-11-24 起该页返回「HTTP 200 + nginx 403 错误页」（站点在拒绝访问），' +
+      '已降级为补充互校源：主路径改用发改委公告的官方吨价。'
   },
   {
     id: 'ndrc-notice',

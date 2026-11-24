@@ -50,6 +50,7 @@
       <text class="sync-status {{sync.className}}">{{sync.statusText}}</text>
       <text>{{sync.checkedText}}</text>
     </view>
+    <text class="sync-hint" wx:if="{{sync.hintText}}">{{sync.hintText}}</text>
 
     <view class="filter-row">
       <view

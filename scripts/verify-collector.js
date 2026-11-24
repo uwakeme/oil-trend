@@ -451,9 +451,69 @@ check('31 个地区每个来源各有一套 slug 且唯一（拼音撞名省份�
 });
 
 
+/* ---------- 站点「拒绝访问」的识别与熔断 ---------- */
+
+/**
+ * 站点可能用「HTTP 200 + 错误页」拒绝访问。
+ *
+ * 2026-11-24 实测 xmgcn.com：请求任何路径都回 HTTP 200，
+ * 正文却是 nginx 的 403 错误页（138 字节静态文件，last-modified 2025-06-05）。
+ * 抓取层只看状态码就会当成「抓取成功」，然后报「解析不出字段」——
+ * 排查方向会被引到解析器上，而真正的原因是**站点在拒绝我们**。
+ */
+const NGINX_403_PAGE =
+  '<html>\n<head><title>403 Forbidden</title></head>\n<body>\n' +
+  '<center><h1>403 Forbidden</h1></center>\n<hr><center>nginx</center>\n</body>\n</html>';
+
+function runNetworkSuite(label, sources) {
+  const httpClient = require(path.join(ROOT, 'server', 'src', 'services', 'http-client'));
+
+  check(label + ' 站点回「HTTP 200 + nginx 403 页」时要能认出来（别误判成解析失败）', () => {
+    assert(httpClient.detectBlockPage(NGINX_403_PAGE), 'nginx 403 页应被识别');
+    assert(httpClient.detectBlockPage('<html><title>502 Bad Gateway</title></html>'), '5xx 错误页应被识别');
+    assert(httpClient.detectBlockPage('<html><title>Just a moment...</title></html>'), 'WAF 校验页应被识别');
+    // 真实页面不能被误判
+    const real = fs.readFileSync(path.join(ROOT, 'scripts', 'fixtures', 'xmgcn-guangdong.html'), 'utf8');
+    assert.strictEqual(httpClient.detectBlockPage(real), null, '真实省份页不能被误判');
+    assert.strictEqual(httpClient.detectBlockPage(''), null, '空正文不算被拒');
+    // 正文很长时就算出现关键词也不判（避免文章里写「安全验证」就误伤）
+    assert.strictEqual(httpClient.detectBlockPage('<p>403 Forbidden</p>' + 'x'.repeat(5000)), null,
+      '长正文不能判成错误页');
+  });
+
+  check(label + ' 连续被拒才熔断；熔断期不再请求；抓成功就解除', () => {
+    httpClient.resetBlocked();
+    assert.strictEqual(httpClient.isBlocked('src-a'), false, '一开始不该熔断');
+    httpClient.markBlocked('src-a', '403 Forbidden');
+    httpClient.markBlocked('src-a', '403 Forbidden');
+    assert.strictEqual(httpClient.isBlocked('src-a'), false, '连着两次还不该熔断');
+    httpClient.markBlocked('src-a', '403 Forbidden');
+    assert.strictEqual(httpClient.isBlocked('src-a'), true, '第三次该熔断');
+    assert.strictEqual(httpClient.blockedInfo('src-a').count, 3, '被拒次数要记着');
+    httpClient.clearBlocked('src-a');
+    assert.strictEqual(httpClient.isBlocked('src-a'), false, '抓成功后要解除熔断');
+    httpClient.resetBlocked();
+  });
+
+  check(label + ' 口径互校源是内部源：它挂了不该点亮用户的「等待人工核对」', () => {
+    const timeline = sources.SOURCES.find(x => x.id === 'xmgcn-timeline');
+    assert(timeline, '缺少 xmgcn-timeline 来源');
+    assert.strictEqual(timeline.internal, true, '时间表源应标成内部源');
+    assert.strictEqual(timeline.provides.includes('price'), false, '它不提供用户侧数据');
+    // 用户侧来源不能被标成内部源
+    ['xmgcn', 'qiyoujiage', 'ndrc-notice'].forEach(id => {
+      const s = sources.SOURCES.find(x => x.id === id);
+      assert(s, '缺少来源 ' + id);
+      assert.notStrictEqual(s.internal, true, id + ' 是用户侧来源，不能标成内部源');
+    });
+  });
+}
+
 for (const [label, sources] of IMPLS) {
   console.log('--- ' + label + ' 解析器 ---');
   runSuite(label, sources);
+  console.log('--- ' + label + ' 抓取层 ---');
+  runNetworkSuite(label, sources);
 }
 
 
@@ -556,7 +616,76 @@ async function liveDb(source) {
   }
 }
 
+/* ---------- 站点拒绝访问：端到端（本地假站点，不打真站点） ---------- */
+
+/**
+ * 起一个本地站点，**用 HTTP 200 回 nginx 的 403 错误页** ——
+ * 与 2026-11-24 实测 xmgcn.com 的行为一模一样（状态码 200，正文是错误页）。
+ *
+ * 然后验证采集器两件事：
+ *   1. 把这种响应认成「被拒」（SOURCE_BLOCKED），而不是「解析不出字段」——
+ *      后者会把排查方向引到解析器上，而真正的原因是站点在拒绝我们；
+ *   2. 连续被拒到阈值就熔断，之后**一个请求都不再发** ——
+ *      31 省 × 2 次重试 = 62 个请求，别往拒绝我们的站点脸上打。
+ */
+async function blockedSite() {
+  console.log('--- 站点拒绝访问（本地假站点）---');
+  const http = require('http');
+  const collector = require(path.join(ROOT, 'server', 'src', 'services', 'collector'));
+  const httpClient = require(path.join(ROOT, 'server', 'src', 'services', 'http-client'));
+
+  let hits = 0;
+  const server = http.createServer(function (req, res) {
+    hits++;
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(NGINX_403_PAGE);
+  });
+  await new Promise(function (resolve) { server.listen(0, '127.0.0.1', resolve); });
+  const port = server.address().port;
+  const source = {
+    id: 'blocked-site-test',
+    name: '拒绝访问的假站点',
+    url: 'http://127.0.0.1:' + port + '/tiaozheng/',
+    // host 带端口：白名单比的是 host:port
+    allowedHosts: ['127.0.0.1:' + port],
+    headers: {}
+  };
+
+  try {
+    httpClient.resetBlocked();
+    const first = await collector.fetchSource(source);
+    check('站点回 200 + 403 页时认成「被拒」，不是「解析不出字段」', () => {
+      assert.strictEqual(first.ok, false);
+      assert.strictEqual(first.reason, 'SOURCE_BLOCKED', JSON.stringify(first));
+    });
+    check('被拒原因里说清是站点在拒绝访问', () => {
+      assert(first.message.indexOf('拒绝访问') >= 0, first.message);
+    });
+
+    // 再试两次 → 熔断
+    await collector.fetchSource(source);
+    await collector.fetchSource(source);
+    check('连续被拒到阈值后熔断', () => {
+      assert.strictEqual(httpClient.isBlocked(source.id), true);
+    });
+
+    const hitsBefore = hits;
+    const cooled = await collector.fetchSource(source);
+    check('熔断期不再请求该来源', () => {
+      assert.strictEqual(cooled.ok, false);
+      assert.strictEqual(cooled.reason, 'SOURCE_BLOCKED_COOLDOWN', JSON.stringify(cooled));
+    });
+    check('熔断期确实一个请求都没发出去', () => {
+      assert.strictEqual(hits, hitsBefore, '请求数 ' + hitsBefore + ' → ' + hits);
+    });
+  } finally {
+    await new Promise(function (resolve) { server.close(resolve); });
+    httpClient.resetBlocked();
+  }
+}
+
 Promise.resolve()
+  .then(() => blockedSite())
   .then(() => (process.argv.includes('--live') ? live() : null))
   .then(() => {
     if (failures) {
