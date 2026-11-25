@@ -1,0 +1,12 @@
+{
+  "name": "oil-trend-ci",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Wake油价势助手 · 小程序包上传到微信公众平台（miniprogram-ci 封装）",
+  "scripts": {
+    "upload": "node upload.js"
+  },
+  "dependencies": {
+    "miniprogram-ci": "2.1.31"
+  }
+}

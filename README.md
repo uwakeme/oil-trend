@@ -37,6 +37,7 @@
 - [数据采集](#数据采集)
 - [开发脚本](#开发脚本)
 - [部署](#部署)
+- [发版到微信平台](#发版到微信平台)
 - [已知限制](#已知限制)
 - [License](#license)
 - [参考资料](#参考资料)
@@ -323,6 +324,55 @@ node scripts/verify-in-devtools.js
 两处不配也能跑：那轮「每升幅度还没拿到」的官方降价提醒就发不出去，服务端会在运行汇总里记一条 `NO_LITER_AMOUNT`，运维看得见原因，不会安静地什么都不发。
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+## 发版到微信平台
+
+小程序包用微信官方的 [miniprogram-ci](https://github.com/wechat-miniprogram/miniprogram-ci) 上传，不依赖开发者工具 —— 开发者工具的 CLI 要求 IDE 开着、已登录，CI 上跑不了。
+
+触发方式（[`.github/workflows/release-miniprogram.yml`](./.github/workflows/release-miniprogram.yml)）：
+
+| 触发 | 说明 |
+| --- | --- |
+| 推 tag `v*` | `git tag v0.2.0 && git push origin v0.2.0` → 自动上传 |
+| 发 GitHub Release | 同样会触发上传 |
+| 手动触发 | Actions 页面点「Run workflow」，可手填版本号与描述 |
+
+版本号默认从 git tag 取（`v0.2.0` → `0.2.0`）；手动触发时可留空。上传前流水线会先跑一遍前端自检（WXML 静态检查、模块加载、数据层、走势图），不通过就不会上传。
+
+### ⚠️ 自动化到哪一步
+
+| 步骤 | 谁来做 |
+| --- | --- |
+| 打包 + 上传代码（开发版本） | ✅ 流水线自动 |
+| 提交审核 | ❌ 人工：公众平台 → 版本管理 → 开发版本 → 提交审核 |
+| 发布 | ❌ 人工：审核通过后点发布 |
+
+`miniprogram-ci` 没有提交审核接口。微信的 `wxa/commit`（提交审核）与 `wxa/release`（发布）只对**第三方平台**开放，个人主体小程序拿不到这两个 API，只能去后台点。
+
+### 必配项
+
+1. 公众平台 → 开发管理 → 开发设置 → **小程序代码上传** → 生成上传密钥，下载 `private.key`。
+   ⚠️ 同一页的 **IP 白名单要留空** —— GitHub runner 的出口 IP 不固定，填了就传不上去。
+2. 仓库加两个 secret（Settings → Secrets and variables → Actions）：
+
+   | 名称 | 内容 |
+   | --- | --- |
+   | `WX_APP_ID` | 正式 AppID，与 `project.private.config.json` 里是同一个 |
+   | `WX_UPLOAD_PRIVATE_KEY` | `private.key` 的全部内容（含 `-----BEGIN PRIVATE KEY-----` 头尾） |
+
+   AppID 只出现在仓库 secret 与本地私有配置里，`project.config.json` 存的是占位 `touristappid`。
+3. 首次发版前先本地试一次，确认密钥与 AppID 对得上：
+
+```bash
+npm ci --prefix ci
+WX_APP_ID=wx... WX_UPLOAD_PRIVATE_KEY_PATH=./private.key node ci/upload.js --dry-run
+```
+
+本地真上传：`node ci/upload.js`（AppID 默认读 `project.private.config.json`，密钥用 `WX_UPLOAD_PRIVATE_KEY_PATH` 指文件或 `WX_UPLOAD_PRIVATE_KEY` 传内容）。
+
+打包要排除的目录统一写在 `project.config.json` 的 `packOptions.ignore`（`ci/`、`server/`、`scripts/`、`docs/` 等）—— **别在上传脚本里另写一份清单**，两份对不上就会把源码和服务端代码一起传上去。
+
+<p align="right">(<a href="#readme-top">back to top</a></p>
 
 ## 已知限制
 

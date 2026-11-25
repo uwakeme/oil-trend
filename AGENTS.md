@@ -7,7 +7,7 @@ Wake油价势助手 · 微信小程序 —— 本地油价、调价通知、降�
 
 - 微信开发者工具（IDE 2.02.2609250），直接打开仓库根目录编译；基础库 3.8.10
 - Node.js ≥ 18（脚本用），Python 3（只用于把终端字符二维码转成 PNG）
-- 根目录**没有** package.json。`server/` 自带一份，依赖在服务器上 `npm install`
+- 根目录**没有** package.json。`server/` 自带一份（依赖在服务器上 `npm install`），`ci/` 自带一份（`miniprogram-ci`，本机与 CI 共用同一份上传脚本）
 
 ## 常用命令
 
@@ -22,6 +22,8 @@ node scripts/gen-province-geo.js  # 重新生成服务端省界数据（server/s
 node scripts/sync-shared.js        # 由 data/ 生成服务端共享模块并做一致性断言，部署前必跑
 node scripts/build-icons.js        # 重生成 assets/icons/*.png（SVG 精灵内联在脚本里，需本机 Chrome）
 node scripts/preview-qr.js <appid> # 上传预览包并出扫码图（必须正式 AppID）
+node ci/upload.js              # 上传小程序包到微信公众平台（开发版本），需上传密钥
+node ci/upload.js --dry-run    # 只检查 AppID / 密钥 / 版本号能不能用，不上传
 ```
 
 端到端验证（需先起 IDE 自动化服务，默认端口 9421，用 `AUTO_WS` 覆盖）：
@@ -42,6 +44,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - `server/` — **后端**（Node + Express + PostgreSQL），填 `config.apiBaseUrl` 才启用；留空则只用演示数据
   - `server/src/data/provinces.json` 是**生成产物**（省界数据，脚本产出），手改会被覆盖
 - `scripts/` — 检查与构建脚本
+- `ci/` — 小程序包上传工具（`miniprogram-ci`）：`upload.js` 是上传逻辑的唯一真源，本地与 CI 共用
 - `design/` — 产品设计稿与高保真原型
 - `docs/` — 截图在 `docs/screenshots/`，项目主页在 `docs/index.html`（GitHub Pages 从 `/docs` 发布）；部署与数据源说明直接看 `server/` 与 `README.md`
 
@@ -164,6 +167,11 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 首页小卡和通知卡的每升幅度不是一个口径 | 首页 95#/98#/0# 小卡用 `p.changeAmount`（**本地区**挂牌价前后差），通知卡用各省**中位数**，同一轮能差 0.01（广东 98# -0.56 vs 中位数 -0.55） | 别拿小卡数字去对中位数；看到不一致先查取的是哪个字段（`pages/index/index.js` 的 `changeMeta(p.changeAmount, ...)`） |
 | 画布上的读数**不能**用 WXML 浮层 | canvas 是独立原生渲染层，z-index 压不住它 —— 浮层会被画布盖住（跟弹层被走势图盖住是同一个原因） | 十字光标与读数气泡直接画在画布上（`utils/chart.js` 的 `drawCrosshair`）；DOM 浮层只适合放在画布**外面**的地方 |
 | 选点与画图必须用**同一套**几何 | 两边各算一次横坐标的话，边距或像素密度改一处就对不上，表现是「点哪儿高亮的不是哪儿」 | 几何统一由 `chart.computeLayout()` 算：绘制（`drawSeries`）与触摸选点都调它 |
+| 上传小程序包在 CI 上用开发者工具 CLI | `cli.bat` 要求 IDE 开着、已登录，CI 上根本跑不起来 | 用 `miniprogram-ci`（`ci/upload.js`）：不依赖 IDE，用「上传密钥」直接传 |
+| 以为 `miniprogram-ci` 能「自动提交审核 / 自动发布」 | 它只有 `upload` 与 `preview`，没有提交审核接口 | 微信的 `wxa/commit`（提交审核）与 `wxa/release`（发布）只对**第三方平台**开放；个人主体小程序只能人工去公众平台后台点 |
+| 打包排除清单写两处 | 上传脚本里再写一份 ignores，迟早和 `project.config.json` 的 `packOptions.ignore` 对不上 | 排除清单只有一处真源：`project.config.json` 的 `packOptions.ignore`（`ci/`、`server/`、`scripts/`、`docs/`、`project.private.config.json` 都在里面） |
+| 公众平台「小程序代码上传」开了 IP 白名单 | GitHub runner 的出口 IP 不固定，开了就永远传不上去 | 白名单留空，靠上传密钥本身鉴权 |
+| 真实 AppID 写进 `project.config.json` | GitHub 密钥扫描会把 `wx` + 16 位十六进制误报成密钥 | 仓库里存占位 `touristappid`，真实 AppID 放 `project.private.config.json`（不入库）；CI 从仓库 secret `WX_APP_ID` 取 |
 | 画布上用 `bindtouchmove` 而不是 `catchtouchmove` | catch 会把页面滚动吞掉 —— 手指落在图上就滚不动 | 画布用 `bind*`，页面照常滚；图表自己的拖动在 `onTouchMove` 里处理 |
 | 自检脚本里直接 require 组件会炸 | node 里没有 `Component` 也没有 `wx`；而且 `wx` 是 **render 时**才读的，require 完就删会 ReferenceError | 先补 `global.Component` / `global.wx`，`wx` 留到组件跑完再删（`scripts/verify-chart.js`） |
 | 自动化协议点不了按钮 → 交互只能假跑 | `Element.tap` / `Element.query` 在 IDE 2.02 未实现，想验证点选只能靠肉眼 | 用假的 Canvas 上下文直接调组件的 `onTouchStart`；要截图就临时注入固定选中点，截完必须还原（`.tooling/shot-crosshair.js`） |
@@ -237,6 +245,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 ## 安全
 
 - **AppSecret 绝不能进代码或小程序包**。只在服务器的 `server/.env` 里，前端只认 `apiBaseUrl`
+- **上传密钥（`private.key`）绝不能入库**：只放 GitHub 仓库 secret（`WX_UPLOAD_PRIVATE_KEY`）与本地磁盘
 - 预览包、订阅消息模板都要求**正式 AppID**，测试号拿不到
 - 主包体积上限 2MB，新增目录要在 `project.config.json` 的 `packOptions.ignore` 里排除
 - `docs/`、`design/`、`scripts/`、`server/`、`.tooling/`、`.workbuddy/` 都已排除在打包外

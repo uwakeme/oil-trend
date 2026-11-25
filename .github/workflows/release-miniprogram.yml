@@ -1,0 +1,80 @@
+name: Release Miniprogram
+
+# 发版即上传：推 tag、发 GitHub Release、手动触发，三条路都把小程序包传到公众平台。
+#
+# ⚠️ 这一步只到「开发版本」为止 —— 提交审核与发布仍要在公众平台后台人工点：
+#    miniprogram-ci 没有提交审核接口，微信的 wxa/commit（提交审核）与 wxa/release（发布）
+#    只对**第三方平台**开放，个人主体小程序没有这个 API。
+on:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（留空则从 git tag 推）'
+        required: false
+      desc:
+        description: '上传描述（留空则自动拼版本号 + 短 SHA + 提交标题）'
+        required: false
+
+# 同一个 tag 只留一条上传流程在跑。
+# ⚠️ cancel-in-progress 用 false：上传传到一半被掐掉，公众平台那边会留半个开发版本。
+#    推 tag 与发 Release 各触发一次时，会连着传两遍（内容相同，第二次覆盖开发版本，无副作用）。
+concurrency:
+  group: miniprogram-upload-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # 上传要从 git tag 推版本号，浅克隆拿不到 tag
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ci/package-lock.json
+
+      - name: Install upload tool dependencies
+        run: npm ci --prefix ci
+
+      # 上传前先自检：传上去的包得是能编译、能跑的那些。
+      # 契约自检（verify-contract）要 pg-mem，装在 server/ 下，这里不跑 ——
+      # CI 主流程（ci.yml）每次 push 都跑过一遍。
+      - name: Frontend self-checks
+        run: |
+          node scripts/lint-wxml.js
+          node scripts/check-modules.js
+          node scripts/verify-data.js
+          node scripts/verify-chart.js
+
+      - name: Upload to WeChat platform
+        env:
+          WX_APP_ID: ${{ secrets.WX_APP_ID }}
+          WX_UPLOAD_PRIVATE_KEY: ${{ secrets.WX_UPLOAD_PRIVATE_KEY }}
+          WX_VERSION: ${{ inputs.version }}
+          WX_UPLOAD_DESC: ${{ inputs.desc }}
+        run: node ci/upload.js
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### 小程序包上传"
+            echo ""
+            echo "- 触发方式：${{ github.event_name }} ${{ github.ref_name }}"
+            echo "- 仓库 secret：WX_APP_ID、WX_UPLOAD_PRIVATE_KEY"
+            echo ""
+            echo "上传只到**开发版本**。提交审核与发布要在公众平台后台人工点："
+            echo "版本管理 → 开发版本 → 提交审核 → 审核通过后发布。"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -32,6 +32,10 @@
       },
       {
         "type": "folder",
+        "value": "ci"
+      },
+      {
+        "type": "folder",
         "value": "assets/app-icon"
       },
       {
@@ -49,6 +53,10 @@
       {
         "type": "file",
         "value": "data/reference-prices.js"
+      },
+      {
+        "type": "file",
+        "value": "project.private.config.json"
       },
       {
         "type": "file",
