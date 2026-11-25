@@ -7,6 +7,7 @@
 const config = require('./config');
 const { createApp } = require('./app');
 const scheduler = require('./scheduler');
+const db = require('./db');
 
 function start() {
   // ⚠️ 启动前必须体检配置。
@@ -34,16 +35,37 @@ function start() {
 
   scheduler.start();
 
-  // 优雅退出：先停收新请求，再关连接
+  // 优雅退出：停调度并等在途任务 → 关 HTTP → 关数据库池。
+  // 重复信号只返回同一个 Promise，避免重复 close / process.exit。
+  var shutdownPromise = null;
   function shutdown(signal) {
+    if (shutdownPromise) return shutdownPromise;
     console.log('[server] 收到 ' + signal + '，开始退出');
-    scheduler.stop();
-    server.close(function () {
-      console.log('[server] 已退出');
-      process.exit(0);
-    });
-    // 兜底：10 秒还没关完就强退
-    setTimeout(function () { process.exit(0); }, 10000).unref();
+    var forceTimer = setTimeout(function () { process.exit(0); }, 10000);
+    forceTimer.unref();
+
+    shutdownPromise = Promise.resolve()
+      .then(function () { return scheduler.stop(); })
+      .then(function () {
+        return new Promise(function (resolve, reject) {
+          server.close(function (err) {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
+      })
+      .then(function () { return db.close(); })
+      .then(function () {
+        clearTimeout(forceTimer);
+        console.log('[server] 已退出');
+        process.exit(0);
+      })
+      .catch(function (err) {
+        clearTimeout(forceTimer);
+        console.error('[server] 退出时清理失败：', err);
+        process.exit(1);
+      });
+    return shutdownPromise;
   }
 
   process.on('SIGTERM', function () { shutdown('SIGTERM'); });

@@ -53,6 +53,8 @@ Page({
       this._prefsKey = key;
       this.setData({ fuelId: prefs.fuelId || '92' });
       this.load();
+    } else if (!this._loadedAt || Date.now() - this._loadedAt > 60000) {
+      this.load();
     }
   },
 
@@ -70,6 +72,8 @@ Page({
     // 不能让它把新条件的结果盖回去。
     this._reqSeq = (this._reqSeq || 0) + 1;
     var seq = this._reqSeq;
+    // 发请求前记时间：首屏 onShow 不会重复取数，停留超过 60 秒再刷新。
+    this._loadedAt = Date.now();
     this.setData({ loading: true, loadError: '' });
     return api.getTrend(prefs.regionCode, this.data.fuelId, this.data.period)
       .then(function (payload) {
@@ -126,6 +130,8 @@ Page({
           date: e.date,
           dateText: fmt.shortDate(e.date),
           title: e.title,
+          // 推导节点的幅度来自挂牌价前后差，不能与官方公布值混为一谈。
+          measured: e.measured === true,
           priceText: fmt.price(e.priceAfter),
           // 幅度未知就写 '--'：Number(null) 是 0，
           // 直接 toFixed 会显示成「0.00」—— 那是「持平」，不是「不知道」。

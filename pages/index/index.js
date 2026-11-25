@@ -121,6 +121,8 @@ Page({
       this._prefsKey = key;
       this.setData({ fuelId: prefs.fuelId || '92' });
       this.load(prefs.regionCode);
+    } else if (!this._loadedAt || Date.now() - this._loadedAt > 60000) {
+      this.load(prefs.regionCode);
     }
   },
 
@@ -150,6 +152,8 @@ Page({
     // 先发的那轮可能后到，不能让它把新地区的结果盖回去。
     this._reqSeq = (this._reqSeq || 0) + 1;
     var seq = this._reqSeq;
+    // 发请求前记时间：首屏 onShow 不会重复取数，停留超过 60 秒再刷新。
+    this._loadedAt = Date.now();
     this.setData({ loading: true, loadError: '' });
     return api.getHome(regionCode, this.data.fuelId).then(function (payload) {
       if (seq !== self._reqSeq) return;

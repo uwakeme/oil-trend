@@ -156,9 +156,58 @@ check('非法表达式返回 null', () => {
     });
 });
 
-console.log('');
-if (failures) {
-  console.error(failures + ' 个用例失败');
-  process.exit(1);
+async function checkAsync(name, fn) {
+  try {
+    await fn();
+    console.log('✓ ' + name);
+  } catch (e) {
+    failures++;
+    console.error('✗ ' + name + '：' + e.message);
+  }
 }
-console.log('调度器 cron 解析全部通过');
+
+async function verifyStopWaits() {
+  var release;
+  var started;
+  var timer;
+  var began = new Promise(function (resolve) { started = resolve; });
+  try {
+    scheduler.register('停止等待测试', '* * * * * *', function () {
+      started();
+      return new Promise(function (resolve) { release = resolve; });
+    });
+    await Promise.race([
+      began,
+      new Promise(function (_, reject) {
+        timer = setTimeout(function () { reject(new Error('任务 2 秒内没有触发')); }, 2000);
+      })
+    ]);
+    assert(typeof release === 'function', '任务未进入在途状态');
+    var stopped = false;
+    var stopping = scheduler.stop().then(function () { stopped = true; });
+    await Promise.resolve();
+    await Promise.resolve();
+    assert(stopped === false, 'stop() 在在途任务完成前就返回了');
+    release();
+    await stopping;
+    assert(stopped === true, '在途任务完成后 stop() 仍未返回');
+  } finally {
+    clearTimeout(timer);
+    if (release) release();
+    await scheduler.stop();
+  }
+}
+
+(async function () {
+  await checkAsync('stop() 等待在途任务收尾后才返回', verifyStopWaits);
+
+  console.log('');
+  if (failures) {
+    console.error(failures + ' 个用例失败');
+    process.exit(1);
+  }
+  console.log('调度器 cron 解析与停止等待全部通过');
+}()).catch(function (err) {
+  console.error(err && err.stack ? err.stack : err);
+  process.exit(1);
+});

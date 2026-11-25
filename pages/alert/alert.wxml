@@ -36,7 +36,7 @@
         <text class="subscription-title">{{subscription.title}}</text>
         <text class="subscription-text">{{subscription.text}}</text>
       </view>
-      <button class="subscription-button {{subscription.enabled ? '' : 'disabled'}}" bindtap="onOpenPermission">{{subscription.buttonText}}</button>
+      <button class="subscription-button {{subscription.enabled ? '' : 'disabled'}}" bindtap="onSubscriptionAction">{{subscription.buttonText}}</button>
     </view>
 
     <!-- 官方降价即提醒 -->
@@ -51,7 +51,7 @@
             <text class="rule-desc">正式公告发布后触发，不含预测</text>
           </view>
         </view>
-        <view class="switch {{rule.officialDrop ? 'on' : ''}}" bindtap="onToggleOfficial"></view>
+        <view class="switch {{rule.officialDrop ? 'on' : ''}}" bindtap="onToggleOfficial" aria-role="switch" aria-checked="{{rule.officialDrop}}" aria-label="官方降价即提醒"></view>
       </view>
 
       <view class="condition-grid">
@@ -74,7 +74,7 @@
         <text class="target-title">目标价提醒</text>
         <view style="display:flex;align-items:center;">
           <text class="target-current">当前 {{currentPriceText}} 元/升</text>
-          <view class="switch {{rule.targetEnabled ? 'on' : ''}}" bindtap="onToggleTarget"></view>
+          <view class="switch {{rule.targetEnabled ? 'on' : ''}}" bindtap="onToggleTarget" aria-role="switch" aria-checked="{{rule.targetEnabled}}" aria-label="目标价提醒"></view>
         </view>
       </view>
 
@@ -103,7 +103,7 @@
             <text class="rule-desc">仅供参考，默认不开启</text>
           </view>
         </view>
-        <view class="switch {{rule.forecastDrop ? 'on' : ''}}" bindtap="onToggleForecast"></view>
+        <view class="switch {{rule.forecastDrop ? 'on' : ''}}" bindtap="onToggleForecast" aria-role="switch" aria-checked="{{rule.forecastDrop}}" aria-label="预测下调提醒"></view>
       </view>
 
       <view class="rule-summary">{{forecastSummary}}</view>
@@ -122,8 +122,9 @@
       </view>
       <view wx:else class="alert-history">
         <view wx:for="{{history}}" wx:key="id" class="history-item">
-          <view class="history-check">
-            <image class="icon-inline" src="/assets/icons/check-green.png" mode="aspectFit" />
+          <view class="history-check {{item.sent ? '' : 'failed'}}">
+            <image wx:if="{{item.sent}}" class="icon-inline" src="/assets/icons/check-green.png" mode="aspectFit" />
+            <text wx:else class="history-failed-mark">失败</text>
           </view>
           <view class="history-copy">
             <text class="history-title">{{item.title}}</text>

@@ -59,6 +59,8 @@ Page({
       this._prefsKey = key;
       this.setData({ fuelId: prefs.fuelId || '92' });
       this.load();
+    } else if (!this._loadedAt || Date.now() - this._loadedAt > 60000) {
+      this.load();
     }
   },
 
@@ -76,6 +78,8 @@ Page({
     // 不能让它把新筛选条件的结果盖回去。
     this._reqSeq = (this._reqSeq || 0) + 1;
     var seq = this._reqSeq;
+    // 发请求前记时间：首屏 onShow 不会重复取数，停留超过 60 秒再刷新。
+    this._loadedAt = Date.now();
     this.setData({ loading: true, loadError: '' });
     return api.getNotices(prefs.regionCode, this.data.filter, prefs.fuelId)
       .then(function (payload) {
@@ -123,6 +127,13 @@ Page({
       // 幅度缺失时不能拿 0 顶上：那等于替来源猜了一个幅度
       var known = typeof delta === 'number' && isFinite(delta);
       var meta = known ? changeMeta(delta) : { text: '待公布', direction: 'flat' };
+      var executeAt = String(n.executeAt || '').trim();
+      var executeText = '';
+      if (executeAt) {
+        var executeTime = executeAt.slice(11, 16);
+        executeText = fmt.cnDate(executeAt.slice(0, 10)) +
+          (executeTime ? (' ' + executeTime) : '') + ' 执行';
+      }
       return {
         id: n.id,
         kind: n.kind,
@@ -130,8 +141,7 @@ Page({
         title: n.title,
         // 发布日用 announcedAt（真实公告发布日），不是 publishedAt（采集入库时刻）
         publishedText: n.announcedAt ? fmt.dateOnly(n.announcedAt) : '',
-        executeText: fmt.cnDate(String(n.executeAt || '').slice(0, 10)) +
-          ' ' + (String(n.executeAt || '').slice(11, 16) || '') + ' 执行',
+        executeText: executeText,
         changeText: meta.text,
         direction: meta.direction,
         // 官方公告给的方向与汽/柴油吨价
@@ -285,7 +295,7 @@ Page({
   },
 
   /**
-   * 「查看原文」。
+   * 「复制原文链接」。
    *
    * 小程序的 navigator 只能跳站内页，打不开外部网页，
    * 所以把链接复制到剪贴板，用户自己去浏览器打开。
@@ -299,7 +309,7 @@ Page({
         wx.showToast({ title: '原文链接已复制', icon: 'none' });
       },
       fail: function () {
-        wx.showToast({ title: '复制失败，请手动复制链接', icon: 'none' });
+        wx.showToast({ title: '复制失败，请重试', icon: 'none' });
       }
     });
   },

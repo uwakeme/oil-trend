@@ -840,6 +840,28 @@ async function main() {
   check('重新授权后额度恢复', afterGrant.subscribeGranted === true);
   check('重新授权后清掉「已用完」标记', !afterGrant.subscribeUsedAt);
 
+  var grantSnapshot = (await dao.rules.listByUser('openid-fields'))[0];
+  await user.actionRulesSave('openid-fields', [
+    { regionCode: '440000', fuelId: '92', officialDrop: true, targetEnabled: false,
+      targetPrice: 7.25, forecastDrop: true }
+  ]);
+  var afterEdit = (await dao.rules.listByUser('openid-fields'))[0];
+  check('发送期间只改条件：额度版本不变', afterEdit.version === grantSnapshot.version,
+    JSON.stringify({ before: grantSnapshot.version, after: afterEdit.version }));
+  check('发送期间只改条件：旧快照仍能核销已用额度',
+    await dao.rules.consumeSubscribe(grantSnapshot) === true && afterEdit.subscribeGranted === true);
+
+  await user.actionRulesSave('openid-fields', [
+    { regionCode: '440000', fuelId: '92', officialDrop: true, targetEnabled: false,
+      targetPrice: 7.15, forecastDrop: true, subscribeGranted: true }
+  ]);
+  var oldConsumed = await dao.rules.consumeSubscribe(grantSnapshot);
+  var afterRegrant = (await dao.rules.listByUser('openid-fields'))[0];
+  check('发送期间重新授权：旧快照不能消费新额度', oldConsumed === false && afterRegrant.subscribeGranted === true,
+    JSON.stringify({ oldConsumed: oldConsumed, granted: afterRegrant.subscribeGranted }));
+  check('当前快照能消费额度', await dao.rules.consumeSubscribe(afterRegrant) === true);
+  check('同一个快照不能重复消费额度', await dao.rules.consumeSubscribe(afterRegrant) === false);
+
   console.log('\n--- 三端数值一致性 ---');
   var demo = require(path.join(ROOT, '..', 'data', 'demo.js'));
 
@@ -1060,6 +1082,22 @@ async function main() {
   check('非法目标价被拒', expectCode(function () {
     userService.actionRulesSave('u-target', [{ regionCode: '440000', fuelId: '92', targetPrice: 'abc' }]);
   }, 'INVALID_TARGET_PRICE'));
+  check('历史记录的 sent 字符串被拒', expectCode(function () {
+    userService.actionHistorySave('u-history', [{ sent: 'false' }]);
+  }, 'INVALID_HISTORY'));
+  check('历史记录的 NaN 价格被拒', expectCode(function () {
+    userService.actionHistorySave('u-history', [{ price: NaN }]);
+  }, 'INVALID_HISTORY'));
+  check('历史记录的超长标题被拒', expectCode(function () {
+    userService.actionHistorySave('u-history', [{ title: new Array(122).join('长') }]);
+  }, 'INVALID_HISTORY'));
+  var historyDoc = userService.toDbHistory('u-history', {
+    dedupKey: 'local-key', sent: false, title: '失败记录', price: 8.39, admin: '不应入库'
+  });
+  check('历史记录只保留白名单 payload 字段',
+    historyDoc.payload.admin === undefined && historyDoc.payload.title === '失败记录' &&
+    historyDoc.payload.price === 8.39 && historyDoc.payload.sent === false,
+    JSON.stringify(historyDoc.payload));
 
   console.log('\n--- 去重键与发送去重 ---');
   await userService.actionHistorySave('u-prefix', [{ dedupKey: 'fake::key', sent: true }]);
@@ -1077,6 +1115,12 @@ async function main() {
   await dao.logs.markResult(reserved.id, true, null);
   var marked = await dao.logs.listByUser('u-dup', 50);
   check('占位后能回填发送结果', marked.length === 1 && marked[0].sent === true);
+
+  var sendingReserved = await dao.logs.reserve({ userId: 'u-sending', dedupKey: 'sending::key', payload: {} });
+  var sendingMarked = await dao.logs.markSending(sendingReserved.id);
+  check('发送前登记 send_started_at', !!sendingMarked && !!sendingMarked.sendStartedAt);
+  check('同一条占位不能重复登记为发送中',
+    await dao.logs.markSending(sendingReserved.id) === null);
 
   console.log('\n--- 采集可信公告要补写调价节点 ---');
   var eventsAfterNotice = await dao.events.listAll();
@@ -1098,6 +1142,54 @@ async function main() {
     testWindow.forecast && !testWindow.forecast['92'],
     testWindow.forecast ? JSON.stringify(testWindow.forecast) : '无');
   check('预测方向单独存着', testWindow.forecastDirection === 'down');
+
+  console.log('\n--- 来源轮次结束后清理旧预测，抓取失败则保留 ---');
+  var clearSource = { id: 'test-window-clear-src', name: '清理测试源', verifyRegions: ['440000'] };
+  var clearRegion = shared.REGIONS.filter(function (r) { return r.code === '440000'; })[0];
+  var clearSlugBefore = clearRegion.slugs[clearSource.id];
+  clearRegion.slugs[clearSource.id] = 'guangdong';
+  var clearTrend = function (date, isForecast) {
+    return {
+      ok: true,
+      parsed: {
+        prices: { '92': 8.39, '95': 8.89, '98': 10.89, '0': 8.06 },
+        trend: { date: date, time: '24:00', direction: 'down', changeTon: -645,
+          literMin: 0.08, literMax: 0.1, isForecast: isForecast }
+      }
+    };
+  };
+  var seedOldWindow = async function () {
+    await collector.saveWindow(clearSource,
+      { date: '2099-01-10', time: '24:00', direction: 'down', changeTon: null, literMin: 0.08, literMax: 0.1 });
+  };
+  var collectClear = function (cached) {
+    var cache = {};
+    cache[clearSource.id + '|440000'] = cached;
+    return collector.collectForecastSource(clearSource, { cache: cache });
+  };
+
+  await seedOldWindow();
+  var clearResult = await collectClear(clearTrend('2026-11-12', false));
+  check('来源明确给已执行结果时删掉旧预测',
+    !(await dao.windows.latestBySource(clearSource.id)) && clearResult.advisories.some(function (a) {
+      return a.reason === 'WINDOW_NOT_FORECAST';
+    }), JSON.stringify(clearResult.advisories));
+
+  await seedOldWindow();
+  await collectClear(clearTrend('2000-01-01', true));
+  check('来源只给过期轮次时删掉旧预测', !(await dao.windows.latestBySource(clearSource.id)));
+
+  await seedOldWindow();
+  var clearFailed = await collectClear({ ok: false, reason: 'SOURCE_BLOCKED', message: '测试拒绝' });
+  check('全部抓取失败时保留最后一条预测', !!(await dao.windows.latestBySource(clearSource.id)) &&
+    clearFailed.status === 'needsReview');
+
+  await collectClear(clearTrend('2099-02-10', true));
+  var clearFuture = await dao.windows.latestBySource(clearSource.id);
+  check('有效未来预测正常保存并标记为预测', !!clearFuture && clearFuture.date === '2099-02-10' &&
+    clearFuture.forecast.isForecast === true, clearFuture ? JSON.stringify(clearFuture.forecast) : '无');
+  if (clearSlugBefore === undefined) delete clearRegion.slugs[clearSource.id];
+  else clearRegion.slugs[clearSource.id] = clearSlugBefore;
 
   console.log('\n--- 历史价：价格没变也要记当天挂牌价 ---');
   // 以前只在价格变化时写历史价，30 天没调价走势图就只剩起点的 1 个点，
@@ -1169,6 +1261,26 @@ async function main() {
   var bl4 = await blSave({});
   check('首次采集：没有基线就留空（界面显示「暂无调价对比」）', bl4 && !bl4.changeAt && Number(bl4.changeAmount) === 0,
     bl4 ? (bl4.changeAt + ' / ' + bl4.changeAmount) : '');
+
+  console.log('\n--- 现价跳变拒绝：旧价与当天历史不被污染 ---');
+  var jumpSource = { id: 'test-price-jump-src', name: '跳变测试源' };
+  var jumpRegion = { code: '990099', name: '跳变省', city: '跳变市' };
+  var jumpPrices = { '92': 8.0, '95': 9.0, '98': 11.0, '0': 8.5 };
+  await collector.saveRegionPrices(jumpSource, jumpRegion, { prices: jumpPrices }, {});
+  var jumpExisting = { '990099': {} };
+  (await dao.prices.listByRegion('990099')).forEach(function (p) { jumpExisting['990099'][p.fuelId] = p; });
+  var jumpRejected = await collector.saveRegionPrices(jumpSource, jumpRegion, {
+    prices: { '92': 20, '95': 21, '98': 23, '0': 20.5 }
+  }, jumpExisting);
+  var jumpRows = await dao.prices.listByRegion('990099');
+  check('现价跳变过大时整省拒绝', jumpRejected.ok === false && jumpRejected.reason === 'PRICE_JUMP');
+  check('拒绝后当前价仍是旧值', jumpRows.length === 4 && jumpRows.every(function (p) {
+    return Number(p.price) === jumpPrices[p.fuelId];
+  }), JSON.stringify(jumpRows));
+  var jumpHistory = await dao.history.listByRegion('990099');
+  check('拒绝后没有写入异常当天历史', jumpHistory.length === 4 && jumpHistory.every(function (h) {
+    return Number(h.price) === jumpPrices[h.fuelId];
+  }), '实际 ' + jumpHistory.length + ' 行');
 
   console.log('\n--- 历史价入库的五道闸门 ---');
   // 历史是**一次性回填**的（库里没有旧值可比），所以不能用「与上次采集价落差」
@@ -1298,6 +1410,34 @@ async function main() {
   check('trend 1y：source.note 如实写来源与覆盖范围',
     typeof trend1y.source.note === 'string' && trend1y.source.note.indexOf('历史价来自') >= 0,
     String(trend1y.source.note));
+
+  var measuredNoticeDate = new Date(new Date(trendToday + 'T00:00:00Z').getTime() - 10 * 86400000)
+    .toISOString().slice(0, 10);
+  var measuredNoticeKey = 'test::measured::' + measuredNoticeDate;
+  await dao.notices.insert({
+    dedupKey: measuredNoticeKey, kind: 'official', title: '测算口径测试公告',
+    publishedAt: new Date().toISOString(), executeAt: measuredNoticeDate,
+    changes: {}, tonChanges: { gasoline: -645, diesel: -625 }, reviewStatus: 'approved'
+  });
+  var originalMeasureMany = measureService.measureMany;
+  measureService.measureMany = function (dates) {
+    var out = {};
+    dates.forEach(function (d) { out[d] = { '92': -0.52 }; });
+    return Promise.resolve(out);
+  };
+  var measuredTrend;
+  try {
+    measuredTrend = await query.actionTrend({ regionCode: '440000', fuelId: '92', period: '3m' });
+  } finally {
+    measureService.measureMany = originalMeasureMany;
+    await dbModule.pool.query('DELETE FROM oil_notices WHERE dedup_key = $1', [measuredNoticeKey]);
+  }
+  var measuredOfficial = (measuredTrend.events || []).filter(function (e) {
+    return e.title === '测算口径测试公告';
+  })[0];
+  check('官方节点的每升金额明确标记为挂牌价测算',
+    !!measuredOfficial && measuredOfficial.amountKnown === true && measuredOfficial.measured === true,
+    JSON.stringify(measuredOfficial));
 
   console.log('\n--- 首页卡片：价格行没基线时用历史序列补 ---');
   // 换源那一轮同源基线取不到 → changeAt 被清空 →
@@ -1676,6 +1816,14 @@ async function main() {
   var staleTakeover = await dao.logs.reserve({ userId: 'u3', dedupKey: 'stale::key', payload: {} });
   check('崩在中途的过期占位能被回收重发', !!staleTakeover);
 
+  await pgPool.query(
+    'INSERT INTO alert_logs (user_id, dedup_key, time, sent, fail_reason, send_started_at, payload) ' +
+    'VALUES ($1, $2, $3::timestamptz, FALSE, NULL, $3::timestamptz, $4::jsonb)',
+    ['u4', 'stale-sending::key', new Date(Date.now() - 30 * 60 * 1000).toISOString(), JSON.stringify({})]
+  );
+  var staleSending = await dao.logs.reserve({ userId: 'u4', dedupKey: 'stale-sending::key', payload: {} });
+  check('已开始外部发送的过期占位不能被自动重抢', !staleSending);
+
   check('网络类失败算可重试', alertService.classifyFailure('请求超时') === 'retryable');
   check('平台限流算可重试', alertService.classifyFailure('45009:api freq out of limit') === 'retryable');
   check('模板没配算不可重试', alertService.classifyFailure('TEMPLATE_NOT_CONFIGURED') === 'permanent');
@@ -1758,6 +1906,28 @@ async function main() {
     adopted: { '440000': { parsed: { prices: { '92': 8.39 }, history: [{ date: '2026-01-01', prices: { '92': 8.0 } }] } } }
   });
   check('有来源历史时优先用来源历史', builtSrc.from === 'source');
+
+  var builtRejected = await collector.buildSeries({
+    adopted: { '990099': { parsed: { prices: { '92': 8.0 }, history: [{ date: '2026-01-01', prices: { '92': 8.0 } }] } } },
+    rejected: { '990099': true }
+  });
+  check('唯一地区被现价闸门拒绝时不回落旧历史', builtRejected.from === 'none' &&
+    Object.keys(builtRejected.series).length === 0, JSON.stringify(builtRejected));
+  var builtMixed = await collector.buildSeries({
+    adopted: {
+      '440000': { parsed: { prices: { '92': 8.0 }, history: [{ date: '2026-01-01', prices: { '92': 8.0 } }] } },
+      '370000': { parsed: { prices: { '92': 8.1 }, history: [{ date: '2026-01-01', prices: { '92': 8.1 } }] } }
+    },
+    rejected: { '370000': true }
+  });
+  check('混合采纳与拒绝时历史只使用未拒绝地区', builtMixed.from === 'source' &&
+    Object.keys(builtMixed.series).join(',') === '440000', JSON.stringify(builtMixed.series));
+  var builtDbRejected = await collector.buildSeries({
+    adopted: { '370000': { parsed: { prices: { '92': 8.39 } } } },
+    rejected: { '440000': true, '990002': true }
+  });
+  check('回落库内历史时也排除被拒绝地区', builtDbRejected.from === 'db' &&
+    !builtDbRejected.series['440000'] && !builtDbRejected.series['990002']);
 
   // 只有内部告警时，同步状态不能变成「等待人工核对」
   await dao.runs.insert({

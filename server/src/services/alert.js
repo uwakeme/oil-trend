@@ -243,6 +243,8 @@ function officialScope(source) {
 function forecastOf(windowDoc, today) {
   if (!windowDoc) return null;
   var forecast = windowDoc.forecast || {};
+  // 明确标记为已公布结果时不能触发预测提醒；旧数据没有标记仍按预测兼容处理。
+  if (forecast.isForecast === false) return null;
   var dir = windowDoc.forecastDirection || forecast.direction || '';
   if (!dir) return null;
   var date = String(windowDoc.date || '').slice(0, 10);
@@ -554,39 +556,45 @@ function sendFirstHit(rule, hits, summary) {
     }).then(function (reserved) {
       // 占不到 = 这个键已经被人处理过了，换下一条
       if (!reserved) return step();
-      summary.matched++;
-      return sendSubscribe(rule.userId, hit.template, hit.data).then(function (result) {
-        if (result.sent) {
-          return dao.logs.markResult(reserved.id, true, null).then(function () {
-            summary.details.push({
-              userId: rule.userId,
-              type: hit.type,
-              sent: true,
-              reason: ''
+      // 外部发送前先落库。若这里失败，本次绝不调用微信；
+      // 若进程在发送后、回填前崩溃，DAO 也不会把未知状态当成可重发占位。
+      return dao.logs.markSending(reserved.id).then(function (sending) {
+        if (!sending) return step();
+        summary.matched++;
+        return sendSubscribe(rule.userId, hit.template, hit.data).then(function (result) {
+          if (result.sent) {
+            return dao.logs.markResult(reserved.id, true, null).then(function () {
+              summary.details.push({
+                userId: rule.userId,
+                type: hit.type,
+                sent: true,
+                reason: ''
+              });
+              summary.sent++;
+              // 一次性订阅：额度用掉，用户要再收必须重新授权。
+              // 只在规则仍是发送前那个版本时消费，不能清掉发送期间的新授权。
+              return dao.rules.consumeSubscribe(rule).then(function () { return null; });
             });
-            summary.sent++;
-            // 一次性订阅：额度用掉，用户要再收必须重新授权
+          }
+          // 失败：分「可重试」和「不可重试」两种处理
+          var reason = result.reason || 'UNKNOWN';
+          summary.details.push({
+            userId: rule.userId,
+            type: hit.type,
+            sent: false,
+            reason: reason
+          });
+          summary.failed++;
+          if (classifyFailure(reason) === 'retryable') {
+            // 把占位释放掉：这一轮没发成，下一轮还能重试。
+            // ⚠️ 之前不管成没成都把占位行留着 —— 网络抖动一次，
+            // 这个事件的 dedupKey 就被永久占住，再也发不出第二次。
+            return dao.logs.release(reserved.id).then(function () { return null; });
+          }
+          // 不可重试：留着失败记录当凭据，并把额度用掉（再发也是白发）
+          return dao.logs.markResult(reserved.id, false, reason).then(function () {
             return dao.rules.consumeSubscribe(rule).then(function () { return null; });
           });
-        }
-        // 失败：分「可重试」和「不可重试」两种处理
-        var reason = result.reason || 'UNKNOWN';
-        summary.details.push({
-          userId: rule.userId,
-          type: hit.type,
-          sent: false,
-          reason: reason
-        });
-        summary.failed++;
-        if (classifyFailure(reason) === 'retryable') {
-          // 把占位释放掉：这一轮没发成，下一轮还能重试。
-          // ⚠️ 之前不管成没成都把占位行留着 —— 网络抖动一次，
-          // 这个事件的 dedupKey 就被永久占住，再也发不出第二次。
-          return dao.logs.release(reserved.id).then(function () { return null; });
-        }
-        // 不可重试：留着失败记录当凭据，并把额度用掉（再发也是白发）
-        return dao.logs.markResult(reserved.id, false, reason).then(function () {
-          return dao.rules.consumeSubscribe(rule).then(function () { return null; });
         });
       });
     });

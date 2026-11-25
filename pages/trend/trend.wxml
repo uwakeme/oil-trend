@@ -99,6 +99,7 @@
           </view>
           <view class="event-body">
             <text class="event-title">{{item.title}}</text>
+            <text wx:if="{{item.measured}}" class="event-sub">据挂牌价测算</text>
             <text class="event-sub">{{fuelName}} 调整后 {{item.priceText}}</text>
           </view>
           <text class="event-value {{item.direction}}">{{item.deltaText}}</text>

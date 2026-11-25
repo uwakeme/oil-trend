@@ -139,6 +139,7 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   -- 没有这一列时，新装的用户会收到一堆早就过去的调价通知。
   armed_at          TIMESTAMPTZ,
   extra             JSONB NOT NULL DEFAULT '{}'::jsonb,
+  version           BIGINT NOT NULL DEFAULT 0,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (user_id, region_code, fuel_id)
@@ -152,7 +153,10 @@ CREATE TABLE IF NOT EXISTS alert_logs (
   time          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   sent          BOOLEAN NOT NULL DEFAULT FALSE,
   fail_reason   TEXT,
-  payload       JSONB NOT NULL DEFAULT '{}'::jsonb
+  payload       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  -- 外部发送开始的时间。NULL 表示只占了位、尚未开始发；
+  -- 非 NULL 且未回填 = 微信可能已接收但进程崩了，结果未知，不能自动重发。
+  send_started_at TIMESTAMPTZ
 );
 
 -- 采集运行记录：前端用它显示「同步状态」
@@ -179,6 +183,8 @@ ALTER TABLE oil_notices ADD COLUMN IF NOT EXISTS ton_changes JSONB NOT NULL DEFA
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS target_enabled BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS subscribe_used_at TIMESTAMPTZ;
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS armed_at TIMESTAMPTZ;
+ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE alert_logs ADD COLUMN IF NOT EXISTS send_started_at TIMESTAMPTZ;
 
 -- 老规则回填生效时间。
 -- ⚠️ 只加列不回填的话，老规则的 armed_at 是 NULL，

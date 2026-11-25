@@ -286,6 +286,17 @@
   height: 28rpx;
 }
 
+.history-check.failed {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
+.history-failed-mark {
+  font-size: 18rpx;
+  font-weight: 700;
+  line-height: 1;
+}
+
 .history-copy {
   flex: 1;
   min-width: 0;

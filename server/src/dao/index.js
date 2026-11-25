@@ -605,6 +605,8 @@ const rules = {
       'predict_drop = EXCLUDED.predict_drop, target_enabled = EXCLUDED.target_enabled, ' +
       'subscribe_granted = CASE WHEN $8::boolean IS NULL THEN alert_rules.subscribe_granted ELSE EXCLUDED.subscribe_granted END, ' +
       'subscribe_used_at = CASE WHEN $8::boolean = TRUE THEN NULL ELSE alert_rules.subscribe_used_at END, ' +
+      // 只有重新授权才换额度版本；普通改条件不能阻止发送中的旧实例核销已用额度。
+      'version = alert_rules.version + CASE WHEN $8::boolean IS TRUE THEN 1 ELSE 0 END, ' +
       // ⚠️ armed_at 每次保存都刷新：规则从保存这一刻起才开始接收事件，
       // 之前就已经发生的调价不该再补发通知。
       'armed_at = NOW(), ' +
@@ -630,22 +632,34 @@ const rules = {
    * 两者都显示成「未开启」会让人以为是自己没点同意。
    */
   async consumeSubscribe(rule) {
-    await db.query(
-      'UPDATE alert_rules SET subscribe_granted = FALSE, subscribe_used_at = NOW(), updated_at = NOW() ' +
-      'WHERE user_id = $1 AND region_code = $2 AND fuel_id = $3',
-      [rule.userId, rule.regionCode, rule.fuelId]
+    var version = rule.version;
+    // 兼容直接调用：没有快照时先读当前版本，仍然只做带条件的更新。
+    // alert.js 一定传发送前的规则快照，用户中途重新授权后旧实例不会覆盖新额度。
+    if (version === undefined || version === null) {
+      var current = await db.one(
+        'SELECT version FROM alert_rules WHERE user_id = $1 AND region_code = $2 AND fuel_id = $3',
+        [rule.userId, rule.regionCode, rule.fuelId]
+      );
+      if (!current) return false;
+      version = current.version;
+    }
+    var rows = await db.query(
+      'UPDATE alert_rules SET subscribe_granted = FALSE, subscribe_used_at = NOW(), updated_at = NOW(), version = version + 1 ' +
+      'WHERE user_id = $1 AND region_code = $2 AND fuel_id = $3 AND version = $4::bigint RETURNING id',
+      [rule.userId, rule.regionCode, rule.fuelId, version]
     );
+    return rows.length > 0;
   }
 };
 
 /* ---------------- 提醒记录 ---------------- */
 
 /**
- * 空占位的最长存活时间。
+ * 未开始发送的占位最长存活时间。
  *
- * 「占位了但没回填结果」（sent=FALSE 且 fail_reason 为空）说明进程崩在
- * reserve 与 markResult 之间。这行会一直占着 dedupKey，让这个事件再也发不出去。
- * 超过这个时长就当过期，下一轮可以把它抢回来重发。
+ * send_started_at IS NULL 说明进程只占了位、尚未调用外部发送接口，
+ * 这种过期占位可以抢回来重发。一旦开始外部发送，未回填就意味着结果未知
+ * （微信可能已经接收），无论过多久都不能自动重发。
  */
 var STALE_PLACEHOLDER_MS = 10 * 60 * 1000;
 
@@ -672,7 +686,7 @@ const logs = {
     var lim = Math.max(0, Math.floor(Number(limit) || 50));
     var rows = await db.query(
       // 过滤掉「占位了但没回填结果」的僵尸行：
-      // sent=FALSE 且 fail_reason 为空 = 进程崩在 reserve 与 markResult 之间。
+      // sent=FALSE 且 fail_reason 为空 = 尚未发送，或外部发送后结果未知。
       // 这种行对用户表现为「发送失败 · 未知原因」，没有意义，藏起来。
       'SELECT * FROM alert_logs WHERE user_id = $1 AND (sent = TRUE OR fail_reason IS NOT NULL) ' +
       'ORDER BY time DESC LIMIT ' + lim,
@@ -722,14 +736,15 @@ const logs = {
       var msg = String((err && err.message) || '');
       if ((err && err.code === '23505') || /duplicate key|duplicate/i.test(msg)) {
         // 键已被占：可能是「已经发过」，也可能是「上次进程崩了留下的空占位」。
-        // 空占位（sent=FALSE 且 fail_reason 为空）超过 STALE_PLACEHOLDER_MS
-        // 就当过期，用条件更新把它抢回来 —— 「time < 阈值」这个条件保证
-        // 并发实例里只有一个能抢到，另一个会拿到 0 行。
+        // 只有尚未开始外部发送（send_started_at IS NULL）的空占位才能回收。
+        // 已开始发送但未回填 = 微信可能已接收，结果未知，坚决不自动重发。
+        // 「time < 阈值」这个条件保证并发实例里只有一个能抢到，另一个拿到 0 行。
         var existing = await findLogByDedupKey(doc.dedupKey, doc.userId);
-        if (existing && existing.sent === false && !existing.failReason) {
+        if (existing && existing.sent === false && !existing.failReason && !existing.sendStartedAt) {
           var taken = await db.query(
             'UPDATE alert_logs SET time = NOW(), payload = $3::jsonb ' +
-            'WHERE id = $1 AND sent = FALSE AND fail_reason IS NULL AND time < $2 RETURNING *',
+            'WHERE id = $1 AND sent = FALSE AND fail_reason IS NULL ' +
+            'AND send_started_at IS NULL AND time < $2 RETURNING *',
             [
               existing.id,
               new Date(Date.now() - STALE_PLACEHOLDER_MS),
@@ -742,6 +757,21 @@ const logs = {
       }
       throw err;
     }
+  },
+
+  /**
+   * 标记「即将开始外部发送」。
+   *
+   * 必须在调用微信接口之前成功落库；此后即使进程崩溃，也不能把这条
+   * 未回填记录当成可重发占位，避免微信已接受的消息再发一遍。
+   */
+  async markSending(id) {
+    var rows = await db.query(
+      'UPDATE alert_logs SET send_started_at = NOW() ' +
+      'WHERE id = $1 AND sent = FALSE AND fail_reason IS NULL AND send_started_at IS NULL RETURNING *',
+      [id]
+    );
+    return rows.length ? toCamel(rows[0]) : null;
   },
 
   /** 占位之后回填结果：发成功了还是失败了 */

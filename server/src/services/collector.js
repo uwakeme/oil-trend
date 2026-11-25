@@ -397,6 +397,23 @@ function regionFresh(docs, sourceId, freshHours) {
   return latest > 0 && (Date.now() - latest) < freshHours * 3600000;
 }
 
+/** 当前实际供数来源：取该地区最近写入的价格行，不能拿降级链首源代替。 */
+function regionSourceOf(docs) {
+  var sourceId = '';
+  var latest = 0;
+  Object.keys(docs || {}).forEach(function (fuelId) {
+    var p = docs[fuelId];
+    if (!p || !p.source) return;
+    var u = p.updatedAt;
+    var t = u instanceof Date ? u.getTime() : Date.parse(u || '');
+    if (isFinite(t) && t > latest) {
+      latest = t;
+      sourceId = p.source;
+    }
+  });
+  return sourceId;
+}
+
 /**
  * 逐省抓一个价格源。
  *
@@ -468,7 +485,7 @@ async function fetchRegionPages(source, regions, cache) {
 async function collectPriceChain(priceSources, options) {
   var opts = options || {};
   var cache = opts.cache || {};
-  var result = { adopted: {}, failures: [], degraded: [], fresh: 0, stale: 0 };
+  var result = { adopted: {}, rejected: {}, failures: [], degraded: [], fresh: 0, stale: 0 };
   if (!priceSources.length) {
     result.failures.push({ regionCode: '', reason: 'NO_PRICE_SOURCE', message: '没有可用的价格源' });
     return result;
@@ -490,7 +507,14 @@ async function collectPriceChain(priceSources, options) {
   var existing = await loadPricesByRegion();
   var freshHours = primary.freshHours || 6;
   var pending = regions.filter(function (r) {
-    return opts.force || !regionFresh(existing[r.code], primary.id, freshHours);
+    if (opts.force) return true;
+    // 主源被拒后可能一直是备源在供数。按库里实际的来源与新鲜期判断，
+    // 否则每轮都会先重抓主源 31 省，再让仍然新鲜的备源价格原样写回去。
+    var currentId = regionSourceOf(existing[r.code]);
+    var currentSource = priceSources.filter(function (s) { return s.id === currentId; })[0];
+    return !currentSource || !regionFresh(
+      existing[r.code], currentSource.id, currentSource.freshHours || freshHours
+    );
   });
   result.fresh = regions.length - pending.length;
   result.stale = pending.length;
@@ -770,6 +794,12 @@ function historySeries(parsed) {
   return out;
 }
 
+/** 现价校验被拒绝的地区不能继续污染历史与调价节点。 */
+function regionRejected(chain, code) {
+  var rejected = (chain && chain.rejected) || {};
+  return Array.isArray(rejected) ? rejected.indexOf(code) >= 0 : !!rejected[code];
+}
+
 /**
  * 历史序列（各省 → 日期 → 油品价），给入库闸门与调价节点推导用。
  *
@@ -787,10 +817,10 @@ function historySeries(parsed) {
 async function buildSeries(chain) {
   var series = {};
   var adopted = (chain && chain.adopted) || {};
-  var codes = Object.keys(adopted);
-  // ⚠️ 这一轮**一个地区都没采到**（全部在新鲜期内跳过、或价格源全挂）→
-  //    没有新数据，就不该拿库里的历史重新推导节点：
-  //    那是把「这轮没采到」变成「节点变了」，还会动到推算下一轮调价日的基准。
+  var codes = Object.keys(adopted).filter(function (code) { return !regionRejected(chain, code); });
+  // ⚠️ 这一轮**一个地区都没采到**（全部在新鲜期内跳过、或价格源全挂），
+  //    或现价全部被跳变闸门拒绝 → 没有可信的新数据，就不该拿库里的历史
+  //    重新推导节点：那是把「这轮没采到」变成「节点变了」。
   if (!codes.length) return { series: series, from: 'none' };
   codes.forEach(function (code) {
     var ser = historySeries(adopted[code].parsed);
@@ -804,7 +834,7 @@ async function buildSeries(chain) {
   (rows || []).forEach(function (h) {
     var code = h.regionCode;
     var date = String(h.date || '').slice(0, 10);
-    if (!code || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    if (!code || regionRejected(chain, code) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
     var price = Number(h.price);
     if (!isFinite(price)) return;
     if (!dbSeries[code]) dbSeries[code] = {};
@@ -1106,6 +1136,7 @@ async function collectForecastSource(source, options) {
   var fetched = await fetchRegionPages(source, regions, cache);
   var existing = await loadPricesByRegion();
   var trend = null;
+  var sawTrend = false;
   var advisories = [];
   var failures = [];
   var checked = 0;
@@ -1121,7 +1152,21 @@ async function collectForecastSource(source, options) {
       });
       return;
     }
-    if (!trend && r.parsed.trend) trend = r.parsed.trend;
+    if (!trend && r.parsed.trend) {
+      sawTrend = true;
+      if (r.parsed.trend.isForecast === false) {
+        advisories.push({
+          regionCode: region.code,
+          regionName: region.name,
+          reason: 'WINDOW_NOT_FORECAST',
+          date: r.parsed.trend.date,
+          direction: r.parsed.trend.direction,
+          message: '来源公布的是已执行轮次的结果，不是下次调价预测，未写入窗口'
+        });
+      } else {
+        trend = r.parsed.trend;
+      }
+    }
     // 交叉校核：这一源的现价 vs 库里主源写的现价
     shared.FUELS.forEach(function (fuel) {
       var mine = r.parsed.prices[fuel.id];
@@ -1165,6 +1210,12 @@ async function collectForecastSource(source, options) {
           '结果，不是下次窗口，未写入'
       });
     }
+  }
+
+  // 来源已明确给出结果、却没有给出未来窗口时，旧预测已经失效。
+  // 全部抓取失败属于暂时故障，保留最后一条窗口，避免网络抖动清空页面。
+  if (sawTrend && !windowSaved) {
+    await dao.windows.removeBySource(source.id);
   }
 
   var result = {
@@ -1242,13 +1293,13 @@ function timelineCrossCheck(timeline, stats) {
  * 同一窗口日期预测没变就不重复写。
  */
 async function saveWindow(source, trend) {
+  // 防御性拒绝：isForecast=false 是已公布结果，哪怕调用方绕过采集流程也不能存成预测。
+  if (!trend || trend.isForecast === false) return null;
   var forecast = {};
   var basis;
   var dirText = trend.direction === 'up' ? '上调' : trend.direction === 'down' ? '下调' : '搁浅';
-  // 来源公布的是「已发生轮次的结果」时，文案要说结果，不能说预测
-  var isForecast = trend.isForecast !== false;
   if (trend.direction === 'flat') {
-    forecast = { direction: 'flat', literMin: 0, literMax: 0, estimated: true };
+    forecast = { direction: 'flat', literMin: 0, literMax: 0, estimated: true, isForecast: true };
     basis = source.name + '预测（非官方）：本轮预计搁浅不作调整，以正式公告为准。';
   } else if (trend.literMin !== null && trend.literMax !== null) {
     forecast = {
@@ -1256,14 +1307,15 @@ async function saveWindow(source, trend) {
       // 正数幅度，方向由 direction 表达
       literMin: trend.literMin,
       literMax: trend.literMax,
-      estimated: true
+      estimated: true,
+      isForecast: true
     };
-    basis = source.name + (isForecast ? '预测（非官方）：预计' : '公布的调整结果（非官方）：') + dirText +
+    basis = source.name + '预测（非官方）：预计' + dirText +
       (trend.changeTon !== null ? ' ' + Math.abs(trend.changeTon) + ' 元/吨' : '') +
       '，约 ' + trend.literMin + '–' + trend.literMax + ' 元/升；各油品幅度以正式公告为准。';
   } else {
     // 方向已知但幅度没解析出来：不猜幅度，只给方向
-    forecast = { direction: trend.direction, estimated: true };
+    forecast = { direction: trend.direction, estimated: true, isForecast: true };
     basis = source.name + '预测（非官方）：预计' + dirText + '，幅度待公布，以正式公告为准。';
   }
 
@@ -1507,6 +1559,7 @@ function run(options) {
       if (!chain || !Object.keys(chain.adopted).length) return null;
       // ---- 2. 现价入库（跳变闸门 + 基准价告警）----
       var existing = null;
+      chain.rejected = {};
       return loadPricesByRegion().then(function (ex) {
         existing = ex;
         var saved = 0;
@@ -1521,6 +1574,7 @@ function run(options) {
             var item = chain.adopted[code];
             return saveRegionPrices(item.source, region, item.parsed, existing).then(function (res) {
               if (!res.ok) {
+                chain.rejected[code] = true;
                 failures.push({
                   regionCode: code,
                   regionName: region.name,
@@ -1556,7 +1610,9 @@ function run(options) {
         var historyDropped = [];
         var historySaved = 0;
         var promise = Promise.resolve();
-        var codes = Object.keys(chain.adopted);
+        var codes = Object.keys(chain.adopted).filter(function (code) {
+          return !regionRejected(chain, code);
+        });
         codes.forEach(function (code) {
           promise = promise.then(function () {
             var region = shared.REGIONS.filter(function (r) { return r.code === code; })[0];
@@ -1727,7 +1783,8 @@ function run(options) {
           // 「没抓到」和「备源接住了」是两回事，界面不能混着说
           var takenOver = (st.failedRegions || []).filter(function (code) {
             var adopted = chain.adopted[code];
-            return !!adopted && adopted.source && adopted.source.id !== st.sourceId;
+            return !!adopted && !regionRejected(chain, code) &&
+              adopted.source && adopted.source.id !== st.sourceId;
           }).length;
           push({
             sourceId: st.sourceId,
@@ -1748,7 +1805,8 @@ function run(options) {
         });
       }
       if (chain) {
-        var priceStatus = (chain.failures && chain.failures.length) ? 'needsReview' : 'ok';
+        var priceFailures = (chain.failures || []).concat(chain.priceFailures || []);
+        var priceStatus = priceFailures.length ? 'needsReview' : 'ok';
         push({
           sourceId: chain.adopted && Object.keys(chain.adopted).length
             ? (Object.keys(chain.adopted)[0] && chain.adopted[Object.keys(chain.adopted)[0]].source.id)
@@ -1759,11 +1817,11 @@ function run(options) {
           stale: chain.stale || 0,
           historySaved: chain.historySaved || 0,
           adjustEvents: chain.adjustEvents || 0,
-          failed: chain.failures || [],
+          failed: priceFailures,
           degraded: chain.degraded || [],
           advisories: (chain.priceAdvisories || []).concat(chain.historyAdvisories || []),
-          message: chain.failures && chain.failures.length
-            ? chain.failures.length + ' 个地区采集失败，已转人工核对'
+          message: priceFailures.length
+            ? priceFailures.length + ' 个地区采集或价格校验失败，已转人工核对'
             : '历史价 ' + (chain.historySaved || 0) + ' 条、调价节点 ' + (chain.adjustEvents || 0) + ' 个'
         });
       }

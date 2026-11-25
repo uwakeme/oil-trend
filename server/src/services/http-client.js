@@ -209,8 +209,20 @@ function get(url, options) {
               settle(reject, new Error('TOO_MANY_REDIRECTS'));
               return;
             }
-            var next = new URL(location, target.toString()).toString();
-            attempt(next, redirectsLeft - 1).then(resolve, reject);
+            var next;
+            try {
+              next = new URL(location, target.toString()).toString();
+            } catch (e) {
+              // Location 是服务端给的非受信字符串，畸形值必须走正常拒绝路径，
+              // 不能从 response 回调里抛出未捕获异常。
+              settle(reject, new Error('URL_INVALID'));
+              return;
+            }
+            attempt(next, redirectsLeft - 1).then(function (result) {
+              settle(resolve, result);
+            }, function (err) {
+              settle(reject, err);
+            });
             return;
           }
 

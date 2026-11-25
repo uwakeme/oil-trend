@@ -61,14 +61,92 @@ function validateRules(rules) {
   });
 }
 
-/** 校验提醒记录 */
-function validateHistory(history) {
+/** 历史记录允许写入 payload 的字段及长度上限；其余客户端字段一律忽略。 */
+var HISTORY_LIMITS = {
+  dedupKey: 200,
+  title: 120,
+  time: 40,
+  failReason: 500,
+  type: 50,
+  channel: 80,
+  priceText: 40
+};
+
+/**
+ * 客户端记录 → 实际入库字段。
+ *
+ * 只保留白名单字段，避免把任意对象/超长字符串塞进 JSONB。
+ * sent 在校验前不做 !! 转换，字符串 "false" 不能悄悄变成 true。
+ */
+function toDbHistory(userId, item) {
+  var payload = {};
+  Object.keys(HISTORY_LIMITS).forEach(function (key) {
+    if (Object.prototype.hasOwnProperty.call(item, key) && item[key] !== undefined) {
+      payload[key] = item[key];
+    }
+  });
+  if (Object.prototype.hasOwnProperty.call(item, 'sent') && item.sent !== undefined) {
+    payload.sent = item.sent;
+  }
+  if (Object.prototype.hasOwnProperty.call(item, 'price') && item.price !== undefined) {
+    payload.price = item.price;
+  }
+  var suffix = item.dedupKey || ((item.time || Date.now()) + ':' + Math.random().toString(36).slice(2));
+  return {
+    userId: userId,
+    dedupKey: 'local:' + userId + ':' + suffix,
+    sent: item.sent === undefined ? false : item.sent,
+    failReason: item.failReason === undefined ? null : item.failReason,
+    payload: payload
+  };
+}
+
+/** 按 toDbHistory 的真实产物校验类型与长度，不破坏已有的合法可选字段。 */
+function validateHistory(history, userId) {
   if (!Array.isArray(history)) throw badRequest('记录格式不正确', 'INVALID_HISTORY');
   if (history.length > MAX_HISTORY) {
     throw badRequest('一次最多提交 ' + MAX_HISTORY + ' 条记录', 'TOO_MANY_HISTORY');
   }
   history.forEach(function (item) {
-    if (!item || typeof item !== 'object') throw badRequest('记录格式不正确', 'INVALID_HISTORY');
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw badRequest('记录格式不正确', 'INVALID_HISTORY');
+    }
+    if (item.sent !== undefined && typeof item.sent !== 'boolean') {
+      throw badRequest('sent 必须是布尔值', 'INVALID_HISTORY');
+    }
+    if (item.price !== undefined && item.price !== null &&
+        (typeof item.price !== 'number' || !isFinite(item.price))) {
+      throw badRequest('price 必须是有限数字', 'INVALID_HISTORY');
+    }
+    if (item.time !== undefined && item.time !== null && typeof item.time !== 'string' &&
+        (typeof item.time !== 'number' || !isFinite(item.time))) {
+      throw badRequest('time 必须是日期字符串或时间戳', 'INVALID_HISTORY');
+    }
+    Object.keys(HISTORY_LIMITS).forEach(function (key) {
+      var value = item[key];
+      if (value === undefined || value === null) return;
+      if (key === 'time') {
+        if (typeof value === 'string' && value.length > HISTORY_LIMITS.time) {
+          throw badRequest('time 超过长度限制', 'INVALID_HISTORY');
+        }
+        return;
+      }
+      if (typeof value !== 'string') {
+        throw badRequest(key + ' 必须是字符串', 'INVALID_HISTORY');
+      }
+      if (value.length > HISTORY_LIMITS[key]) {
+        throw badRequest(key + ' 超过长度限制', 'INVALID_HISTORY');
+      }
+    });
+
+    var doc = toDbHistory(userId || 'history-validation', item);
+    if (typeof doc.userId !== 'string' || !doc.userId || doc.userId.length > 128 ||
+        typeof doc.dedupKey !== 'string' || !doc.dedupKey || doc.dedupKey.length > 255 ||
+        typeof doc.sent !== 'boolean' ||
+        (doc.failReason !== null && (typeof doc.failReason !== 'string' || doc.failReason.length > 500)) ||
+        !doc.payload || typeof doc.payload !== 'object' || Array.isArray(doc.payload)) {
+      throw badRequest('记录格式不正确', 'INVALID_HISTORY');
+    }
   });
 }
 
@@ -152,22 +230,14 @@ function actionHistoryList(userId) {
 function actionHistorySave(userId, history) {
   var list = history || [];
   if (!list.length) return Promise.resolve({ history: [] });
-  validateHistory(list);
+  validateHistory(list, userId);
 
   var tasks = list.map(function (item) {
     // ⚠️ dedup_key 必须由服务端加前缀，不能直接用客户端给的值：
     // 系统推送的去重键是 [openid, 地区, 油品, 类型, 日期].join('::')，
     // 客户端要是能指定这个值，就能提前占住全局去重键，
-    // 让某次系统推送被永久跳过。强制加 'local:' 前缀后不可能撞上。
-    var raw = item.dedupKey || '';
-    var suffix = raw || ((item.time || Date.now()) + ':' + Math.random().toString(36).slice(2));
-    return dao.logs.insert({
-      userId: userId,
-      dedupKey: 'local:' + userId + ':' + suffix,
-      sent: !!item.sent,
-      failReason: item.failReason || null,
-      payload: item
-    });
+    // 让某次系统推送被永久跳过。toDbHistory 会强制加 'local:' 前缀。
+    return dao.logs.insert(toDbHistory(userId, item));
   });
 
   return Promise.all(tasks).then(function () {
@@ -180,6 +250,7 @@ module.exports = {
   actionRulesSave: actionRulesSave,
   actionHistoryList: actionHistoryList,
   actionHistorySave: actionHistorySave,
+  toDbHistory: toDbHistory,
   toDbRule: toDbRule,
   toApiRule: toApiRule
 };

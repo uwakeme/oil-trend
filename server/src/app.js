@@ -146,10 +146,20 @@ function createApp() {
     res.status(404).json({ ok: false, message: errors.PUBLIC_ERRORS.NOT_FOUND, code: 'NOT_FOUND' });
   });
 
-  // 统一错误处理
+  // 统一错误处理：body-parser 的输入错误要如实映射成 4xx，其余仍按内部错误处理。
   app.use(function (err, req, res, next) { // eslint-disable-line no-unused-vars
     console.error('[app] 未捕获异常', err);
-    res.status(500).json(errors.publicError(err));
+    var status = 500;
+    var body = errors.publicError(err);
+    if (err && (err.type === 'entity.parse.failed' ||
+        (err instanceof SyntaxError && typeof err.body !== 'undefined'))) {
+      status = 400;
+      body = { ok: false, message: '请求正文不是合法的 JSON', code: 'INVALID_JSON' };
+    } else if (err && (err.type === 'entity.too.large' || err.status === 413 || err.statusCode === 413)) {
+      status = 413;
+      body = { ok: false, message: '请求正文超过大小限制', code: 'PAYLOAD_TOO_LARGE' };
+    }
+    res.status(status).json(body);
   });
 
   return app;

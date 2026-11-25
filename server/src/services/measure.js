@@ -303,6 +303,14 @@ async function measureMany(executeAtList, tonByDate) {
     if (!groups[r.regionCode][r.fuelId]) groups[r.regionCode][r.fuelId] = [];
     groups[r.regionCode][r.fuelId].push(r);
   });
+  // 每个地区油品序列只排序一次，后续各生效日共用，避免 dates × groups 次重复排序。
+  Object.keys(groups).forEach(function (regionCode) {
+    Object.keys(groups[regionCode]).forEach(function (fuelId) {
+      groups[regionCode][fuelId].sort(function (a, b) {
+        return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
+      });
+    });
+  });
 
   var out = {};
   dates.forEach(function (date) {
@@ -318,9 +326,7 @@ async function measureMany(executeAtList, tonByDate) {
     Object.keys(groups).forEach(function (regionCode) {
       var fuels = groups[regionCode];
       Object.keys(fuels).forEach(function (fuelId) {
-        var list = fuels[fuelId].slice().sort(function (a, b) {
-          return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0);
-        });
+        var list = fuels[fuelId];
         // 窗口内的价格变化（与本地区快照同一套算法，别各写一遍）
         // 官方方向已知时，方向相反的候选不算本轮的变化点
         var group = FUEL_GROUP[fuelId];

@@ -473,7 +473,11 @@ function actionTrend(payload) {
     var history = r0[0];
     var allEvents = r0[1];
     var prices = r0[2];
-    var notices = r0[3];
+    // 先按当前视图截取公告，后面的吨价映射与每升幅度测算都只处理这些轮次。
+    // 3 个月视图不必把查回来的 60 条历史公告全部测算一遍。
+    var notices = (r0[3] || []).filter(function (n) {
+      return n.executeAt && n.executeAt >= fromDate && n.executeAt <= today;
+    });
 
     var events = allEvents.filter(function (e) {
       return e.date >= fromDate && e.date <= today;
@@ -525,24 +529,24 @@ function actionTrend(payload) {
       if (n.executeAt) tonByDate[n.executeAt] = n.tonChanges || {};
     });
     return measure.measureMany(execDates, tonByDate).then(function (measuredByDate) {
-      var officialEvents = notices
-        .filter(function (n) { return n.executeAt && n.executeAt >= fromDate && n.executeAt <= today; })
-        .map(function (n) {
-          var measured = (measuredByDate[n.executeAt] || {})[fuelId];
-          var known = typeof measured === 'number';
-          // 幅度算不出来时用公告方向，界面显示「方向已知 · 幅度待公布」
-          var dir = known
-            ? (measured < 0 ? 'down' : (measured > 0 ? 'up' : 'flat'))
-            : (n.direction === 'up' ? 'up' : (n.direction === 'down' ? 'down' : 'flat'));
-          return {
-            date: n.executeAt,
-            title: n.title,
-            amount: known ? measured : null,
-            amountKnown: known,
-            direction: dir,
-            priceAfter: priceAfterOf(history, n.executeAt, priceMap[fuelId])
-          };
-        });
+      var officialEvents = notices.map(function (n) {
+        var measured = (measuredByDate[n.executeAt] || {})[fuelId];
+        var known = typeof measured === 'number';
+        // 幅度算不出来时用公告方向，界面显示「方向已知 · 幅度待公布」
+        var dir = known
+          ? (measured < 0 ? 'down' : (measured > 0 ? 'up' : 'flat'))
+          : (n.direction === 'up' ? 'up' : (n.direction === 'down' ? 'down' : 'flat'));
+        return {
+          date: n.executeAt,
+          title: n.title,
+          amount: known ? measured : null,
+          amountKnown: known,
+          // 公告只给吨价，这里的每升金额来自挂牌价前后快照测算
+          measured: known,
+          direction: dir,
+          priceAfter: priceAfterOf(history, n.executeAt, priceMap[fuelId])
+        };
+      });
 
       // 合并两类调价节点：
       //   官方公告 —— 覆盖最近几轮，有权威标题与方向；

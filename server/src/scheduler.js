@@ -131,8 +131,9 @@ function nextRun(cron, from) {
  * @param {Function} fn 任务函数
  */
 function register(name, cron, fn) {
-  var timer = null;
   var scheduled = false;
+  var delayTarget = 0;
+  var task = { name: name, timer: null, running: null, stopped: false };
 
   // setTimeout 的延时上限是 2^31-1 ms（约 24.8 天）。
   // 月/年级的 cron 一次要等那么久，超了就溢出成 1ms —— 任务立刻触发、
@@ -140,26 +141,33 @@ function register(name, cron, fn) {
   var MAX_TIMEOUT = 2147483647;
 
   function schedule(waitMs) {
-    timer = setTimeout(function () {
+    if (task.stopped) return;
+    task.timer = setTimeout(function () {
+      task.timer = null;
+      if (task.stopped) return;
       var remain = delayTarget - Date.now();
       if (remain > 0) {
         // 刚才只是等到了 setTimeout 上限，任务还没到点 —— 重新排一次，别执行
         schedule(Math.min(remain, MAX_TIMEOUT));
         return;
       }
-      Promise.resolve()
+      // 在 fn 开始前就登记 Promise，stop() 才能连「刚触发、尚未执行」的任务一起等。
+      var running = Promise.resolve()
         .then(fn)
         .catch(function (err) {
           console.error('[scheduler] ' + name + ' 执行失败：', err.message);
-        })
-        .then(function () { tick(); });
+        });
+      task.running = running;
+      running.then(function () {
+        if (task.running === running) task.running = null;
+        tick();
+      });
     }, Math.max(0, waitMs));
-    if (timer.unref) timer.unref();
+    if (task.timer.unref) task.timer.unref();
   }
 
-  var delayTarget = 0;
-
   function tick() {
+    if (task.stopped) return;
     var delay = nextRun(cron, new Date());
     if (delay === null) {
       // 注册失败要说清楚「已停用」，不能既报错又打「已注册」误导排查
@@ -176,7 +184,15 @@ function register(name, cron, fn) {
   }
 
   tick();
-  tasks.push({ name: name, stop: function () { if (timer) clearTimeout(timer); } });
+  tasks.push({
+    name: name,
+    stop: function () {
+      task.stopped = true;
+      if (task.timer) clearTimeout(task.timer);
+      task.timer = null;
+      return task.running || Promise.resolve();
+    }
+  });
 }
 
 function start() {
@@ -193,8 +209,10 @@ function start() {
 }
 
 function stop() {
-  tasks.forEach(function (t) { t.stop(); });
+  var pending = tasks.map(function (t) { return t.stop(); });
   tasks = [];
+  // 调用方必须等在途任务收尾后再关数据库，不能 fire-and-forget。
+  return Promise.all(pending).then(function () { return undefined; });
 }
 
-module.exports = { start: start, stop: stop, nextRun: nextRun, parseField: parseField };
+module.exports = { start: start, stop: stop, register: register, nextRun: nextRun, parseField: parseField };

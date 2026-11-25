@@ -915,6 +915,9 @@ async function main() {
       trendPage.data.events.every(function (e) {
         return ['up', 'down', 'flat'].indexOf(e.direction) >= 0;
       }));
+    check('走势页保留每升幅度的挂牌价测算标记',
+      trendPage.data.events.some(function (e) { return e.measured === true; }),
+      JSON.stringify(trendPage.data.events));
     check('走势页渲染里没有 undefined', hasBadToken(allText(trendPage.data)) === false);
 
     // 幅度未知的调价节点要显示 '--'，不能显示 0.00（那是「持平」，不是「不知道」）
@@ -956,6 +959,50 @@ async function main() {
     check('提醒页当前价不是 --', alertPage.data.currentPriceText !== '--',
       '实际：' + alertPage.data.currentPriceText);
     check('提醒页渲染里没有 undefined', hasBadToken(allText(alertPage.data)) === false);
+
+    var failedLog = await dao.logs.reserve({
+      userId: TEST_OPENID, dedupKey: 'contract::failed-history', payload: { title: '测试失败提醒', price: 8.39 }
+    });
+    await dao.logs.markResult(failedLog.id, false, '网络超时');
+    await alertPage.load();
+    check('后端失败记录在提醒历史中显示为失败',
+      alertPage.data.history.some(function (h) { return h.sent === false && h.channel.indexOf('发送失败') >= 0; }),
+      JSON.stringify(alertPage.data.history));
+
+    alertPage._pendingGrant = true;
+    var permissionOpened = 0;
+    var pendingRetried = 0;
+    alertPage.onOpenPermission = function () { permissionOpened++; };
+    alertPage.onRetrySave = function () { pendingRetried++; };
+    alertPage.onSubscriptionAction();
+    check('授权已取得但未同步时只重试保存', pendingRetried === 1 && permissionOpened === 0);
+    alertPage._pendingGrant = false;
+
+    // 首次 wx.login 失败不能把并发 Promise 永久卡住：下一次必须重新登录。
+    var loginCloudPath = require.resolve(path.join(ROOT, 'utils', 'cloud.js'));
+    delete require.cache[loginCloudPath];
+    var loginCloud = require(loginCloudPath);
+    var originalLogin = wx.login;
+    var loginCalls = 0;
+    try {
+      wx.login = function (opts) {
+        loginCalls++;
+        if (loginCalls === 1) {
+          setTimeout(function () {
+            if (opts.fail) opts.fail({ errMsg: 'login:fail' });
+          }, 0);
+        } else if (opts.success) {
+          opts.success({ code: 'contract-retry-code' });
+        }
+      };
+      loginCloud.initCloud({});
+      var firstLogin = await loginCloud.loginReady();
+      var secondLogin = await loginCloud.loginReady();
+      check('wx.login 第一次失败后第二次可重试', firstLogin === null && !!secondLogin && loginCalls === 2,
+        JSON.stringify({ firstLogin: firstLogin, secondLogin: !!secondLogin, loginCalls: loginCalls }));
+    } finally {
+      wx.login = originalLogin;
+    }
 
     // 开关关掉时，摘要必须如实写「已停用」
     // ⚠️ 以前两段摘要写死「向我发送微信订阅消息」，开关关了也在说这句话。
@@ -1075,6 +1122,24 @@ async function main() {
     keepPage.onHide();
     check('切走时不清用户已选的地区',
       store.getPrefs().regionCode === '510000', store.getPrefs().regionCode);
+
+    [
+      ['pages/index/index.js', '首页'],
+      ['pages/trend/trend.js', '走势页'],
+      ['pages/notice/notice.js', '调价页'],
+      ['pages/alert/alert.js', '提醒页']
+    ].forEach(function (entry) {
+      var ttlPage = makeInstance(loadPageDef(entry[0]));
+      var ttlLoads = 0;
+      ttlPage.load = function () { ttlLoads++; return Promise.resolve(); };
+      ttlPage._prefsKey = store.prefsKey(store.getPrefs());
+      ttlPage._loadedAt = Date.now();
+      ttlPage.onShow();
+      check(entry[1] + ' 60 秒内 onShow 不重复取数', ttlLoads === 0, String(ttlLoads));
+      ttlPage._loadedAt = Date.now() - 61000;
+      ttlPage.onShow();
+      check(entry[1] + ' 停留超过 60 秒 onShow 会刷新', ttlLoads === 1, String(ttlLoads));
+    });
 
     console.log('\n--- 汇总 ---');
     console.log('检查 ' + checks + ' 项，失败 ' + failures.length + ' 项');

@@ -72,4 +72,9 @@ function transaction(fn) {
   });
 }
 
-module.exports = { pool: pool, query: query, one: one, transaction: transaction };
+/** 关闭连接池；优雅退出时必须等它完成，不能只退出进程留下半开的连接。 */
+function close() {
+  return pool.end();
+}
+
+module.exports = { pool: pool, query: query, one: one, transaction: transaction, close: close };

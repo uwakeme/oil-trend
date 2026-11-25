@@ -32,7 +32,7 @@ function check(name, condition, detail) {
 /** 发一个 HTTP 请求 */
 function request(port, method, path, body, headers) {
   return new Promise(function (resolve, reject) {
-    var data = body ? JSON.stringify(body) : null;
+    var data = typeof body === 'string' ? body : (body ? JSON.stringify(body) : null);
     var req = http.request({
       hostname: '127.0.0.1',
       port: port,
@@ -151,6 +151,28 @@ async function main() {
     var withAuth = await request(port, 'GET', '/api/rules', null, { Authorization: 'Bearer ' + token });
     check('带合法 token 返回 200', withAuth.status === 200);
     check('rules 返回数组', Array.isArray(withAuth.body.data.rules));
+
+    console.log('\n--- 请求体边界 ---');
+    var invalidJson = await request(port, 'POST', '/api/rules', '{"rules":', {
+      Authorization: 'Bearer ' + token
+    });
+    check('非法 JSON 返回 400', invalidJson.status === 400, String(invalidJson.status));
+    check('非法 JSON 使用稳定错误码', invalidJson.body && invalidJson.body.code === 'INVALID_JSON',
+      JSON.stringify(invalidJson.body));
+
+    var tooLarge = await request(port, 'POST', '/api/rules', new Array(1024 * 1024 + 2).join('x'), {
+      Authorization: 'Bearer ' + token
+    });
+    check('超过 1MB 的请求体返回 413', tooLarge.status === 413, String(tooLarge.status));
+    check('请求体过大使用稳定错误码', tooLarge.body && tooLarge.body.code === 'PAYLOAD_TOO_LARGE',
+      JSON.stringify(tooLarge.body));
+
+    var invalidHistory = await request(port, 'POST', '/api/history', { history: [{ sent: 'false' }] }, {
+      Authorization: 'Bearer ' + token
+    });
+    check('认证后的非法历史记录返回 400', invalidHistory.status === 400, String(invalidHistory.status));
+    check('非法历史记录使用稳定错误码', invalidHistory.body && invalidHistory.body.code === 'INVALID_HISTORY',
+      JSON.stringify(invalidHistory.body));
 
     console.log('\n--- 就绪检查 ---');
     // /health 只说明进程活着，/ready 才真的连库 ——

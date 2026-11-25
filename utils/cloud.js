@@ -98,29 +98,38 @@ function ensureLogin() {
   if (loginPromise) return loginPromise;
   if (typeof wx.login !== 'function') return Promise.resolve(null);
 
-  loginPromise = new Promise(function (resolve) {
-    wx.login({
-      success: function (res) {
-        if (!res || !res.code) {
-          resolve(null);
-          return;
-        }
-        requestRaw('POST', '/api/login', { code: res.code }, false)
-          .then(function (data) {
-            authToken = (data && data.token) || '';
-            resolve(authToken || null);
-          })
-          .catch(function () {
-            resolve(null);
-          });
-      },
-      fail: function () {
-        resolve(null);
+  var resolveLogin;
+  var pending = new Promise(function (resolve) {
+    resolveLogin = resolve;
+  });
+  function finish(token) {
+    // 只清自己这一轮：并发调用仍共享 pending，失败后下一次才能重新登录。
+    if (loginPromise === pending) loginPromise = null;
+    resolveLogin(token || null);
+  }
+  loginPromise = pending;
+
+  wx.login({
+    success: function (res) {
+      if (!res || !res.code) {
+        finish(null);
+        return;
       }
-    });
+      requestRaw('POST', '/api/login', { code: res.code }, false)
+        .then(function (data) {
+          authToken = (data && data.token) || '';
+          finish(authToken);
+        })
+        .catch(function () {
+          finish(null);
+        });
+    },
+    fail: function () {
+      finish(null);
+    }
   });
 
-  return loginPromise;
+  return pending;
 }
 
 /* ---------------- HTTP 请求 ---------------- */

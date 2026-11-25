@@ -66,7 +66,7 @@ function historyTime(value) {
  * 直接渲染的话后端记录会是一片空白。
  */
 function historyView(item, index) {
-  if (!item) return { id: 'history-' + index, title: '', time: '', channel: '', priceText: '' };
+  if (!item) return { id: 'history-' + index, title: '', time: '', channel: '', priceText: '', sent: false };
   if (item.dedupKey) {
     var payload = item.payload || {};
     return {
@@ -74,7 +74,8 @@ function historyView(item, index) {
       title: payload.title || '提醒记录',
       time: historyTime(item.time),
       channel: item.sent ? '订阅消息' : ('发送失败 · ' + (item.failReason || '未知原因')),
-      priceText: payload.price === undefined ? '' : fmt.price(payload.price)
+      priceText: payload.price === undefined ? '' : fmt.price(payload.price),
+      sent: !!item.sent
     };
   }
   return {
@@ -82,7 +83,9 @@ function historyView(item, index) {
     title: item.title || '',
     time: item.time || '',
     channel: item.channel || '',
-    priceText: item.priceText || ''
+    priceText: item.priceText || '',
+    // 本地演示记录没有 sent 字段，按既有的成功记录语义展示。
+    sent: item.sent !== false
   };
 }
 
@@ -137,6 +140,8 @@ Page({
     if (this._prefsKey && key !== this._prefsKey) {
       this._prefsKey = key;
       this.load();
+    } else if (!this._loadedAt || Date.now() - this._loadedAt > 60000) {
+      this.load();
     }
   },
 
@@ -165,6 +170,8 @@ Page({
     // 先发的那轮可能后到，不能让它把新一轮的结果盖回去。
     this._reqSeq = (this._reqSeq || 0) + 1;
     var seq = this._reqSeq;
+    // 发请求前记时间：首屏 onShow 不会重复取数，停留超过 60 秒再刷新。
+    this._loadedAt = Date.now();
     this.setData({ loading: true, loadError: '' });
 
     return Promise.all([
@@ -419,21 +426,23 @@ Page({
     // 让后面的保存等这一次结束（成功失败都算）
     this._saveChain = next.then(function () {}, function () {});
     return next.then(function (res) {
-      var ok = !!(res && res.ok);
       // 只有真的写到服务器才敢说「已保存到服务器」：
       // 演示模式与离线只是存了本机副本，不能当成服务端已确认。
       var online = !!(res && res.ok && !res.offline);
       if (online) {
         self._pendingGrant = false;
+        self._rulesConfirmed = true;
       } else if (grant) {
         // 授权拿到了但没存上：记下来，重试时要带上 subscribeGranted；
         // 卡片据此显示「授权已取得，服务端未生效」，不再显示「已开启」
         self._pendingGrant = true;
       }
       self.setData({
-        saveState: ok ? 'saved' : 'failed',
+        saveState: online ? 'saved' : 'failed',
         saveText: online ? '已保存到服务器' : ((res && res.message) || '保存失败，请重试')
       });
+      // 服务端确认状态可能刚变化，立即重算订阅卡片，不等下一次 load。
+      self.applyRule();
       return res;
     });
   },
@@ -446,7 +455,7 @@ Page({
    */
   saveAndReport(nextRule, opts) {
     return this.persist(nextRule, opts).then(function (res) {
-      if (!res || !res.ok) {
+      if (!res || !res.ok || res.offline) {
         wx.showToast({ title: '规则未保存', icon: 'none' });
       }
       return res;
@@ -505,6 +514,20 @@ Page({
 
   /* ---------- 订阅授权 ---------- */
 
+  /** 订阅卡片只有一个入口：先补保存，未同步时同步，其余才发起授权。 */
+  onSubscriptionAction() {
+    if (!subscribe.hasTemplate()) {
+      this.onOpenPermission();
+      return;
+    }
+    if (this._pendingGrant || this._rulesConfirmed === false) {
+      // 重试使用已取得的一次性授权，不重新弹微信授权。
+      this.onRetrySave();
+      return;
+    }
+    this.onOpenPermission();
+  },
+
   onOpenPermission() {
     this.setData({ sheetVisible: true });
   },
@@ -530,8 +553,7 @@ Page({
         // 以前是授权完立刻弹「订阅已开启」，后端写失败也照弹 ——
         // 用户以为提醒已经开着，实际上服务端一条规则都没有。
         self.persist(rule, { grant: true }).then(function (result) {
-          self.applyRule();
-          if (result && result.ok) {
+          if (result && result.ok && !result.offline) {
             wx.showToast({ title: '订阅已开启', icon: 'success' });
           } else {
             wx.showToast({ title: '授权成功，规则未保存', icon: 'none' });
@@ -547,7 +569,7 @@ Page({
     this.load();
   },
 
-  /** 保存失败后的重试 */
+  /** 保存失败后的重试：只补发保存，不重新请求订阅授权。 */
   onRetrySave() {
     this.saveAndReport(this.data.rule);
   }

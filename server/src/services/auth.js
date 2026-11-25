@@ -18,6 +18,9 @@ const https = require('https');
 const config = require('../config');
 
 var TOKEN_TTL_SECONDS = 7 * 24 * 3600; // 7 天
+var WECHAT_IDLE_TIMEOUT_MS = 10000;
+var WECHAT_TOTAL_TIMEOUT_MS = 15000;
+var WECHAT_MAX_RESPONSE_BYTES = 1024 * 1024;
 
 /* ---------------- 微信 HTTP 调用 ---------------- */
 
@@ -29,6 +32,21 @@ var TOKEN_TTL_SECONDS = 7 * 24 * 3600; // 7 天
  */
 function callWeChat(urlPath, query, post) {
   return new Promise(function (resolve, reject) {
+    var settled = false;
+    var totalTimer = null;
+    var req = null;
+    function settle(fn, value) {
+      if (settled) return;
+      settled = true;
+      if (totalTimer) clearTimeout(totalTimer);
+      fn(value);
+    }
+    function fail(message) {
+      if (settled) return;
+      if (req) req.destroy();
+      settle(reject, new Error(message));
+    }
+
     var qs = Object.keys(query || {})
       .filter(function (k) { return query[k] !== undefined && query[k] !== ''; })
       .map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(query[k]); })
@@ -39,29 +57,52 @@ function callWeChat(urlPath, query, post) {
       headers['Content-Type'] = 'application/json';
       headers['Content-Length'] = Buffer.byteLength(body);
     }
-    var req = https.request({
-      hostname: 'api.weixin.qq.com',
-      path: urlPath + (qs ? '?' + qs : ''),
-      method: body ? 'POST' : 'GET',
-      headers: headers,
-      timeout: 10000
-    }, function (res) {
-      var chunks = [];
-      res.on('data', function (c) { chunks.push(c); });
-      res.on('end', function () {
-        var text = Buffer.concat(chunks).toString('utf8');
-        try {
-          resolve(JSON.parse(text));
-        } catch (e) {
-          reject(new Error('微信接口返回的不是 JSON：' + text.slice(0, 200)));
+    try {
+      req = https.request({
+        hostname: 'api.weixin.qq.com',
+        path: urlPath + (qs ? '?' + qs : ''),
+        method: body ? 'POST' : 'GET',
+        headers: headers,
+        timeout: WECHAT_IDLE_TIMEOUT_MS
+      }, function (res) {
+        if (settled) {
+          res.resume();
+          return;
         }
+        var chunks = [];
+        var size = 0;
+        res.on('data', function (c) {
+          if (settled) return;
+          size += c.length;
+          if (size > WECHAT_MAX_RESPONSE_BYTES) {
+            fail('微信接口响应体超过 1MB 限制');
+            return;
+          }
+          chunks.push(c);
+        });
+        res.on('error', function (err) { settle(reject, err); });
+        res.on('end', function () {
+          if (settled) return;
+          var text = Buffer.concat(chunks).toString('utf8');
+          try {
+            settle(resolve, JSON.parse(text));
+          } catch (e) {
+            settle(reject, new Error('微信接口返回的不是 JSON：' + text.slice(0, 200)));
+          }
+        });
       });
+    } catch (e) {
+      settle(reject, e);
+      return;
+    }
+    req.setTimeout(WECHAT_IDLE_TIMEOUT_MS, function () {
+      fail('微信接口请求超时');
     });
-    req.setTimeout(10000, function () {
-      req.destroy();
-      reject(new Error('微信接口请求超时'));
-    });
-    req.on('error', reject);
+    req.on('error', function (err) { settle(reject, err); });
+    // 空闲超时会被持续收到的数据重置，总时限必须独立计时。
+    totalTimer = setTimeout(function () {
+      fail('微信接口请求总时限已到');
+    }, WECHAT_TOTAL_TIMEOUT_MS);
     if (body) req.write(body);
     req.end();
   });
