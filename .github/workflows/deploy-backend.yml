@@ -74,6 +74,11 @@ jobs:
             for item in src scripts package.json package-lock.json schema.sql oil-trend-pm2.json; do
               if [ -e "$item" ]; then cp -a "$item" ${DEPLOY_DIR}/server/.rollback/; fi
             done
+            # 基准价文件也一起备份：它部署时会被覆盖到 ${DEPLOY_DIR}/data/ 下，
+            # 不还原的话回滚后就是「旧代码 + 新基准价」。
+            if [ -e "${DEPLOY_DIR}/data/reference-prices.js" ]; then
+              cp -a "${DEPLOY_DIR}/data/reference-prices.js" ${DEPLOY_DIR}/server/.rollback/reference-prices.js
+            fi
             echo "已备份当前版本到 ${DEPLOY_DIR}/server/.rollback"
 
       - name: Copy backend to server
@@ -280,9 +285,19 @@ jobs:
               fi
             done
 
+            # 基准价文件也要还原
+            if [ -e "${DEPLOY_DIR}/server/.rollback/reference-prices.js" ]; then
+              mkdir -p ${DEPLOY_DIR}/data
+              cp -a "${DEPLOY_DIR}/server/.rollback/reference-prices.js" ${DEPLOY_DIR}/data/reference-prices.js
+            fi
+
             # 代码与依赖必须成对回滚：不能把旧代码留在新依赖上。
-            # npm ci 严格按恢复出来的 package-lock.json 安装，失败则保留备份并停止。
-            npm ci --omit=dev
+            # ⚠️ 但 npm ci 失败**不能**中断回滚 ——
+            #   中断就等于没回滚，线上还跑着这次部署的新版本。
+            #   记一条警告继续用旧代码重启，后面的 /ready 复检会判定这一版能不能起来。
+            if ! npm ci --omit=dev; then
+              echo "⚠ 依赖恢复失败，继续用现有依赖重启旧代码（可能不兼容）"
+            fi
             pm2 restart oil-trend-server --update-env
             pm2 save
 

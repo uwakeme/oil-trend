@@ -473,10 +473,20 @@ function actionTrend(payload) {
     var history = r0[0];
     var allEvents = r0[1];
     var prices = r0[2];
+    var allNotices = r0[3] || [];
     // 先按当前视图截取公告，后面的吨价映射与每升幅度测算都只处理这些轮次。
     // 3 个月视图不必把查回来的 60 条历史公告全部测算一遍。
-    var notices = (r0[3] || []).filter(function (n) {
+    var notices = allNotices.filter(function (n) {
       return n.executeAt && n.executeAt >= fromDate && n.executeAt <= today;
+    });
+    // ⚠️ 下一轮的执行日通常在**未来**（发改委提前约 10 天公布）——
+    //   它不进测算列表，但**必须**留着当变化点窗口的边界（measure.js 的 nextDate）。
+    //   少了它，最新一轮的每升幅度会取到下一轮的价格变化（整轮错位）。
+    var nextExecDate = '';
+    allNotices.forEach(function (n) {
+      if (n.executeAt && n.executeAt > today && (!nextExecDate || n.executeAt < nextExecDate)) {
+        nextExecDate = n.executeAt;
+      }
     });
 
     var events = allEvents.filter(function (e) {
@@ -528,7 +538,8 @@ function actionTrend(payload) {
     notices.forEach(function (n) {
       if (n.executeAt) tonByDate[n.executeAt] = n.tonChanges || {};
     });
-    return measure.measureMany(execDates, tonByDate).then(function (measuredByDate) {
+    // 下一轮执行日一起传进去：变化点窗口不得越过它（见 measure.js 的 nextExecDate）
+    return measure.measureMany(execDates, tonByDate, nextExecDate).then(function (measuredByDate) {
       var officialEvents = notices.map(function (n) {
         var measured = (measuredByDate[n.executeAt] || {})[fuelId];
         var known = typeof measured === 'number';

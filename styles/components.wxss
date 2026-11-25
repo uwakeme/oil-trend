@@ -38,6 +38,8 @@
 }
 .save-hint.saved .micro { color: var(--green); }
 .save-hint.failed .micro { color: var(--red); }
+/* 只存在本机（演示模式）：存上了，但不是服务器确认，用中性色 */
+.save-hint.offline .micro { color: var(--muted); }
 .save-retry {
   margin: 0 !important;
   flex: 0 0 auto;

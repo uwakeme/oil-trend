@@ -532,6 +532,17 @@ function classifyFailure(reason) {
 }
 
 /**
+ * 失败是不是「结果未知」。
+ *
+ * 请求超时（微信没给回包）时，微信可能已经收下并投递了这条消息 ——
+ * 这时重发就是重复投递。平台明确拒收（带错误码）才是「确定没送到」，
+ * 占位可以还回去等下一轮重试。
+ */
+function isUnknownOutcome(reason) {
+  return /超时|总时限/.test(String(reason || ''));
+}
+
+/**
  * 按顺序找第一条没发过的事件发出去。
  *
  * ⚠️ 一次性订阅的授权额度只有 1 条：命中多条也只发第一条，
@@ -586,10 +597,19 @@ function sendFirstHit(rule, hits, summary) {
           });
           summary.failed++;
           if (classifyFailure(reason) === 'retryable') {
-            // 把占位释放掉：这一轮没发成，下一轮还能重试。
-            // ⚠️ 之前不管成没成都把占位行留着 —— 网络抖动一次，
-            // 这个事件的 dedupKey 就被永久占住，再也发不出第二次。
-            return dao.logs.release(reserved.id).then(function () { return null; });
+            // ⚠️ 超时是**结果未知**：微信可能已经收下并投递了这条消息，
+            //   这时重发就是重复投递。占位不能还回去 ——
+            //   留着 send_started_at，下一轮就不会自动重发（宁可漏发也不重发）。
+            if (isUnknownOutcome(reason)) {
+              console.warn('[alert] 发送结果未知（' + reason + '），保留占位不重发');
+              return null;
+            }
+            // 平台明确拒收（限流等）：确定没送达，占位可以还回去，下一轮重试。
+            // ⚠️ 先把「发送中」撤掉 —— release 只回收「尚未开始发送」的占位，
+            //   已经开始发送的属于结果未知，不能自动重发。
+            return dao.logs.markNotSending(reserved.id).then(function () {
+              return dao.logs.release(reserved.id);
+            }).then(function () { return null; });
           }
           // 不可重试：留着失败记录当凭据，并把额度用掉（再发也是白发）
           return dao.logs.markResult(reserved.id, false, reason).then(function () {
@@ -682,6 +702,7 @@ module.exports = {
   buildData: buildData,
   // 导出给自检用：失败分类决定占位放不放，两边必须一致
   classifyFailure: classifyFailure,
+  isUnknownOutcome: isUnknownOutcome,
   regionNameOf: regionNameOf,
   todayCN: todayCN,
   // 导出给自检用：规则生效时间与预测窗口的整理规则

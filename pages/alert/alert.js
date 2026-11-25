@@ -437,8 +437,12 @@ Page({
         // 卡片据此显示「授权已取得，服务端未生效」，不再显示「已开启」
         self._pendingGrant = true;
       }
+      // 三态：已存到服务器 / 只存在本机 / 保存失败。
+      // ⚠️ 演示模式（没配后端）规则**已经存到本机**了，
+      //   写成「失败」会弹出「重试保存」按钮，而重试在演示模式下毫无意义。
+      var offline = !!(res && res.ok && res.offline);
       self.setData({
-        saveState: online ? 'saved' : 'failed',
+        saveState: online ? 'saved' : (offline ? 'offline' : 'failed'),
         saveText: online ? '已保存到服务器' : ((res && res.message) || '保存失败，请重试')
       });
       // 服务端确认状态可能刚变化，立即重算订阅卡片，不等下一次 load。
@@ -455,8 +459,11 @@ Page({
    */
   saveAndReport(nextRule, opts) {
     return this.persist(nextRule, opts).then(function (res) {
-      if (!res || !res.ok || res.offline) {
+      if (!res || !res.ok) {
         wx.showToast({ title: '规则未保存', icon: 'none' });
+      } else if (res.offline) {
+        // 只存在本机：不是失败，别弹「规则未保存」，与下面那行提示自相矛盾
+        wx.showToast({ title: '规则只保存在本机', icon: 'none' });
       }
       return res;
     });

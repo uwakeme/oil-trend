@@ -848,8 +848,16 @@ async function main() {
   var afterEdit = (await dao.rules.listByUser('openid-fields'))[0];
   check('发送期间只改条件：额度版本不变', afterEdit.version === grantSnapshot.version,
     JSON.stringify({ before: grantSnapshot.version, after: afterEdit.version }));
+  check('发送期间只改条件：改条件不会把额度用掉', afterEdit.subscribeGranted === true,
+    JSON.stringify({ granted: afterEdit.subscribeGranted }));
+  // ⚠️ 核销之后必须**重新查库**再断言。
+  //   拿核销前读出来的旧对象断言 subscribeGranted，它恒为 true —— 等于没验到核销。
+  var consumedByOld = await dao.rules.consumeSubscribe(grantSnapshot);
+  var afterConsume = (await dao.rules.listByUser('openid-fields'))[0];
   check('发送期间只改条件：旧快照仍能核销已用额度',
-    await dao.rules.consumeSubscribe(grantSnapshot) === true && afterEdit.subscribeGranted === true);
+    consumedByOld === true && afterConsume.subscribeGranted === false && !!afterConsume.subscribeUsedAt,
+    JSON.stringify({ consumed: consumedByOld, granted: afterConsume.subscribeGranted,
+      usedAt: afterConsume.subscribeUsedAt }));
 
   await user.actionRulesSave('openid-fields', [
     { regionCode: '440000', fuelId: '92', officialDrop: true, targetEnabled: false,
@@ -859,7 +867,12 @@ async function main() {
   var afterRegrant = (await dao.rules.listByUser('openid-fields'))[0];
   check('发送期间重新授权：旧快照不能消费新额度', oldConsumed === false && afterRegrant.subscribeGranted === true,
     JSON.stringify({ oldConsumed: oldConsumed, granted: afterRegrant.subscribeGranted }));
-  check('当前快照能消费额度', await dao.rules.consumeSubscribe(afterRegrant) === true);
+  var consumedNow = await dao.rules.consumeSubscribe(afterRegrant);
+  var afterConsumeNow = (await dao.rules.listByUser('openid-fields'))[0];
+  check('当前快照能消费额度（核销后额度确实被清掉）',
+    consumedNow === true && afterConsumeNow.subscribeGranted === false && !!afterConsumeNow.subscribeUsedAt,
+    JSON.stringify({ consumed: consumedNow, granted: afterConsumeNow.subscribeGranted,
+      usedAt: afterConsumeNow.subscribeUsedAt }));
   check('同一个快照不能重复消费额度', await dao.rules.consumeSubscribe(afterRegrant) === false);
 
   console.log('\n--- 三端数值一致性 ---');
@@ -1785,6 +1798,22 @@ async function main() {
   check('方向矛盾时不摆测算值', !measure.agreesWithDirection(measured, 'up'), '');
   check('方向一致时摆测算值', measure.agreesWithDirection(measured, 'down'), '');
 
+  // 变化点窗口不得越过下一轮执行日
+  // ⚠️ 发改委提前约 10 天公布下一轮：那条公告的生效日在**未来**，
+  //   走势页只测算视图内的轮次，但下一轮执行日必须留着当窗口边界。
+  //   少了它，窗口放开到 +12 天 → 本轮的变化点找不到时，
+  //   会拿下一轮的价差当本轮幅度（每升幅度整轮错位）。
+  await pushHistory(buildRows(shared.REGIONS, [
+    ['2029-06-09', 8.91], ['2029-06-10', 8.91], ['2029-06-20', 8.39]
+  ]));
+  var boundaryTon = { '2029-06-10': { gasoline: -645, diesel: -625 } };
+  var measuredNoBound = await measure.measureMany(['2029-06-10'], boundaryTon);
+  check('不给下一轮执行日时窗口会放到 +12 天（这就是回归的形态）',
+    typeof (measuredNoBound['2029-06-10'] || {})['92'] === 'number', JSON.stringify(measuredNoBound));
+  var measuredWithBound = await measure.measureMany(['2029-06-10'], boundaryTon, '2029-06-20');
+  check('给了下一轮执行日后不会取到下一轮的变化点',
+    typeof (measuredWithBound['2029-06-10'] || {})['92'] !== 'number', JSON.stringify(measuredWithBound));
+
   console.log('\n--- 发送失败不再永久占住去重键 ---');
   var retryKey = 'selftest::retry::key';
   var reserved1 = await dao.logs.reserve({ userId: 'u1', dedupKey: retryKey, payload: { type: 'x' } });
@@ -1823,6 +1852,26 @@ async function main() {
   );
   var staleSending = await dao.logs.reserve({ userId: 'u4', dedupKey: 'stale-sending::key', payload: {} });
   check('已开始外部发送的过期占位不能被自动重抢', !staleSending);
+
+  // 超时是**结果未知**：微信可能已经投递了，重发就是重复消息。
+  // 占位不能还回去 —— DAO 层直接不让 release 动「发送中」的行。
+  check('请求超时算结果未知', alertService.isUnknownOutcome('微信接口请求总时限已到') === true);
+  check('平台限流不算结果未知（确定没送达）',
+    alertService.isUnknownOutcome('45009:api freq out of limit') === false);
+  var unknownReserved = await dao.logs.reserve({ userId: 'u5', dedupKey: 'unknown::key', payload: {} });
+  await dao.logs.markSending(unknownReserved.id);
+  await dao.logs.release(unknownReserved.id);
+  var unknownLeft = await dao.logs.listByUser('u5', 50);
+  check('结果未知的占位释放不掉（不会被自动重发）',
+    !unknownLeft.some(function (h) { return h.dedupKey === 'unknown::key'; }) &&
+    !(await dao.logs.reserve({ userId: 'u5', dedupKey: 'unknown::key', payload: {} })));
+  // 平台明确拒收：确认没送达 → 撤掉发送中 → 占位可释放，下一轮能重发
+  var rejectedReserved = await dao.logs.reserve({ userId: 'u6', dedupKey: 'rejected::key', payload: {} });
+  await dao.logs.markSending(rejectedReserved.id);
+  await dao.logs.markNotSending(rejectedReserved.id);
+  await dao.logs.release(rejectedReserved.id);
+  check('平台明确拒收后占位能释放（下一轮能重发）',
+    !!(await dao.logs.reserve({ userId: 'u6', dedupKey: 'rejected::key', payload: {} })));
 
   check('网络类失败算可重试', alertService.classifyFailure('请求超时') === 'retryable');
   check('平台限流算可重试', alertService.classifyFailure('45009:api freq out of limit') === 'retryable');

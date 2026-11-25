@@ -166,6 +166,8 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | IDE 2.02 的 `--qr-output` 直接写**图片文件** | 脚本按终端字符二维码去解析，报「没有解析出二维码模块，文件格式不对」，看起来像上传失败 | `scripts/preview-qr.js` 先看文件头：JPEG/PNG 直接转 PNG 交付（`preview-qr.js` 里已处理） |
 | 首页小卡和通知卡的每升幅度不是一个口径 | 首页 95#/98#/0# 小卡用 `p.changeAmount`（**本地区**挂牌价前后差），通知卡用各省**中位数**，同一轮能差 0.01（广东 98# -0.56 vs 中位数 -0.55） | 别拿小卡数字去对中位数；看到不一致先查取的是哪个字段（`pages/index/index.js` 的 `changeMeta(p.changeAmount, ...)`） |
 | 画布上的读数**不能**用 WXML 浮层 | canvas 是独立原生渲染层，z-index 压不住它 —— 浮层会被画布盖住（跟弹层被走势图盖住是同一个原因） | 十字光标与读数气泡直接画在画布上（`utils/chart.js` 的 `drawCrosshair`）；DOM 浮层只适合放在画布**外面**的地方 |
+| 变化点窗口越过下一轮执行日 → 每升幅度整轮错位 | 发改委提前约 10 天公布下一轮，那条公告的生效日在**未来**；只把「视图内的轮次」传进测算，窗口边界就丢了，窗口放开到 +12 天后，本轮变化点找不到时会拿下一轮的价差当本轮幅度 | 下一轮执行日单独传进 `measureMany`（`nextExecDate`）：它不参与测算，但要当 `changePointAt` 的 `nextDate` 边界 |
+| 发送超时后把占位还回去 → 可能重复投递 | 超时是「结果未知」：微信可能已经收下并投递了这条消息。占位一还，下一轮就会再发一次 | 超时类失败不释放占位；只有平台明确拒收（限流等）才 `markNotSending` 后释放。DAO 的 `release` 也收紧成只回收 `send_started_at IS NULL` 的行 |
 | 选点与画图必须用**同一套**几何 | 两边各算一次横坐标的话，边距或像素密度改一处就对不上，表现是「点哪儿高亮的不是哪儿」 | 几何统一由 `chart.computeLayout()` 算：绘制（`drawSeries`）与触摸选点都调它 |
 | 上传小程序包在 CI 上用开发者工具 CLI | `cli.bat` 要求 IDE 开着、已登录，CI 上根本跑不起来 | 用 `miniprogram-ci`（`ci/upload.js`）：不依赖 IDE，用「上传密钥」直接传 |
 | 以为 `miniprogram-ci` 能「自动提交审核 / 自动发布」 | 它只有 `upload` 与 `preview`，没有提交审核接口 | 微信的 `wxa/commit`（提交审核）与 `wxa/release`（发布）只对**第三方平台**开放；个人主体小程序只能人工去公众平台后台点 |

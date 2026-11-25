@@ -279,8 +279,15 @@ async function localSnapshotsOf(executeAtList, regionCode, opts) {
  *
  * 返回 { 'YYYY-MM-DD': { '92': -0.13, '95': -0.13, ... } }
  * 某个油品算不出来就不出现在结果里 —— 不填 0，不填猜测值。
+ *
+ * @param {Array} executeAtList 要测算的生效日
+ * @param {object} tonByDate    各生效日的官方吨价
+ * @param {string} [nextExecDate] **视图之外**的下一轮执行日。
+ *   发改委提前约 10 天公布下一轮，那条公告的生效日在未来、不会进测算列表，
+ *   但它必须当变化点窗口的边界用 —— 少了它，窗口会放开到 +12 天，
+ *   下一轮的价格变化会被算成这一轮的幅度（每升幅度整轮错位）。
  */
-async function measureMany(executeAtList, tonByDate) {
+async function measureMany(executeAtList, tonByDate, nextExecDate) {
   var dates = [];
   (executeAtList || []).forEach(function (d) {
     var s = String(d || '').slice(0, 10);
@@ -322,6 +329,10 @@ async function measureMany(executeAtList, tonByDate) {
     for (var di = 0; di < dates.length; di++) {
       if (dates[di] > date) { nextDate = dates[di]; break; }
     }
+    // 测算列表里没有下一轮时，用**视图外**最近的未来执行日兜底。
+    // ⚠️ 少了这一步，下一轮的提前挂价会落进本轮的 +12 天窗口，
+    //   本轮自己的变化点找不到时，就会拿下一轮的价差当本轮幅度。
+    if (!nextDate && nextExecDate && nextExecDate > date) nextDate = nextExecDate;
 
     Object.keys(groups).forEach(function (regionCode) {
       var fuels = groups[regionCode];

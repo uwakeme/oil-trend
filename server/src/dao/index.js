@@ -788,10 +788,32 @@ const logs = {
    *
    * ⚠️ 之前不管成没成都把占位行留着 —— 网络抖动这种**本该重试**的失败
    * 也把 dedupKey 永久占住，这个事件再也不会发第二次。
-   * 只删「没发成功」的：已经发出去的行是历史记录，不能删。
+   * 只删「没发成功」且**还没开始外部发送**的：
+   *   已经发出去的行是历史记录，不能删；
+   *   已经开始发送的（send_started_at 非空）结果未知 ——
+   *   微信可能已经投递了，重发会变成重复消息，不能自动重发。
+   *   确定没送达的（平台明确拒收）先调 markNotSending() 撤掉发送中状态再来释放。
    */
   async release(id) {
-    await db.query('DELETE FROM alert_logs WHERE id = $1 AND sent = FALSE', [id]);
+    await db.query(
+      'DELETE FROM alert_logs WHERE id = $1 AND sent = FALSE AND send_started_at IS NULL',
+      [id]
+    );
+  },
+
+  /**
+   * 撤掉「发送中」标记：确认这条消息**没有**投递出去。
+   *
+   * 只在平台明确拒收（限流、额度不足等）时调用 ——
+   * 请求超时那种「结果未知」的情况绝不能调，否则就是把重复投递的门打开。
+   */
+  async markNotSending(id) {
+    var rows = await db.query(
+      'UPDATE alert_logs SET send_started_at = NULL ' +
+      'WHERE id = $1 AND sent = FALSE AND fail_reason IS NULL AND send_started_at IS NOT NULL RETURNING *',
+      [id]
+    );
+    return rows.length ? toCamel(rows[0]) : null;
   },
 
   async insert(doc) {
