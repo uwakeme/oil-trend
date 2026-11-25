@@ -59,12 +59,21 @@ jobs:
           node scripts/verify-chart.js
 
       - name: Upload to WeChat platform
+        id: upload
         env:
           WX_APP_ID: ${{ secrets.WX_APP_ID }}
           WX_UPLOAD_PRIVATE_KEY: ${{ secrets.WX_UPLOAD_PRIVATE_KEY }}
           WX_VERSION: ${{ inputs.version }}
           WX_UPLOAD_DESC: ${{ inputs.desc }}
         run: node ci/upload.js
+
+      # 公众平台「提交开发版本」那张表每次都要填，版本描述必须与刚传上去的版本对上，
+      # 所以这里直接用上传那一步算出来的版本号生成清单，写进本次运行的 summary。
+      - name: Generate submission form checklist
+        env:
+          VERSION: ${{ steps.upload.outputs.version }}
+        run: |
+          node scripts/release-form.js --version "$VERSION" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Summary
         if: always()

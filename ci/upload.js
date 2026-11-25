@@ -189,6 +189,16 @@ async function main() {
   console.log('CI 编号 : ' + robot);
   console.log('工程目录: ' + ROOT);
 
+  // 把版本号交给下一步用（GitHub Actions 的 step output）：
+  // 提交审核表单要填的版本描述必须与这次传上去的版本对得上，不能各算各的。
+  if (process.env.GITHUB_OUTPUT) {
+    try {
+      fs.appendFileSync(process.env.GITHUB_OUTPUT, 'version=' + version + '\n');
+    } catch (err) {
+      // 写不出去不影响上传本身
+    }
+  }
+
   if (dryRun) {
     console.log('');
     console.log('--dry-run：配置齐全，未上传。');

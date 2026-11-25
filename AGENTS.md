@@ -24,6 +24,7 @@ node scripts/build-icons.js        # 重生成 assets/icons/*.png（SVG 精灵�
 node scripts/preview-qr.js <appid> # 上传预览包并出扫码图（必须正式 AppID）
 node ci/upload.js              # 上传小程序包到微信公众平台（开发版本），需上传密钥
 node ci/upload.js --dry-run    # 只检查 AppID / 密钥 / 版本号能不能用，不上传
+node scripts/release-form.js  # 生成「提交开发版本」表单的必填项清单（发版后照着填）
 ```
 
 端到端验证（需先起 IDE 自动化服务，默认端口 9421，用 `AUTO_WS` 覆盖）：
@@ -240,6 +241,9 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - 远端 `origin` 已有提交，用 `git push git@github.com:uwakeme/oil-trend.git main:main` 推送（443 不通时走 SSH）
 - 用 `git push <url>` 形式推送**不会更新** `origin/main` 远程跟踪引用，`git log origin/main..main` 会误报「没推上去」，以 `git ls-remote` 的实际结果为准
 - 改动前先看 `git status`，工作区经常有未提交的 WIP，**不要替用户丢弃或覆盖**
+- **每次发版后要把「提交开发版本」表单的必填项回给用户**（版本描述 / 测试账号 / 隐私指引等），
+  清单由 `node scripts/release-form.js` 生成，流水线也会自动写进运行 summary。
+  版本描述要从提交标题改成**用户视角的一句话** —— 审核员与用户看的是这句，不是 commit 标题
 - **共享服务器上有别人的线上服务**（`lyric-lab.uwakeme.top`、`jiuguan.uwakeme.top`、openmaic）。
   涉及停服务、改 nginx、写 `/etc`、装证书这类操作，**只给命令让用户自己跑**；
   流水线只允许「上传代码 + 重启 Wake油价势助手 自己的 pm2 进程」，不许碰 nginx 与其他服务
