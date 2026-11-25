@@ -170,7 +170,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 上传小程序包在 CI 上用开发者工具 CLI | `cli.bat` 要求 IDE 开着、已登录，CI 上根本跑不起来 | 用 `miniprogram-ci`（`ci/upload.js`）：不依赖 IDE，用「上传密钥」直接传 |
 | 以为 `miniprogram-ci` 能「自动提交审核 / 自动发布」 | 它只有 `upload` 与 `preview`，没有提交审核接口 | 微信的 `wxa/commit`（提交审核）与 `wxa/release`（发布）只对**第三方平台**开放；个人主体小程序只能人工去公众平台后台点 |
 | 打包排除清单写两处 | 上传脚本里再写一份 ignores，迟早和 `project.config.json` 的 `packOptions.ignore` 对不上 | 排除清单只有一处真源：`project.config.json` 的 `packOptions.ignore`（`ci/`、`server/`、`scripts/`、`docs/`、`project.private.config.json` 都在里面） |
-| 公众平台「小程序代码上传」开了 IP 白名单 | GitHub runner 的出口 IP 不固定，开了就永远传不上去 | 白名单留空，靠上传密钥本身鉴权 |
+| 公众平台「小程序代码上传」开了 IP 白名单 | GitHub runner 的出口 IP 不固定，开了就永远传不上去（平台回 `errCode -10008 invalid ip: <runner 出口 IP>`） | 白名单留空，靠上传密钥本身鉴权；真要限 IP 就得用固定出口 IP 的自建 runner |
 | 真实 AppID 写进 `project.config.json` | GitHub 密钥扫描会把 `wx` + 16 位十六进制误报成密钥 | 仓库里存占位 `touristappid`，真实 AppID 放 `project.private.config.json`（不入库）；CI 从仓库 secret `WX_APP_ID` 取 |
 | 画布上用 `bindtouchmove` 而不是 `catchtouchmove` | catch 会把页面滚动吞掉 —— 手指落在图上就滚不动 | 画布用 `bind*`，页面照常滚；图表自己的拖动在 `onTouchMove` 里处理 |
 | 自检脚本里直接 require 组件会炸 | node 里没有 `Component` 也没有 `wx`；而且 `wx` 是 **render 时**才读的，require 完就删会 ReferenceError | 先补 `global.Component` / `global.wx`，`wx` 留到组件跑完再删（`scripts/verify-chart.js`） |

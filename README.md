@@ -352,7 +352,7 @@ node scripts/verify-in-devtools.js
 ### 必配项
 
 1. 公众平台 → 开发管理 → 开发设置 → **小程序代码上传** → 生成上传密钥，下载 `private.key`。
-   ⚠️ 同一页的 **IP 白名单要留空** —— GitHub runner 的出口 IP 不固定，填了就传不上去。
+   ⚠️ 同一页的 **IP 白名单要留空** —— GitHub runner 的出口 IP 不固定，填了就传不上去，平台会回 `errCode -10008 invalid ip: <runner 的出口 IP>`。
 2. 仓库加两个 secret（Settings → Secrets and variables → Actions）：
 
    | 名称 | 内容 |
