@@ -48,6 +48,10 @@
       },
       {
         "type": "file",
+        "value": "CHANGELOG.md"
+      },
+      {
+        "type": "file",
         "value": "LICENSE"
       },
       {
