@@ -236,6 +236,15 @@
       <text class="source-box-title">关于数据</text>
       <text class="source-box-text">{{aboutNote}}</text>
     </view>
+
+    <!-- 备案信息：工信部要求在「关于」页面底部显著位置标明备案编号并链接备案系统 -->
+    <view wx:if="{{filingNumber}}" class="filing-box">
+      <text class="filing-label">备案号</text>
+      <text class="filing-number" bindtap="onCopyFiling" data-text="{{filingNumber}}">{{filingNumber}}</text>
+      <text class="filing-hint">点击复制 · 备案信息可在工信部查询</text>
+      <text class="filing-hint filing-link" bindtap="onCopyFiling" data-text="{{filingQueryUrl}}">{{filingQueryUrl}}</text>
+    </view>
+
     <button class="primary-button dark" bindtap="onSheetClose">知道了</button>
   </bottom-sheet>
 

@@ -1,6 +1,7 @@
 const api = require('../../utils/api');
 const store = require('../../utils/store');
 const fmt = require('../../utils/format');
+const config = require('../../config/index');
 const location = require('../../utils/location');
 
 /**
@@ -95,6 +96,8 @@ Page({
     sourceWarn: false,
     cloudStatus: '',
     aboutNote: '',
+    filingNumber: config.filingNumber || '',
+    filingQueryUrl: config.filingQueryUrl || '',
     sheetType: '',
     locateHint: '',
     locateAction: '',
@@ -574,6 +577,27 @@ Page({
 
   onOpenAbout() {
     this.setData({ sheetType: 'about' });
+  },
+
+  /**
+   * 复制备案号 / 备案查询链接。
+   *
+   * 小程序的 navigator 只能跳站内页，打不开外部网页，
+   * 所以把内容复制到剪贴板，用户自己去浏览器打开（与通知页「复制原文链接」同一套路）。
+   */
+  onCopyFiling(e) {
+    var dataset = (e && e.currentTarget && e.currentTarget.dataset) || {};
+    var text = dataset.text || this.data.filingNumber;
+    if (!text) return;
+    wx.setClipboardData({
+      data: text,
+      success: function () {
+        wx.showToast({ title: '已复制，去浏览器查看', icon: 'none' });
+      },
+      fail: function () {
+        wx.showToast({ title: '复制失败，请重试', icon: 'none' });
+      }
+    });
   },
 
   onSheetClose() {

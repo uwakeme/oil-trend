@@ -697,3 +697,36 @@
   font-size: 24rpx;
   line-height: 1.6;
 }
+
+/* ---------- 备案信息 ---------- */
+.filing-box {
+  margin-top: 32rpx;
+  padding-top: 24rpx;
+  border-top: 1rpx solid var(--line);
+}
+
+.filing-label {
+  display: block;
+  font-size: 20rpx;
+  color: var(--muted);
+  margin-bottom: 8rpx;
+}
+
+.filing-number {
+  display: block;
+  font-size: 24rpx;
+  line-height: 1.6;
+  color: var(--green);
+}
+
+.filing-hint {
+  display: block;
+  margin-top: 8rpx;
+  font-size: 18rpx;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.filing-link {
+  color: var(--green);
+}

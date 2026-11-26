@@ -47,5 +47,15 @@ module.exports = {
   // 两边各写一套的话，前端允许填的值服务端会拒收，规则存不下去。
   // server/scripts/selftest.js 里有一条断言钉住这两处相同。
   targetPriceMin: 1.00,
-  targetPriceMax: 30.00
+  targetPriceMax: 30.00,
+
+  // 小程序备案号（工信部下发）：公众平台「设置 → 基本设置 → 备案信息」可查。
+  // ⚠️ 小程序备案号后缀是 -X（如「鲁ICP备2025174146号-4X」）；
+  //   -1/-2 是网站备案、-A/-B 是 APP 备案，别把网站备案号填进来。
+  // ⚠️ 工信部要求在「关于」类页面底部显著位置标明备案编号、并链接备案系统网址，
+  //   留空则界面不显示这一行。
+  filingNumber: '鲁ICP备2025174146号-4X',
+
+  // 备案系统网址：展示在备案编号下方，供公众查询核对
+  filingQueryUrl: 'https://beian.miit.gov.cn'
 };
