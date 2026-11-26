@@ -245,6 +245,12 @@
       <text class="filing-hint filing-link" bindtap="onCopyFiling" data-text="{{filingQueryUrl}}">{{filingQueryUrl}}</text>
     </view>
 
+    <!-- 隐私保护指引入口：审核要求小程序内有查看入口，这里直接打开微信官方那一份 -->
+    <view class="privacy-entry" bindtap="onOpenPrivacy">
+      <text class="privacy-entry-label">隐私保护指引 ›</text>
+      <text class="privacy-entry-hint">我们收集哪些信息、用来做什么、保存多久，都写在里面</text>
+    </view>
+
     <button class="primary-button dark" bindtap="onSheetClose">知道了</button>
   </bottom-sheet>
 

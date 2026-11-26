@@ -9,6 +9,9 @@
   "permission": {
     "scope.userLocation": {
       "desc": "用于自动识别所在省份，显示当地油价"
+    },
+    "scope.writeClipboard": {
+      "desc": "用于复制调价公告原文链接与备案号"
     }
   },
   "requiredPrivateInfos": [

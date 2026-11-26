@@ -600,6 +600,25 @@ Page({
     });
   },
 
+  /**
+   * 打开微信官方的隐私保护指引。
+   *
+   * 审核要求小程序内提供查看隐私指引的入口。直接调平台接口打开后台配置的那一份，
+   * 不用自己再维护一份文本 —— 两份各写各的迟早对不上。
+   * ⚠️ 基础库 2.32.3 以下没有这个接口，会直接 fail，要给个兜底提示。
+   */
+  onOpenPrivacy() {
+    if (typeof wx.openPrivacyContract !== 'function') {
+      wx.showToast({ title: '当前微信版本暂不支持，请升级后再试', icon: 'none' });
+      return;
+    }
+    wx.openPrivacyContract({
+      fail: function () {
+        wx.showToast({ title: '打开失败，请稍后重试', icon: 'none' });
+      }
+    });
+  },
+
   onSheetClose() {
     this.setData({ sheetType: '' });
   },

@@ -730,3 +730,25 @@
 .filing-link {
   color: var(--green);
 }
+
+/* ---------- 隐私指引入口 ---------- */
+.privacy-entry {
+  margin-top: 24rpx;
+  padding-top: 20rpx;
+  border-top: 1rpx solid var(--line);
+}
+
+.privacy-entry-label {
+  display: block;
+  font-size: 22rpx;
+  color: var(--green);
+  font-weight: 700;
+}
+
+.privacy-entry-hint {
+  display: block;
+  margin-top: 6rpx;
+  font-size: 18rpx;
+  color: var(--muted);
+  line-height: 1.6;
+}
