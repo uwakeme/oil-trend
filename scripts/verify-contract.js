@@ -618,15 +618,27 @@ async function main() {
       !!indexPage.data.notice.officialText &&
       indexPage.data.notice.officialText.indexOf('元/吨') >= 0,
       indexPage.data.notice.officialText);
-    check('首页通知标明每升幅度是挂牌价测算值',
-      indexPage.data.notice.measured === true, String(indexPage.data.notice.measured));
-    check('首页通知的每升幅度就是测算出来的 0.52',
+    check('首页通知的每升幅度就是本地区挂牌价实测出来的 0.52',
       indexPage.data.notice.value === '0.52', '实际：' + indexPage.data.notice.value);
-    check('首页通知写明了官方吨价与每升测算的口径差',
-      !!indexPage.data.notice.measuredNote &&
-      indexPage.data.notice.measuredNote.indexOf('标准品最高零售价') >= 0 &&
-      indexPage.data.notice.measuredNote.indexOf('挂牌价') >= 0,
-      indexPage.data.notice.measuredNote);
+    check('首页通知标明每升幅度不是官方公布值',
+      !!indexPage.data.notice.deltaNote, indexPage.data.notice.deltaNote);
+    check('首页通知写明了每升幅度的口径',
+      indexPage.data.notice.deltaNote.indexOf('挂牌价') >= 0,
+      indexPage.data.notice.deltaNote);
+    check('首页通知给了四个油品的调价前后价',
+      indexPage.data.notice.priceRows.length === 4,
+      '实际：' + indexPage.data.notice.priceRows.length);
+    check('价格表里「调后价 − 调前价」就等于每升幅度',
+      indexPage.data.notice.priceRows.every(function (row) {
+        var before = Number(row.beforeText);
+        var after = Number(row.afterText);
+        var delta = Number(String(row.deltaText).replace(' 元/升', ''));
+        return isFinite(before) && isFinite(after) && isFinite(delta) &&
+          Math.abs((after - before) - delta) < 0.001;
+      }),
+      JSON.stringify(indexPage.data.notice.priceRows));
+    check('价格表下面写了口径说明',
+      !!indexPage.data.notice.priceNote, indexPage.data.notice.priceNote);
     check('首页有来源提示条', !!indexPage.data.sourceText);
     // ⚠️ 这条是「api 层真的跑过」的证据：
     // 后端给的 mode 是 'server'，只有 stampSource 归一成 'live' 才会是这句文案。
@@ -783,14 +795,19 @@ async function main() {
       !!noticePage.data.notices[0].officialText &&
       noticePage.data.notices[0].officialText.indexOf('元/吨') >= 0,
       noticePage.data.notices[0].officialText);
-    check('调价页通知标明每升幅度是挂牌价测算值',
-      noticePage.data.notices[0].measured === true,
-      String(noticePage.data.notices[0].measured));
-    check('调价页通知写明了官方吨价与每升测算的口径差',
-      !!noticePage.data.notices[0].measuredNote &&
-      noticePage.data.notices[0].measuredNote.indexOf('标准品最高零售价') >= 0 &&
-      noticePage.data.notices[0].measuredNote.indexOf('挂牌价') >= 0,
-      noticePage.data.notices[0].measuredNote);
+    check('调价页通知标明每升幅度不是官方公布值',
+      !!noticePage.data.notices[0].deltaNote,
+      noticePage.data.notices[0].deltaNote);
+    check('调价页通知写明了每升幅度的口径',
+      noticePage.data.notices[0].deltaNote.indexOf('挂牌价') >= 0,
+      noticePage.data.notices[0].deltaNote);
+    // 两个弹层必须同一口径：同一轮通知的调价前后价表要一模一样
+    noticePage.onOpenNotice({
+      currentTarget: { dataset: { id: noticePage.data.notices[0].id, kind: 'official' } }
+    });
+    check('首页与调价页的调价前后价表完全一致',
+      JSON.stringify(noticePage.data.detail.prices) === JSON.stringify(indexPage.data.notice.priceRows),
+      JSON.stringify(noticePage.data.detail.prices) + ' vs ' + JSON.stringify(indexPage.data.notice.priceRows));
     check('调价页只显示可信公告',
       noticePage.data.notices.every(function (n) {
         return String((n.raw || {}).executeAt || '').slice(0, 10) !== parsedPartial.executeAt;
@@ -892,7 +909,8 @@ async function main() {
         publishedAt: '2026-11-16T03:30:00.000Z',
         source: { name: '探针', url: '' },
         prices: {
-          '92': { before: 8.91, after: 8.39, delta: -0.52 },
+          '92': { before: 8.91, after: 8.39, delta: -0.52, basis: 'local' },
+          '95': { before: 9.65, after: 9.28, delta: -0.37, basis: 'ton' },
           '98': { before: null, after: 11.09, delta: null }
         }
       }
@@ -902,6 +920,12 @@ async function main() {
       noticePage.data.detail.prices.every(function (p) { return p.deltaText !== '0.00'; }) &&
       noticePage.data.detail.prices.some(function (p) { return p.deltaText === '--'; }),
       JSON.stringify(noticePage.data.detail.prices));
+    check('详情里折算出来的调后价挂着「折算」标签',
+      noticePage.data.detail.prices.some(function (p) { return p.basisTag === '折算'; }),
+      JSON.stringify(noticePage.data.detail.prices));
+    check('折算出来的调后价要标清是非官方',
+      noticePage.data.detail.priceNote.indexOf('非官方') >= 0,
+      noticePage.data.detail.priceNote);
 
     // 走势页
     var trendPage = makeInstance(loadPageDef('pages/trend/trend.js'));
@@ -1067,6 +1091,21 @@ async function main() {
     check('回落时来源名是演示数据集',
       fallbackPage.data.sourceName === '演示数据集', fallbackPage.data.sourceName);
     check('回落时渲染里没有 undefined', hasBadToken(allText(fallbackPage.data)) === false);
+    check('回落演示源时通知也给出每升幅度',
+      !!fallbackPage.data.notice.value && fallbackPage.data.notice.value !== '--',
+      String(fallbackPage.data.notice.value));
+    check('回落演示源时通知也给出调价前后价（四个油品）',
+      fallbackPage.data.notice.priceRows.length === 4,
+      '实际：' + fallbackPage.data.notice.priceRows.length);
+    check('回落演示源时价格表的前后价与幅度自洽',
+      fallbackPage.data.notice.priceRows.every(function (row) {
+        var before = Number(row.beforeText);
+        var after = Number(row.afterText);
+        var delta = Number(String(row.deltaText).replace(' 元/升', ''));
+        return isFinite(before) && isFinite(after) && isFinite(delta) &&
+          Math.abs((after - before) - delta) < 0.001;
+      }),
+      JSON.stringify(fallbackPage.data.notice.priceRows));
 
     // 提醒规则保存：后端不可达时必须如实报失败
     // ⚠️ 以前 utils/api.js 的 saveAlertRules 吞掉后端错误，页面紧接着弹「订阅已开启」——

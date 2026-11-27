@@ -120,13 +120,18 @@ Page({
 
     var notices = (payload.notices || []).map(function (n) {
       var fuelId = prefsFuelId();
-      // 每升四油品幅度取哪一份：官方公布了用官方的，
-      // 官方没公布（发改委公告只给吨价）才用挂牌价测算值
+      // 每升四油品幅度取哪一份：后端已按「官方公布 → 本地区实测 → 各省中位数 →
+      // 官方吨价折算」的顺序取好，这里只管用，并把来源标出来
       var deltaSource = fmt.noticeDeltas(n);
       var delta = deltaSource.deltas[fuelId];
+      // 当前油品的幅度来自哪一份（官方公布 / 本地区实测 / 各省中位数 / 吨价折算）
+      var basis = deltaSource.sources[fuelId] || '';
       // 幅度缺失时不能拿 0 顶上：那等于替来源猜了一个幅度
       var known = typeof delta === 'number' && isFinite(delta);
-      var meta = known ? changeMeta(delta) : { text: '待公布', direction: 'flat' };
+      // 搁浅轮次是「不作调整」，不是「待公布」
+      var flat = n.direction === 'flat';
+      var meta = known ? changeMeta(delta)
+        : (flat ? { text: '不作调整', direction: 'flat' } : { text: '待公布', direction: 'flat' });
       var executeAt = String(n.executeAt || '').trim();
       var executeText = '';
       if (executeAt) {
@@ -147,9 +152,9 @@ Page({
         // 官方公告给的方向与汽/柴油吨价
         officialText: fmt.noticeOfficialText(n),
         // 每升幅度是不是挂牌价测算值
-        measured: deltaSource.measured,
-        // 口径说明（官方吨价 vs 挂牌价测算，四处展示共用同一句）
-        measuredNote: fmt.MEASURED_NOTE,
+        // 每升幅度的来源标签（非官方才标）与口径说明
+        deltaTag: fmt.basisTagOf(basis),
+        deltaNote: fmt.deltaNoteOf(basis),
         raw: n
       };
     });
@@ -236,34 +241,17 @@ Page({
     if (!notice) return;
 
     var raw = notice.raw;
-    var prices = [];
     var fuelId = this.data.fuelId || '92';
-    Object.keys(raw.prices || {}).forEach(function (key) {
-      var item = raw.prices[key];
-      var meta = changeMeta(item.delta);
-      prices.push({
-        id: key,
-        name: fuelNameOf(key),
-        afterText: fmt.price(item.after),
-        // 幅度未知就写 '--'，不能写成 0.00（那是「持平」，不是「不知道」）
-        deltaText: (typeof item.delta === 'number' && isFinite(item.delta))
-          ? ((item.delta > 0 ? '+' : item.delta < 0 ? '-' : '') + Math.abs(item.delta).toFixed(2))
-          : '--',
-        direction: meta.direction
-      });
-    });
-
-    function fuelNameOf(key) {
-      var map = { '92': '92# 汽油', '95': '95# 汽油', '98': '98# 汽油', '0': '0# 柴油' };
-      return map[key] || key + '#';
-    }
-
     var rawSource = raw.source || {};
-    // 详情里的每升幅度也按「官方优先、否则测算」取
+    // 详情里的每升幅度按同一套优先级取（官方公布 → 本地区实测 → 各省中位数 → 吨价折算）
     var rawDeltaSource = fmt.noticeDeltas(raw);
+    // 调价前后价表：与首页共用同一份装配（utils/format.noticePriceRows）
+    var priceRows = fmt.noticePriceRows(raw, rawDeltaSource.sources);
     var rawDelta = rawDeltaSource.deltas[fuelId];
     var rawKnown = typeof rawDelta === 'number' && isFinite(rawDelta);
     var rawMeta = rawKnown ? changeMeta(rawDelta) : { verb: '待公布', direction: 'flat' };
+    // 当前油品的幅度来自哪一份
+    var rawBasis = rawDeltaSource.sources[fuelId] || '';
     var rawOfficialText = fmt.noticeOfficialText(raw);
     // 公告发布日（announcedAt）。publishedAt 是采集入库时刻，不是发布日。
     var announcedText = raw.announcedAt ? fmt.dateOnly(raw.announcedAt) : '';
@@ -276,14 +264,13 @@ Page({
         // 官方口径（方向 + 汽/柴油吨价）优先；没有官方口径才用后端摘要
         summary: rawOfficialText || raw.summary,
         // 每升幅度是不是挂牌价测算值
-        measured: rawDeltaSource.measured,
-        // 口径说明（官方吨价 vs 挂牌价测算，四处展示共用同一句）
-        measuredNote: fmt.MEASURED_NOTE,
-        // 价格表的口径（**本地区**挂牌价前后快照，与上面的全国中位数不是一回事）
-        priceNote: fmt.LOCAL_PRICE_NOTE,
-        verb: rawMeta.verb,
-        direction: rawMeta.direction,
-        prices: prices,
+        // 每升幅度的来源标签（非官方才标）与口径说明
+        deltaTag: fmt.basisTagOf(rawBasis),
+        deltaNote: fmt.deltaNoteOf(rawBasis),
+        // 调价前后价表：调价前 → 调价后 + 每升幅度
+        prices: priceRows,
+        // 价格表的口径（实测快照还是折算推的，得说清楚）
+        priceNote: fmt.priceTableNote(priceRows),
         sourceName: rawSource.name || '未标注来源',
         // 原文链接：没有就不给，别留个点不动的空壳
         sourceUrl: rawSource.url || '',

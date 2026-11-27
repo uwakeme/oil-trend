@@ -170,10 +170,64 @@ syncStatusChecks.forEach(function (line) { out.push('  ' + line); });
 
 var missingStatus = syncStatusChecks.filter(function (line) { return line.indexOf('✗') >= 0; });
 
+/* ============================================================
+ * 通知载荷：演示源与服务端同构
+ *
+ * 少了 deltas / deltaSource / prices 这些字段，演示模式下弹层就是空的 ——
+ * 后端挂了回落演示源时，用户看到的通知详情会跟真实后端完全不一样。
+ * ============================================================ */
+out.push('');
+out.push('--- 通知载荷（演示源与服务端同构）---');
+var noticeShapeProblems = [];
+var homeNotice = demo.getHome('440000', '92').latestNotice;
+['id', 'kind', 'title', 'executeAt', 'direction', 'tonChanges', 'changes',
+  'measuredChanges', 'convertedChanges', 'deltas', 'deltaSource', 'summary', 'prices'
+].forEach(function (key) {
+  if (homeNotice[key] === undefined) noticeShapeProblems.push('首页通知缺字段 ' + key);
+});
+Object.keys(homeNotice.prices || {}).forEach(function (fuelId) {
+  var row = homeNotice.prices[fuelId];
+  if (typeof row.before !== 'number' || typeof row.after !== 'number' ||
+      typeof row.delta !== 'number') {
+    noticeShapeProblems.push('价格行不完整 ' + fuelId);
+    return;
+  }
+  if (Math.abs((row.after - row.before) - row.delta) > 0.001) {
+    noticeShapeProblems.push('调后价 − 调前价 ≠ 每升幅度 ' + fuelId);
+  }
+});
+out.push('  首页通知: ' + homeNotice.title + '  92# ' + homeNotice.deltas['92'] +
+  ' 元/升  来源 ' + homeNotice.deltaSource['92'] +
+  '  价格行 ' + Object.keys(homeNotice.prices || {}).length + ' 个');
+
+// 官方吨价 → 每升折算：能把标定用的真实轮次逐项复现
+var conversion = require('../data/ton-conversion');
+var conversionProblems = [];
+conversion.CALIBRATION_ROUNDS.forEach(function (round) {
+  Object.keys(round.measured).forEach(function (fuelId) {
+    var got = conversion.convertTonToLiter(round.ton, fuelId);
+    if (!isFinite(got) || Math.abs(got - round.measured[fuelId]) > 0.001) {
+      conversionProblems.push(round.date + ' ' + fuelId + ' 折算 ' + got +
+        ' / 实测 ' + round.measured[fuelId]);
+    }
+  });
+});
+out.push('  吨价折算: 官方 440 元/吨 → 92# ' +
+  conversion.convertTonToLiter({ gasoline: -440 }, '92') + ' 元/升  ' +
+  (conversionProblems.length ? ('✗ ' + conversionProblems.length + ' 处对不上') : 'OK'));
+
 var degraded = futureChecks.filter(function (c) { return !c.ok; });
 if (degraded.length) {
   out.push('');
   out.push('✗ 有 ' + degraded.length + ' 个未来时点出现退化');
+  console.error(out.join('\n'));
+  process.exit(1);
+}
+if (noticeShapeProblems.length || conversionProblems.length) {
+  out.push('');
+  out.push('✗ 通知载荷/折算有 ' +
+    (noticeShapeProblems.length + conversionProblems.length) + ' 处问题');
+  noticeShapeProblems.concat(conversionProblems).forEach(function (p) { out.push('  ' + p); });
   console.error(out.join('\n'));
   process.exit(1);
 }

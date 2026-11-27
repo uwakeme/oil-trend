@@ -8,6 +8,8 @@ const shared = require('../shared/shared');
 const query = require('./query');
 // 挂牌价测算：公告只给吨价，每升四油品幅度靠各地挂牌价的前后快照差值
 const measure = require('./measure');
+// 通知详情装配：与首页同一份（口径必须一致）
+const noticeDetail = require('./notice-detail');
 const sources = require('./sources');
 const httpClient = require('./http-client');
 
@@ -16,52 +18,10 @@ const httpClient = require('./http-client');
 var NOTICE_PAGE = 20;
 
 /**
- * 通知详情里的「调整前后零售价」。
- *
- * ⚠️ 原来这里是拿**当前**挂牌价倒推的：after = 当前价，before = 当前价 - 幅度。
- * 两个毛病：
- *   1. 当前价可能已经是好几轮之后的价格了，倒推出来的 before 不是那一轮的价；
- *   2. 幅度用的是**各省中位数**（或官方值），却和**本地区**的现价混着算 ——
- *      两个口径拼在一起，得到的数谁也对不上账。
- *
- * 现在改成：从**本地区**的历史挂牌价里找这一轮前后的快照 ——
- * 调价前最后一次价、调价后第一次价，差值就是本地区这一轮实际降了多少。
- * 快照缺失就留空（界面显示「--」），不倒推、不猜。
- *
- * @param {object} snapshots 本地区这一轮的前后快照 { fuelId: {before,after,delta} }
+ * 通知的对外载荷统一由 notice-detail.js 装配：
+ * 每升幅度四档来源（官方公布 → 本地区实测 → 各省中位数 → 吨价折算）
+ * + 本地区调价前后价（快照优先，没有快照才按幅度推算并标口径）。
  */
-/**
- * 官方方向 → 期望的涨跌符号：下调 -1 / 上调 1 / 不明 0。
- *
- * 用来筛掉方向相反的价格变化：窗口里可能混着上一轮遗留的价差，
- * 方向不对就不是本轮的变化点。
- */
-function signOfDirection(direction) {
-  if (direction === 'down') return -1;
-  if (direction === 'up') return 1;
-  return 0;
-}
-
-function noticePricesOf(notice, snapshots, today) {
-  if (notice.prices && Object.keys(notice.prices).length) return notice.prices;
-  if (notice.kind !== 'official') return {};
-  var executeAt = String(notice.executeAt || '').slice(0, 10);
-  if (!executeAt || executeAt > today) return {};
-  var out = {};
-  Object.keys(snapshots || {}).forEach(function (fuelId) {
-    var s = snapshots[fuelId];
-    if (!s) return;
-    out[fuelId] = {
-      before: s.before,
-      after: s.after,
-      delta: s.delta,
-      // 这是本地区挂牌价实测出来的差值，不是官方公布的每升幅度
-      measured: true
-    };
-  });
-  return out;
-}
-
 function actionNotices(payload) {
   var regionCode = payload.regionCode || shared.DEFAULT_REGION_CODE;
   var filter = payload.filter || 'official';
@@ -73,13 +33,20 @@ function actionNotices(payload) {
     query.getWindow(),
     dao.runs.latest(),
     // 推算下一轮调价日的基准：最近一次实际调价日
-    query.latestAdjustDate()
+    query.latestAdjustDate(),
+    // 本地区当前挂牌价：这一轮还没挂出新价时，详情里的调后价从它推
+    dao.prices.listByRegion(regionCode)
   ]).then(function (r0) {
     var notices = r0[0];
     var win = r0[1];
     var lastRun = r0[2];
     var lastAdjustDate = r0[3];
+    var priceRows = r0[4] || [];
 
+    var priceMap = {};
+    priceRows.forEach(function (p) {
+      priceMap[p.fuelId] = { price: p.price, changeAt: p.changeAt || '' };
+    });
     var today = query.todayStr();
 
     // 挂牌价测算：一次查这一页所有公告的生效日
@@ -91,7 +58,7 @@ function actionNotices(payload) {
     notices.forEach(function (n) {
       if (n.executeAt) {
         tonByDate[n.executeAt] = n.tonChanges || {};
-        signByDate[n.executeAt] = signOfDirection(n.direction);
+        signByDate[n.executeAt] = noticeDetail.signOfDirection(n.direction);
       }
     });
     return Promise.all([
@@ -120,28 +87,16 @@ function actionNotices(payload) {
           var measured = (measuredByDate[n.executeAt] || {});
           // 测算值只有在方向与公告一致时才摆出来：方向矛盾说明用错了快照
           var measuredChanges = measure.agreesWithDirection(measured, n.direction) ? measured : {};
-          var deltas = Object.keys(n.changes || {}).length ? n.changes : measuredChanges;
-          return {
-            id: n.id,
-            kind: n.kind,
-            title: n.title,
-            publishedAt: n.publishedAt,
-            // 公告发布日
-            announcedAt: n.announcedAt || '',
-            executeAt: n.executeAt,
-            // 官方方向 up/down/flat
-            direction: n.direction || '',
-            // 官方吨价（汽/柴油，元/吨）
-            tonChanges: n.tonChanges || {},
-            // 官方公布的每升四油品幅度（发改委公告不给这一项）
-            changes: n.changes || {},
-            // 挂牌价测算的每升四油品幅度 —— 不是官方公布值
-            measuredChanges: measuredChanges,
-            changesMeasured: Object.keys(measuredChanges).length > 0,
-            summary: n.summary || '',
-            prices: noticePricesOf(n, localByDate[n.executeAt] || {}, today),
-            source: n.source || {}
-          };
+          return noticeDetail.buildNotice(n, {
+            // 各省实测中位数（全国口径）
+            measured: measuredChanges,
+            // 本地区前后快照（本地区口径）
+            snapshots: (localByDate[n.executeAt] || {}),
+            // 本地区当前挂牌价
+            prices: priceMap,
+            // 今天：只有「当前这一轮」才允许拿现价推调后价
+            today: today
+          });
         }),
         source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的官方公告' }
       };

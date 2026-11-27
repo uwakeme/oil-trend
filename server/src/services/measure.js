@@ -27,6 +27,8 @@
  * 找不到变化点 → 这个地区这次没有可用的快照 → 不参与测算。
  */
 const dao = require('../dao');
+// 密度与油品分组：真源在 data/ton-conversion.js，服务端副本由 scripts/sync-shared.js 生成
+const shared = require('../shared/shared');
 
 /**
  * 没有官方吨价时的绝对兜底上限（元/升）。
@@ -38,7 +40,7 @@ const dao = require('../dao');
 var MAX_REASONABLE = 1.0;
 
 /** 官方吨价 → 每升理论幅度用的密度（kg/L）：标准品是 89 号汽油、0 号车用柴油 */
-var DENSITY = { gasoline: 0.725, diesel: 0.835 };
+var DENSITY = shared.TON_CONVERSION.DENSITY;
 
 /**
  * 允许偏差比例：实测与理论值的差。
@@ -52,7 +54,7 @@ var TOL_RATIO = 0.35;
 var TOL_FLOOR = 0.15;
 
 /** 油品 → 官方吨价分类（92/95/98 是汽油，0 是柴油） */
-var FUEL_GROUP = { '92': 'gasoline', '95': 'gasoline', '98': 'gasoline', '0': 'diesel' };
+var FUEL_GROUP = shared.TON_CONVERSION.FUEL_GROUP;
 
 /** 至少要有几个省的数据才给结论 —— 样本太少时中位数不可信 */
 var MIN_REGIONS = 3;
@@ -396,6 +398,20 @@ async function measureOne(executeAt, tonChanges) {
 }
 
 /**
+ * 官方吨价 → 四油品每升折算值。
+ *
+ * ⚠️ 这是**折算值**，不是官方公布值：系数取历史轮次「实测每升 ÷ 官方吨价」的
+ *   比值中位数（真源在 data/ton-conversion.js）。各地挂牌价通常在调价次日才更新，
+ *   公告当天算不出实测幅度，这时用折算值兜底，界面上必须标「折算 · 非官方」。
+ *
+ * @param {object} tonChanges { gasoline: -440, diesel: -425 }（元/吨）
+ * @returns {object} { '92': -0.36, ... }；没有对应吨价的油品不出现
+ */
+function convertedChangesOf(tonChanges) {
+  return shared.TON_CONVERSION.convertTonToLiterAll(tonChanges || {});
+}
+
+/**
  * 测算值与公告方向是否一致。
  *
  * ⚠️ 不一致时不许把测算值摆出来 —— 方向矛盾说明测算用错了快照，
@@ -415,6 +431,7 @@ function agreesWithDirection(measured, direction) {
 
 module.exports = {
   measureMany: measureMany,
+  convertedChangesOf: convertedChangesOf,
   measureOne: measureOne,
   localSnapshotOf: localSnapshotOf,
   localSnapshotsOf: localSnapshotsOf,

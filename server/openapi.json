@@ -1090,13 +1090,57 @@
             "description": "measuredChanges 是否有值",
             "example": true
           },
+          "convertedChanges": {
+            "type": "object",
+            "description": "官方吨价按历史实测比值折算出的各油品每升调整幅度（元/升），**不是官方公布值**。发改委公告只给吨价、各地挂牌价通常次日才更新，公告当天算不出实测幅度，这时用折算值兜底（系数见 data/ton-conversion.js）",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "example": {
+              "0": -0.37,
+              "92": -0.36,
+              "95": -0.38,
+              "98": -0.38
+            }
+          },
+          "changesConverted": {
+            "type": "boolean",
+            "description": "convertedChanges 是否有值",
+            "example": true
+          },
+          "deltas": {
+            "type": "object",
+            "description": "界面上采用的每升四油品幅度。取值顺序：官方公布 → 本地区挂牌价实测 → 各省实测中位数 → 官方吨价折算；每个油品单独判",
+            "additionalProperties": {
+              "type": "number"
+            },
+            "example": {
+              "0": -0.36,
+              "92": -0.36,
+              "95": -0.38,
+              "98": -0.38
+            }
+          },
+          "deltaSource": {
+            "type": "object",
+            "description": "每个油品的幅度来源：official 官方公布 / forecast 市场预测 / local 本地区挂牌价实测 / median 各省实测中位数 / ton 官方吨价折算。界面据此标注口径，折算与测算值必须标「非官方」",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "example": {
+              "0": "ton",
+              "92": "ton",
+              "95": "ton",
+              "98": "ton"
+            }
+          },
           "summary": {
             "type": "string",
             "example": "官方公告：下调，汽油 645 元/吨、柴油 625 元/吨。"
           },
           "prices": {
             "type": "object",
-            "description": "调整后各油品价格（before / after / delta）",
+            "description": "本地区调价前后价（before 调价前 / after 调价后 / delta 每升幅度 / basis 来源）。有本地区挂牌价快照时用快照（实测）；这轮调价还没反映到挂牌价上时，调后价按幅度推算（basis 标 ton 或 median，界面必须标非官方）",
             "additionalProperties": {
               "type": "object",
               "properties": {
@@ -1111,6 +1155,18 @@
                 "delta": {
                   "type": "number",
                   "example": -0.15
+                },
+                "basis": {
+                  "type": "string",
+                  "description": "这一行的来源：local 本地区挂牌价快照 / median 各省实测中位数 / ton 官方吨价折算 / forecast 市场预测",
+                  "enum": [
+                    "local",
+                    "median",
+                    "ton",
+                    "forecast",
+                    "official"
+                  ],
+                  "example": "local"
                 }
               }
             }

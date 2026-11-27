@@ -79,7 +79,7 @@
         <text>{{item.executeText}}</text>
         <text class="notice-change {{item.direction}}">{{item.changeText}}</text>
       </view>
-      <text wx:if="{{item.measured}}" class="notice-measured-tag">{{item.measuredNote}}</text>
+      <text wx:if="{{item.deltaNote}}" class="notice-measured-tag">{{item.deltaNote}}</text>
     </view>
 
   </block>
@@ -90,21 +90,35 @@
       <view class="notice-detail-label">
         <text class="badge neutral">正式结果</text>
         <text class="badge {{detail.direction}}">{{detail.verb}}</text>
+        <!-- 非官方值要挂标签：折算 / 各省中位数 -->
+        <text wx:if="{{detail.deltaTag}}" class="badge amber">{{detail.deltaTag}}</text>
       </view>
       <text class="notice-detail-title">{{detail.title}}</text>
       <view class="sheet-body" style="margin-top:12rpx">{{detail.summary}}</view>
-      <text wx:if="{{detail.measured}}" class="notice-measured-tag" style="margin-top:10rpx">{{detail.measuredNote}}</text>
-      <view class="detail-price-grid">
-        <view wx:for="{{detail.prices}}" wx:key="id" class="detail-price">
-          <text class="detail-price-name">{{item.name}}</text>
-          <view class="detail-price-row">
-            <text class="detail-price-value">{{item.afterText}}</text>
-            <text class="detail-price-delta {{item.direction}}">{{item.deltaText}}</text>
+      <text wx:if="{{detail.deltaNote}}" class="notice-measured-tag" style="margin-top:10rpx">{{detail.deltaNote}}</text>
+      <!-- 调价前后价：调价前 → 调价后 + 每升幅度 -->
+      <block wx:if="{{detail.prices.length > 0}}">
+        <view class="detail-price-head">
+          <text class="detail-price-head-title">调价前 → 调价后</text>
+          <text class="detail-price-head-unit">元/升</text>
+        </view>
+        <view class="detail-price-grid">
+          <view wx:for="{{detail.prices}}" wx:key="id" class="detail-price">
+            <text class="detail-price-name">{{item.name}}</text>
+            <view class="detail-price-row">
+              <text class="detail-price-before">{{item.beforeText}}</text>
+              <text class="detail-price-arrow">→</text>
+              <text class="detail-price-value">{{item.afterText}}</text>
+            </view>
+            <view class="detail-price-foot">
+              <text class="detail-price-delta {{item.direction}}">{{item.deltaText}}</text>
+              <text wx:if="{{item.basisTag}}" class="detail-price-tag">{{item.basisTag}}</text>
+            </view>
           </view>
         </view>
-      </view>
-      <!-- 价格表是**本地区**前后快照，与上面的各省中位数不是同一口径 -->
-      <text wx:if="{{detail.prices.length > 0}}" class="notice-measured-tag">{{detail.priceNote}}</text>
+        <!-- 这张表的口径：实测快照还是折算推的，必须说清楚 -->
+        <text class="notice-measured-tag">{{detail.priceNote}}</text>
+      </block>
       <view class="source-box">
         <text class="source-box-title">来源与原文</text>
         <text class="source-box-text">{{detail.sourceLine}}</text>

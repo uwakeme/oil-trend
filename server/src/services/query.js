@@ -11,6 +11,8 @@ const dao = require('../dao');
 const shared = require('../shared/shared');
 // 挂牌价测算：公告只给吨价，每升四油品幅度靠各地挂牌价的前后快照差值
 const measure = require('./measure');
+// 通知详情装配：首页与调价页共用同一份（口径必须一致）
+const noticeDetail = require('./notice-detail');
 const sources = require('./sources');
 
 /* ---------------- 时间辅助 ---------------- */
@@ -289,11 +291,20 @@ function actionHome(payload) {
       // 挂牌价测算：公告只给吨价，每升四油品幅度靠各地挂牌价的前后快照差值
       notice ? measure.measureOne(notice.executeAt, notice.tonChanges) : Promise.resolve({}),
       // 全量历史：给价格行补基线用（见下面的补基线逻辑）
-      dao.history.listByRegion(regionCode)
+      dao.history.listByRegion(regionCode),
+      // 本地区这一轮的前后快照：详情的「调价前后各多少钱」与本地区实测幅度都靠它
+      notice ? measure.localSnapshotsOf([notice.executeAt], regionCode, {
+        expectSignByDate: (function () {
+          var map = {};
+          map[notice.executeAt] = noticeDetail.signOfDirection(notice.direction);
+          return map;
+        })()
+      }) : Promise.resolve({})
     ]).then(function (r1) {
       var historyByFuel = r1[0];
       var measuredRaw = r1[1];
       var fullHistory = r1[2];
+      var localByDate = r1[3];
 
       // 价格行没有基线（changeAt 为空）时，用本地区历史序列补出最近一次调价。
       // 换源那一轮同源基线取不到，采集器会把它清空；采集器已改成从本源历史表重建，
@@ -340,26 +351,22 @@ function actionHome(payload) {
       var measuredChanges = (notice && measure.agreesWithDirection(measuredRaw, notice.direction))
         ? measuredRaw
         : {};
-      var noticePayload = notice ? {
-        id: notice.id,
-        kind: notice.kind,
-        title: notice.title,
-        publishedAt: notice.publishedAt,
-        // 公告发布日
-        announcedAt: notice.announcedAt || '',
-        executeAt: notice.executeAt,
-        // 官方方向 up/down/flat
-        direction: notice.direction || '',
-        // 官方吨价（汽/柴油，元/吨）
-        tonChanges: notice.tonChanges || {},
-        // 官方公布的每升四油品幅度（发改委公告不给这一项）
-        changes: notice.changes || {},
-        // 挂牌价测算的每升四油品幅度 —— 不是官方公布值
-        measuredChanges: measuredChanges,
-        changesMeasured: Object.keys(measuredChanges).length > 0,
-        summary: notice.summary || '',
-        source: notice.source || {}
-      } : null;
+      var noticePayload = notice ? noticeDetail.buildNotice(notice, {
+        // 各省实测中位数（全国口径）
+        measured: measuredChanges,
+        // 本地区前后快照（本地区口径）
+        snapshots: (localByDate[notice.executeAt] || {}),
+        // 本地区当前挂牌价：这一轮还没挂出新价时，调后价从它推
+        prices: (function () {
+          var map = {};
+          priceList.forEach(function (p) {
+            map[p.id] = { price: p.price, changeAt: p.changeAt || '' };
+          });
+          return map;
+        })(),
+        // 今天：只有「当前这一轮」才允许拿现价推调后价
+        today: today
+      }) : null;
 
       return {
         region: { code: region.code, fullName: region.name + ' · ' + region.city },

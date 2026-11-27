@@ -321,6 +321,53 @@
   font-weight: 700;
 }
 
+/* 调价前后价：表头（调价前 → 调价后 · 元/升） */
+.detail-price-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 28rpx;
+}
+
+.detail-price-head-title {
+  font-size: 22rpx;
+  font-weight: 700;
+}
+
+.detail-price-head-unit {
+  font-size: 18rpx;
+  color: var(--muted);
+}
+
+/* 调价前的价格：弱化显示，主角是调价后的价 */
+.detail-price-before {
+  font-family: var(--font-num);
+  font-size: 26rpx;
+  color: var(--muted);
+}
+
+.detail-price-arrow {
+  font-size: 22rpx;
+  color: var(--muted);
+}
+
+/* 每升幅度 + 来源标签 */
+.detail-price-foot {
+  display: flex;
+  align-items: center;
+  gap: 10rpx;
+  margin-top: 10rpx;
+}
+
+.detail-price-tag {
+  font-size: 16rpx;
+  color: var(--amber-ink);
+  background: var(--amber-soft);
+  border-radius: 8rpx;
+  padding: 4rpx 10rpx;
+}
+
+
 .source-box {
   border-left: 4rpx solid var(--amber);
   padding-left: 20rpx;

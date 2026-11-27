@@ -362,36 +362,38 @@ Page({
     // 没有 id 也没有标题 = 压根没有正式通知（不是「有通知但内容缺了」）。
     // 这种时候不能再拼「--」日期和「调价幅度待公布」那种半吊子文案。
     var noticeEmpty = !latest.id && !latest.title;
-    // 每升四油品幅度取哪一份：官方公布了用官方的，
-    // 官方没公布（发改委公告只给吨价）才用挂牌价测算值 —— 并标明来源
+    // 每升四油品幅度取哪一份：后端已按「官方公布 → 本地区实测 → 各省中位数 →
+    // 官方吨价折算」的顺序取好，这里只管用，并把来源标出来。
     var noticeDeltaSource = fmt.noticeDeltas(latest);
     var noticeChanges = noticeDeltaSource.deltas;
-    var noticeMeasured = noticeDeltaSource.measured;
+    var noticeSources = noticeDeltaSource.sources;
     // 官方公告给的吨价与方向（发改委公告只给这个，不给每升幅度）
     var noticeOfficial = noticeEmpty ? '' : fmt.noticeOfficialText(latest);
     // 幅度缺失时不能拿 0 顶上：那是替来源猜了一个幅度
     var noticeDelta = noticeChanges[fuelId];
     var noticeKnown = typeof noticeDelta === 'number' && isFinite(noticeDelta);
+    // 搁浅轮次是「本轮不作调整」，不是「幅度待公布」
+    var noticeFlat = latest.direction === 'flat';
     // 通知自己的幅度是公告里写明的，基线一定存在
     var noticeMeta = noticeKnown
       ? changeMeta(noticeDelta, true)
-      : { text: '幅度待公布', direction: 'flat', verb: '待公布', value: '--' };
-
-    var noticePrices = prices.map(function (p) {
-      var delta = noticeChanges[p.id];
-      var known = typeof delta === 'number' && isFinite(delta);
-      return {
-        id: p.id,
-        name: p.name,
-        priceText: fmt.price(p.price),
-        direction: known ? (delta < 0 ? 'down' : (delta > 0 ? 'up' : 'flat')) : 'flat',
-        deltaText: known ? ((delta > 0 ? '+' : delta < 0 ? '-' : '') + Math.abs(delta).toFixed(2)) : '--'
-      };
-    });
+      : (noticeFlat
+        ? { text: '本轮不作调整', direction: 'flat', verb: '不作调整', value: '--' }
+        : { text: '幅度待公布', direction: 'flat', verb: '待公布', value: '--' });
+    // 当前油品的幅度是哪一份 —— 界面上要标出来，不能让人当官方值看
+    var noticeBasis = noticeSources[fuelId] || '';
+    // 调价前后价：首页与调价页共用同一份装配（utils/format.noticePriceRows）
+    var noticeRows = fmt.noticePriceRows(latest, noticeSources);
+    // 卡片上那行文案：每升降多少 / 不作调整 / 待公布
+    var noticeAmountText = noticeKnown
+      ? ((hero ? hero.name + '每升' : '每升') + noticeMeta.verb + ' ' + noticeMeta.value + ' 元')
+      : (noticeFlat ? '本轮不作调整' : ((hero ? hero.name + ' ' : '') + '调价幅度待公布'));
 
     var executeDate = String(latest.executeAt || '');
     var dayParts = executeDate.slice(0, 10).split('-');
-    var executeTime = executeDate.slice(11, 16);
+    // 执行时刻：公告只给日期时按「24 时起执行」写，
+    // 别留一个空的时刻（那会显示成「2026 年 11 月 26 日  时执行」）
+    var executeTime = executeDate.slice(11, 16) || '24:00';
 
     var source = payload.source || {};
     var srcLine = fmt.sourceLine(source);
@@ -460,18 +462,22 @@ Page({
         verb: noticeEmpty ? '' : noticeMeta.verb,
         value: noticeEmpty ? '' : noticeMeta.value,
         changeDirection: noticeEmpty ? 'flat' : noticeMeta.direction,
+        // 卡片上那行：每升降多少 / 不作调整 / 待公布
+        amountText: noticeEmpty ? '' : noticeAmountText,
         executeText: noticeEmpty ? '' : (executeDate
-          ? (fmt.fullDate(executeDate.slice(0, 10)) + ' ' + executeTime + ' 时执行')
+          ? (fmt.fullDate(executeDate.slice(0, 10)) + ' ' + executeTime + ' 起执行')
           : '执行日期待公布'),
         // 官方口径（方向 + 汽/柴油吨价）优先，没有才退回后端给的摘要
         summaryText: noticeEmpty ? '' : (noticeOfficial || latest.summary || '以下为本地各油品调整后的零售价格。'),
         // 卡片上单独一行说官方给了什么
         officialText: noticeOfficial,
-        // 每升幅度是不是挂牌价测算值
-        measured: noticeMeasured,
-        // 口径说明（官方吨价 vs 挂牌价测算，四处展示共用同一句）
-        measuredNote: fmt.MEASURED_NOTE,
-        prices: noticeEmpty ? [] : noticePrices,
+        // 每升幅度的来源标签（非官方才标）与口径说明
+        deltaTag: noticeEmpty ? '' : fmt.basisTagOf(noticeBasis),
+        deltaNote: noticeEmpty ? '' : fmt.deltaNoteOf(noticeBasis),
+        // 调价前后价表：调价前 → 调价后 + 每升幅度
+        priceRows: noticeEmpty ? [] : noticeRows,
+        // 价格表的口径说明（实测还是折算推的，得说清楚）
+        priceNote: noticeEmpty ? '' : fmt.priceTableNote(noticeRows),
         sourceName: noticeEmpty ? '' : noticeSourceName,
         // 公告可能没有发布日（后端没给），缺了就不写，别留个空壳
         publishedText: noticeEmpty ? '' : announceDate,

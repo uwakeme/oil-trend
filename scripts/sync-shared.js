@@ -32,6 +32,10 @@ const marketsSource = fs.readFileSync(path.join(ROOT, 'data', 'markets.js'), 'ut
 // 两端共用同一份实现 —— 节假日表与推算规则一旦分叉，推出来的日期就对不上。
 const cycleSource = fs.readFileSync(path.join(ROOT, 'data', 'adjust-cycle.js'), 'utf8')
   .replace(/\nmodule\.exports[\s\S]*$/, '\n');
+// 把 data/ton-conversion.js 整份内联：官方吨价 → 每升折算系数。
+// 两端共用同一份实现 —— 系数一旦分叉，折算出来的每升幅度与调后价就跟着对不上。
+const conversionSource = fs.readFileSync(path.join(ROOT, 'data', 'ton-conversion.js'), 'utf8')
+  .replace(/\nmodule\.exports[\s\S]*$/, '\n');
 const SHARED_DIR = path.join(ROOT, 'server', 'src', 'shared');
 const TARGET = path.join(SHARED_DIR, 'shared.js');
 
@@ -72,6 +76,20 @@ const template = [
   '    estimateNextAdjustDate: estimateNextAdjustDate,',
   '    estimateNoticeDate: estimateNoticeDate,',
   '    estimateNext: estimateNext',
+  '  };',
+  '})();',
+  '',
+  '/* ---------- 吨价→每升折算（来自 data/ton-conversion.js，两端共用同一份实现） ---------- */',
+  '',
+  'var TON_CONVERSION = (function () {',
+  conversionSource,
+  '  return {',
+  '    FUEL_GROUP: FUEL_GROUP,',
+  '    DENSITY: DENSITY,',
+  '    LITER_PER_100TON: LITER_PER_100TON,',
+  '    CALIBRATION_ROUNDS: CALIBRATION_ROUNDS,',
+  '    convertTonToLiter: convertTonToLiter,',
+  '    convertTonToLiterAll: convertTonToLiterAll',
   '  };',
   '})();',
   'var DEMO_ANCHOR = ' + JSON.stringify(ANCHOR) + ';',
@@ -240,6 +258,7 @@ const template = [
   '  MARKET_PERIODS: MARKET_PERIODS,',
   '  marketAxisLabel: marketAxisLabel,',
   '  ADJUST_CYCLE: ADJUST_CYCLE,',
+  '  TON_CONVERSION: TON_CONVERSION,',
   '  buildMarketPayload: buildMarketPayload,',
   '  clock: { today: today, shiftDate: shiftDate, daysUntil: daysUntil, offsetDays: offsetDays }',
   '};'
@@ -351,6 +370,29 @@ HISTORY_CASES.forEach(function (pair) {
   }
 });
 if (historyMiss) fail(historyMiss + ' 个真实历史轮次推算不对');
+
+// 吨价→每升折算：两端系数必须一致，且能把标定用的真实轮次逐项复现
+var conversion = require(path.join(ROOT, 'data', 'ton-conversion.js'));
+if (JSON.stringify(shared.TON_CONVERSION.LITER_PER_100TON) !==
+    JSON.stringify(conversion.LITER_PER_100TON)) {
+  fail('吨价折算系数两端不一致');
+}
+var conversionMiss = [];
+conversion.CALIBRATION_ROUNDS.forEach(function (round) {
+  Object.keys(round.measured).forEach(function (fuelId) {
+    var got = shared.TON_CONVERSION.convertTonToLiter(round.ton, fuelId);
+    if (!isFinite(got) || Math.abs(got - round.measured[fuelId]) > 0.001) {
+      conversionMiss.push(round.date + ' ' + fuelId + ' 折算 ' + got +
+        ' / 实测 ' + round.measured[fuelId]);
+    }
+  });
+});
+if (conversionMiss.length) {
+  fail(conversionMiss.length + ' 个标定值折算不出来：' + conversionMiss.slice(0, 3).join('；'));
+}
+if (shared.TON_CONVERSION.convertTonToLiterAll({ gasoline: -440, diesel: -425 })['92'] !== -0.36) {
+  fail('官方吨价折算结果不对（440 元/吨 → 92# 应为 -0.36 元/升）');
+}
 
 // 调休上班日算工作日、周末与法定假日不算
 if (!cycle.isWorkday('2026-10-10')) fail('2026-10-10 是调休上班日，应算工作日');

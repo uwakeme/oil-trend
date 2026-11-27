@@ -685,6 +685,120 @@ async function main() {
     !!snapshots['2026-11-10'] && !!snapshots['2026-11-10']['92'],
     JSON.stringify(snapshots));
 
+  console.log('\n--- 官方吨价 → 每升折算：只给吨价时也要能给出每升幅度 ---');
+  // ⚠️ 发改委公告只给吨价，公告当天各地挂牌价还没更新 ——
+  //   没有实测幅度时，界面不能只剩「元/吨」，得给出折算值并标明非官方。
+  // 用生成产物里的那一份（server/src/shared/shared.js）：
+  // 线上只同步 server/ 与 data/reference-prices.js，data/ton-conversion.js 不在服务器上
+  var conversion = require(path.join(ROOT, 'src', 'shared', 'shared.js')).TON_CONVERSION;
+  var conversionMiss = [];
+  conversion.CALIBRATION_ROUNDS.forEach(function (round) {
+    Object.keys(round.measured).forEach(function (fuelId) {
+      var got = conversion.convertTonToLiter(round.ton, fuelId);
+      if (!isFinite(got) || Math.abs(got - round.measured[fuelId]) > 0.001) {
+        conversionMiss.push(round.date + ' ' + fuelId + ' 折算 ' + got +
+          ' / 实测 ' + round.measured[fuelId]);
+      }
+    });
+  });
+  check('折算系数能把三轮真实调价的 12 个实测值逐项复现',
+    conversionMiss.length === 0, conversionMiss.join('；'));
+  check('官方吨价 440 元/吨折出 92# 每升 -0.36 元',
+    conversion.convertTonToLiter({ gasoline: -440 }, '92') === -0.36,
+    String(conversion.convertTonToLiter({ gasoline: -440 }, '92')));
+  check('没有对应吨价时不编数（返回 null）',
+    conversion.convertTonToLiter({ gasoline: -440 }, '0') === null);
+
+  var noticeDetail = require(path.join(ROOT, 'src', 'services', 'notice-detail.js'));
+  var tonNotice = {
+    id: 99,
+    kind: 'official',
+    title: '吨价公告',
+    executeAt: '2026-11-26',
+    direction: 'down',
+    tonChanges: { gasoline: -440, diesel: -425 },
+    changes: {},
+    summary: '',
+    source: {}
+  };
+  // 既没有实测中位数、也没有本地区快照 → 只能靠折算补出每升幅度与调后价
+  var tonPayload = noticeDetail.buildNotice(tonNotice, {
+    measured: {},
+    snapshots: {},
+    prices: {
+      '92': { price: 8.39, changeAt: '2026-11-13' },
+      '95': { price: 9.09, changeAt: '2026-11-13' },
+      '98': { price: 11.09, changeAt: '2026-11-13' },
+      '0': { price: 8.06, changeAt: '2026-11-13' }
+    },
+    today: '2026-11-26'
+  });
+  check('只有官方吨价时也能给出每升幅度（折算）',
+    tonPayload.deltas['92'] === -0.36 && tonPayload.deltas['0'] === -0.37,
+    JSON.stringify(tonPayload.deltas));
+  check('折算出来的幅度来源标成 ton（不是官方公布值）',
+    tonPayload.deltaSource['92'] === 'ton', tonPayload.deltaSource['92']);
+  check('官方每升幅度字段仍然是空的（不把折算值混进官方字段）',
+    Object.keys(tonPayload.changes).length === 0, JSON.stringify(tonPayload.changes));
+  check('折算值单独放在 convertedChanges 里',
+    tonPayload.convertedChanges['92'] === -0.36, JSON.stringify(tonPayload.convertedChanges));
+  check('本轮没挂出新挂牌价时：现价是调前价，调后价 = 现价 + 幅度',
+    tonPayload.prices['92'].before === 8.39 && tonPayload.prices['92'].after === 8.03,
+    JSON.stringify(tonPayload.prices['92']));
+  check('价格行的差值与前后价自洽',
+    Object.keys(tonPayload.prices).every(function (fuelId) {
+      var row = tonPayload.prices[fuelId];
+      return Math.abs((row.after - row.before) - row.delta) < 0.001;
+    }),
+    JSON.stringify(tonPayload.prices));
+  check('价格行标明是折算出来的',
+    tonPayload.prices['92'].basis === 'ton', tonPayload.prices['92'].basis);
+
+  // 挂牌价已经含这次调价 → 不能再拿现价推一遍（那会重复加一次幅度）
+  var appliedPayload = noticeDetail.buildNotice(tonNotice, {
+    measured: {},
+    snapshots: {},
+    prices: { '92': { price: 8.03, changeAt: '2026-11-27' } },
+    today: '2026-11-26'
+  });
+  check('挂牌价已经含这次调价时不再拿现价推一遍',
+    !appliedPayload.prices['92'], JSON.stringify(appliedPayload.prices));
+
+  // 旧轮次没有本地区快照时，不能拿今天的价去讲那一轮
+  var oldPayload = noticeDetail.buildNotice({
+    id: 98,
+    kind: 'official',
+    title: '旧轮次',
+    executeAt: '2026-09-24',
+    direction: 'up',
+    tonChanges: { gasoline: 395, diesel: 385 },
+    changes: {},
+    summary: '',
+    source: {}
+  }, {
+    measured: {},
+    snapshots: {},
+    prices: { '92': { price: 8.39, changeAt: '2026-11-13' } },
+    today: '2026-11-26'
+  });
+  check('旧轮次没有本地区快照时不拿今天的价当调后价',
+    !oldPayload.prices['92'], JSON.stringify(oldPayload.prices));
+  check('旧轮次仍然给得出每升幅度（折算）',
+    oldPayload.deltas['92'] === 0.32, JSON.stringify(oldPayload.deltas));
+
+  // 本地区有快照 → 用快照（实测），不拿折算值顶替
+  var localPayload = noticeDetail.buildNotice(tonNotice, {
+    measured: {},
+    snapshots: { '92': { before: 8.91, after: 8.39, delta: -0.52, date: '2026-11-27' } },
+    prices: { '92': { price: 8.39, changeAt: '2026-11-13' } }
+  });
+  check('本地区有快照时用实测值（不拿折算值顶替）',
+    localPayload.deltas['92'] === -0.52 && localPayload.deltaSource['92'] === 'local',
+    JSON.stringify(localPayload.deltas));
+  check('本地区快照的调前调后价原样给出',
+    localPayload.prices['92'].before === 8.91 && localPayload.prices['92'].after === 8.39,
+    JSON.stringify(localPayload.prices['92']));
+
   console.log('\n--- 方向一致性：反方向的快照不能包装成降价消息 ---');
   // ⚠️ 以前这里对幅度取绝对值：公告说下调、快照却是上涨时，
   // 会发出「下调 + 0.20元」这种自相矛盾的消息。

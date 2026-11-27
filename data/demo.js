@@ -12,6 +12,8 @@ const { ADJUSTMENTS, NATIONAL_BASE } = require('./adjustments');
 const { REGIONS, DEFAULT_REGION_CODE } = require('./regions');
 const { FUELS, getFuel } = require('./fuels');
 const { ADJUST_WINDOW, NOTICES, SYNC_STATUS } = require('./notices');
+// 官方吨价 → 每升折算：与服务端共用同一份实现（真源在 data/ton-conversion.js）
+const { LITER_PER_100TON, convertTonToLiterAll } = require('./ton-conversion');
 // 调价周期推算：与服务端共用同一份实现（服务端副本由 scripts/sync-shared.js 生成）
 const ADJUST_CYCLE = require('./adjust-cycle');
 const { buildMarketPayload } = require('./markets');
@@ -211,6 +213,83 @@ function periodLevels(regionCode, fuelId, fromDate) {
   return { points: points, events: events };
 }
 
+/**
+ * 演示通知的官方吨价（由演示的每升幅度反推）。
+ *
+ * 真实公告只给汽/柴油吨价，不给每升四油品幅度；演示数据直接给了每升幅度，
+ * 这里反推一份吨价，让两端字段同构、折算路径在演示里也能跑通。
+ *
+ * 汽/柴油各取一个值：92# 折汽油、0# 折柴油（真实公告也只有这两个数）。
+ */
+function tonChangesOf(notice) {
+  var out = {};
+  var gasoline = Number(notice.changes['92']);
+  if (isFinite(gasoline) && gasoline) {
+    out.gasoline = Math.round(gasoline * 100 / LITER_PER_100TON['92']);
+  }
+  var diesel = Number(notice.changes['0']);
+  if (isFinite(diesel) && diesel) {
+    out.diesel = Math.round(diesel * 100 / LITER_PER_100TON['0']);
+  }
+  return out;
+}
+
+/** 演示通知的方向 */
+function directionOf(notice) {
+  var delta = Number(notice.changes['92']);
+  if (!isFinite(delta) || !delta) return 'flat';
+  return delta < 0 ? 'down' : 'up';
+}
+
+/**
+ * 通知的对外载荷（与服务端同构）。
+ *
+ * ⚠️ 两端字段必须同构：页面只认数据结构，不认来源。
+ * 少了 deltas / deltaSource / prices 这些字段，演示模式下弹层就是空的。
+ */
+function buildNoticePayload(notice, region) {
+  var changes = {};
+  var sources = {};
+  FUELS.forEach(function (f) {
+    changes[f.id] = notice.changes[f.id];
+    // 预测不是官方公布值，别标成 official
+    sources[f.id] = notice.kind === 'forecast' ? 'forecast' : 'official';
+  });
+  var tonChanges = tonChangesOf(notice);
+  var convertedChanges = convertTonToLiterAll(tonChanges);
+  return {
+    id: notice.id,
+    kind: notice.kind,
+    title: notice.title,
+    publishedAt: clock.shiftDateTime(notice.publishedAt),
+    // 公告发布日（不是采集入库时刻）
+    announcedAt: clock.shiftDate(notice.announcedAt || ''),
+    executeAt: clock.shiftDateTime(notice.executeAt),
+    direction: directionOf(notice),
+    // 官方吨价（汽/柴油，元/吨）
+    tonChanges: tonChanges,
+    // 官方公布的每升四油品幅度（演示数据直接给了）
+    changes: changes,
+    // 演示源没有各省挂牌价快照
+    measuredChanges: {},
+    changesMeasured: false,
+    // 官方吨价折算出来的每升四油品幅度 —— 不是官方公布值
+    convertedChanges: convertedChanges,
+    changesConverted: Object.keys(convertedChanges).length > 0,
+    // 最终采用的每升幅度 + 每个油品的来源
+    deltas: changes,
+    deltaSource: sources,
+    summary: notice.summary,
+    // 本地区调价前后价
+    prices: buildPricesFor(region, notice),
+    source: {
+      name: notice.source.name,
+      url: notice.source.url,
+      publishedAt: clock.shiftDateTime(notice.source.publishedAt)
+    }
+  };
+}
+
 function getHome(regionCode, fuelId) {
   var region = regionByCode(regionCode || DEFAULT_REGION_CODE);
   var today = clock.today();
@@ -242,8 +321,6 @@ function getHome(regionCode, fuelId) {
   });
 
   var latestNotice = NOTICES.filter(function (n) { return n.kind === 'official'; })[0];
-  var noticeChanges = {};
-  FUELS.forEach(function (f) { noticeChanges[f.id] = latestNotice.changes[f.id]; });
 
   return {
     region: {
@@ -256,14 +333,8 @@ function getHome(regionCode, fuelId) {
     updatedAt: clock.todayUpdatedAt(),
     window: windowPayload(fuelId || '92'),
     trend30: trend30,
-    latestNotice: {
-      id: latestNotice.id,
-      title: latestNotice.title,
-      // 公告发布日（官方公告在调价执行当天发布）
-      announcedAt: clock.shiftDate(latestNotice.announcedAt || ''),
-      executeAt: clock.shiftDateTime(latestNotice.executeAt),
-      changes: noticeChanges
-    },
+    // 通知载荷与服务端同构（演示源也得给每升幅度、调前调后价）
+    latestNotice: buildNoticePayload(latestNotice, region),
     source: {
       mode: 'demo',
       name: '内置演示数据集',
@@ -317,25 +388,7 @@ function getNotices(regionCode, filter, fuelId) {
   var region = regionByCode(regionCode || DEFAULT_REGION_CODE);
   var fuel = getFuel(fuelId || '92');
   var list = NOTICES.map(function (n) {
-    var changes = {};
-    FUELS.forEach(function (f) { changes[f.id] = n.changes[f.id]; });
-    return {
-      id: n.id,
-      kind: n.kind,
-      title: n.title,
-      publishedAt: clock.shiftDateTime(n.publishedAt),
-      // 公告发布日（不是采集入库时刻）
-      announcedAt: clock.shiftDate(n.announcedAt || ''),
-      executeAt: clock.shiftDateTime(n.executeAt),
-      changes: changes,
-      summary: n.summary,
-      prices: buildPricesFor(region, n),
-      source: {
-        name: n.source.name,
-        url: n.source.url,
-        publishedAt: clock.shiftDateTime(n.source.publishedAt)
-      }
-    };
+    return buildNoticePayload(n, region);
   });
 
   var result = list;
@@ -374,7 +427,9 @@ function buildPricesFor(region, notice) {
     out[f.id] = {
       before: round2(after - delta),
       after: after,
-      delta: delta
+      delta: delta,
+      // 演示源里价格是按调价节点算出来的，等同于本地区挂牌价快照
+      basis: 'local'
     };
   });
   return out;

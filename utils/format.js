@@ -381,42 +381,182 @@ function noticeOfficialText(notice) {
 }
 
 /**
- * 测算值的口径说明。
+ * 测算值的口径说明（每升幅度取各省中位数，全国口径）。
  *
  * 官方给的是「标准品（89 号汽油 / 0 号车用柴油）最高零售价」，单位元/吨；
  * 每升幅度是拿各地挂牌价的前后快照差值算出来的 —— 两者口径不同，
  * 摆在一起必须说清楚，否则用户会以为官方值和测算值对不上。
- *
- * 四处展示（首页卡片、首页详情、调价列表、调价详情）都读这一个值。
  */
 var MEASURED_NOTE = '官方为标准品最高零售价（元/吨）；每升幅度取各省挂牌价前后快照差值的中位数';
+
+/**
+ * 本地区实测幅度的口径说明。
+ *
+ * 每升幅度取的是**本地区**挂牌价调价前后的差值 —— 比各省中位数更贴近
+ * 用户所在的那个价，但同样不是官方公布值。
+ */
+var LOCAL_AMOUNT_NOTE = '每升幅度取本地区挂牌价调价前后的差值；官方口径为标准品最高零售价（元/吨）';
+
+/**
+ * 吨价折算出来的幅度的口径说明。
+ *
+ * 官方公告只给吨价时，各地挂牌价通常次日才更新，公告当天算不出实测幅度，
+ * 这时按历史实测比值折算出每升幅度 —— 不是官方公布值。
+ */
+var CONVERTED_NOTE = '每升幅度按官方吨价折算（系数取历史实测比值中位数）· 非官方';
 
 /**
  * 通知详情里那张「调价前后价」表的口径说明。
  *
  * ⚠️ 与 MEASURED_NOTE 不是一回事，别混用：
  *   MEASURED_NOTE 说的是**每升幅度**（各省中位数，全国口径）；
- *   这张表里的价与差值是**本地区**挂牌价的前后快照（本地区口径）——
- *   调价前最后一次挂牌价、调价后第一次挂牌价。
+ *   这张表里的价与差值是**本地区**口径 —— 调价前最后一次挂牌价、
+ *   调价后第一次挂牌价。
  * 两句话混在一处会让人以为表里的差值也是中位数。
  */
 var LOCAL_PRICE_NOTE = '该地区挂牌价快照：调价前最后一次与调价后第一次的挂牌价';
 
 /**
+ * 调后价里有一部分是折算出来的（本轮调价还没反映到全部油品的挂牌价上）。
+ */
+var CONVERTED_PRICE_NOTE = '该地区部分油品尚未挂出新挂牌价；折算得出的调后价为非官方数值，源站更新后自动替换为实测值';
+
+/**
+ * 调后价是按各省实测中位数推算出来的。
+ */
+var MEDIAN_PRICE_NOTE = '该地区尚未挂出新挂牌价；调后价按各省实测中位数幅度推算（非官方）';
+
+/**
+ * 预测通知的调后价：按当前挂牌价与预测幅度推的，随时可能变。
+ */
+var FORECAST_NOTE = '市场预测值 · 非官方，随国际行情与计价周期变化';
+var FORECAST_PRICE_NOTE = '按当前挂牌价与预测幅度推算的调后价（非官方预测，可能变化）';
+
+/** 四个油品的展示顺序（与 data/fuels.js 一致） */
+var FUEL_ORDER = ['92', '95', '98', '0'];
+
+/** 油品显示名（与 data/fuels.js 一致） */
+var FUEL_NAMES = { '92': '92# 汽油', '95': '95# 汽油', '98': '98# 汽油', '0': '0# 柴油' };
+
+/**
+ * 给一组幅度打上统一的来源标记（兜底路径用）。
+ */
+function sourcesOf(deltas, source) {
+  var out = {};
+  Object.keys(deltas || {}).forEach(function (fuelId) { out[fuelId] = source; });
+  return out;
+}
+
+/**
  * 每升四油品幅度取哪一份。
  *
- * 官方公布了每升幅度就用官方的；官方没公布（发改委公告不给这一项）
- * 才用挂牌价测算值，并把 measured 标出来 —— 界面必须写清这是测算值。
+ * 后端已经按可信度取好了（deltas + deltaSource）：官方公布 → 本地区实测 →
+ * 各省中位数 → 官方吨价折算。
  *
- * 返回 { deltas: { '92': -0.13, ... }, measured: 布尔 }
+ * ⚠️ 小程序版本可能比服务端先发布，所以这里留一条兜底：
+ *   老后端没有 deltas/deltaSource 时，按同样的顺序自己取一遍，
+ *   界面上照样能显示每升幅度（只是没有精确的来源标记）。
+ *
+ * @returns {{deltas: object, sources: object}} sources 是每个油品的来源
  */
 function noticeDeltas(notice) {
-  if (!notice) return { deltas: {}, measured: false };
+  if (!notice) return { deltas: {}, sources: {} };
+  var deltas = notice.deltas || {};
+  if (Object.keys(deltas).length) {
+    return { deltas: deltas, sources: notice.deltaSource || {} };
+  }
   var official = notice.changes || {};
-  if (Object.keys(official).length) return { deltas: official, measured: false };
+  if (Object.keys(official).length) {
+    return { deltas: official, sources: sourcesOf(official, 'official') };
+  }
   var measured = notice.measuredChanges || {};
-  if (Object.keys(measured).length) return { deltas: measured, measured: true };
-  return { deltas: {}, measured: false };
+  if (Object.keys(measured).length) {
+    return { deltas: measured, sources: sourcesOf(measured, 'median') };
+  }
+  var converted = notice.convertedChanges || {};
+  if (Object.keys(converted).length) {
+    return { deltas: converted, sources: sourcesOf(converted, 'ton') };
+  }
+  return { deltas: {}, sources: {} };
+}
+
+/**
+ * 每升幅度的来源 → 口径说明文案。
+ *
+ * @param {string} source 'official' | 'local' | 'median' | 'ton'
+ */
+function deltaNoteOf(source) {
+  if (source === 'local') return LOCAL_AMOUNT_NOTE;
+  if (source === 'median') return MEASURED_NOTE;
+  if (source === 'ton') return CONVERTED_NOTE;
+  if (source === 'forecast') return FORECAST_NOTE;
+  return '';
+}
+
+/**
+ * 每升幅度的来源 → 界面上的小标签。
+ *
+ * 本地区实测（local）不标 —— 它本来就是最贴近用户的那份；
+ * 其余都要标清楚，不能让人把推算值当实测值看。
+ */
+function basisTagOf(source) {
+  if (source === 'ton') return '折算';
+  if (source === 'median') return '各省中位数';
+  if (source === 'forecast') return '预测';
+  return '';
+}
+
+/**
+ * 通知详情的价格表：调价前 → 调价后 + 每升幅度。
+ *
+ * ⚠️ 首页与调价页的弹层共用这一份装配 —— 两处各写一遍必然对不上账。
+ *
+ * @param {object} notice  通知载荷
+ * @param {object} sources 每个油品的幅度来源
+ * @returns {Array} 四个油品的行
+ */
+function noticePriceRows(notice, sources) {
+  var prices = (notice && notice.prices) || {};
+  var src = sources || {};
+  var rows = [];
+  FUEL_ORDER.forEach(function (fuelId) {
+    var row = prices[fuelId];
+    if (!row) return;
+    var delta = (typeof row.delta === 'number' && isFinite(row.delta)) ? row.delta : null;
+    var basis = row.basis || src[fuelId] || '';
+    rows.push({
+      id: fuelId,
+      name: FUEL_NAMES[fuelId] || (fuelId + '#'),
+      // 调价前价格：没有就是 '--'，不能拿 0.00 冒充
+      beforeText: price(row.before),
+      // 调价后价格
+      afterText: price(row.after),
+      // 每升幅度：算不出来是 '--'，不是 0.00（那是「持平」，不是「不知道」）
+      deltaText: delta === null ? '--'
+        : ((delta > 0 ? '+' : delta < 0 ? '-' : '') + Math.abs(delta).toFixed(2) + ' 元/升'),
+      direction: delta === null ? 'flat' : (delta < 0 ? 'down' : (delta > 0 ? 'up' : 'flat')),
+      basis: basis,
+      basisTag: basisTagOf(basis)
+    });
+  });
+  return rows;
+}
+
+/**
+ * 价格表下面那行口径说明。
+ *
+ * 表里的调后价有两种来路，说的必须是同一件事：
+ *   全是本地区挂牌价快照 → 实测；
+ *   有折算/中位数推出来的 → 非官方，必须说清楚。
+ */
+function priceTableNote(rows) {
+  var list = rows || [];
+  if (!list.length) return '';
+  var bases = list.map(function (r) { return r.basis; });
+  if (bases.indexOf('ton') >= 0) return CONVERTED_PRICE_NOTE;
+  if (bases.indexOf('median') >= 0) return MEDIAN_PRICE_NOTE;
+  if (bases.indexOf('forecast') >= 0) return FORECAST_PRICE_NOTE;
+  return LOCAL_PRICE_NOTE;
 }
 
 module.exports = {
@@ -443,8 +583,20 @@ module.exports = {
   directionText: directionText,
   noticeOfficialText: noticeOfficialText,
   noticeDeltas: noticeDeltas,
+  deltaNoteOf: deltaNoteOf,
+  basisTagOf: basisTagOf,
+  noticePriceRows: noticePriceRows,
+  priceTableNote: priceTableNote,
   MEASURED_NOTE: MEASURED_NOTE,
+  LOCAL_AMOUNT_NOTE: LOCAL_AMOUNT_NOTE,
+  CONVERTED_NOTE: CONVERTED_NOTE,
+  FORECAST_NOTE: FORECAST_NOTE,
+  FORECAST_PRICE_NOTE: FORECAST_PRICE_NOTE,
   LOCAL_PRICE_NOTE: LOCAL_PRICE_NOTE,
+  CONVERTED_PRICE_NOTE: CONVERTED_PRICE_NOTE,
+  MEDIAN_PRICE_NOTE: MEDIAN_PRICE_NOTE,
+  FUEL_ORDER: FUEL_ORDER,
+  FUEL_NAMES: FUEL_NAMES,
   SOURCE_MODE_TEXT: SOURCE_MODE_TEXT,
   SYNC_STATUS_META: SYNC_STATUS_META
 };
