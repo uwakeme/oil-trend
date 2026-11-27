@@ -6,6 +6,8 @@
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+## [1.0.5] - 2026-11-27
 ### Added
 - 调价通知详情补上「每升调价幅度」与「调价前 → 调价后」价格表；官方公告只给吨价时按历史实测比值折算补出每升幅度与调价后价格，并标明「折算 · 非官方」，源站挂出新挂牌价后自动替换为实测值
 ### Fixed
@@ -21,6 +23,7 @@
 ### Added
 - 首页「数据来源与说明」底部展示小程序备案号与工信部查询地址，点一下即可复制到剪贴板
 
-[Unreleased]: https://github.com/uwakeme/oil-trend/compare/v1.0.4...HEAD
+[Unreleased]: https://github.com/uwakeme/oil-trend/compare/v1.0.5...HEAD
+[1.0.5]: https://github.com/uwakeme/oil-trend/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/uwakeme/oil-trend/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/uwakeme/oil-trend/compare/v1.0.2...v1.0.3
