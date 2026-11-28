@@ -583,6 +583,16 @@ async function main() {
     check('市场行情带 delayMinutes 字段', 'delayMinutes' in market);
     check('市场行情 direction 是三态',
       ['up', 'down', 'flat'].indexOf(market.direction) >= 0);
+    // ⚠️ axis 必须是**数组**（首/中/尾三档）：给字符串的话小程序
+    //    wx:for 会把字符一个个渲染出来，图下面会出现一排乱码。
+    check('市场行情的 axis 是三档数组',
+      Array.isArray(market.axis) && market.axis.length === 3, JSON.stringify(market.axis));
+    check('市场行情带品种口径说明',
+      typeof market.basis === 'string' && market.basis.length > 0, market.basis);
+    check('市场行情的延时分钟数在合理范围',
+      market.delayMinutes === null ||
+      (typeof market.delayMinutes === 'number' && market.delayMinutes >= 0 &&
+        market.delayMinutes <= 60 * 24 * 30), String(market.delayMinutes));
 
     console.log('\n--- 对外可见性：存疑公告不发布 ---');
     // ⚠️ 按执行日期区分，不能按标题：标题是从正文正则匹配的，
@@ -971,6 +981,12 @@ async function main() {
       hasBadToken(globalPage.data.delayText) === false, '实际：' + globalPage.data.delayText);
     check('国际页品种代码非空', !!globalPage.data.market.code);
     check('国际页有来源提示条', !!globalPage.data.sourceText);
+    check('国际页 axis 是数组不是字符串',
+      Array.isArray(globalPage.data.market.axis) && globalPage.data.market.axis.length === 3,
+      JSON.stringify(globalPage.data.market.axis));
+    check('国际页显示品种口径（用户要能对得上新闻里的数）',
+      typeof globalPage.data.market.basis === 'string' && globalPage.data.market.basis.length > 0,
+      globalPage.data.market.basis);
     check('国际页渲染里没有 undefined', hasBadToken(allText(globalPage.data)) === false);
 
     // 提醒页

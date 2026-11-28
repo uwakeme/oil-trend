@@ -111,14 +111,56 @@ const SOURCES = [
     note: '正式调价公告：方向 + 执行日期 + 汽/柴油吨价。附件价目表是图片，不解析'
   },
   {
-    id: 'market-quote',
-    name: '国际原油行情接口',
+    id: 'market-wti',
+    name: '东方财富·NYMEX原油',
     kind: 'market',
-    enabled: false,
-    url: '',
-    headers: {},
-    parser: 'genericQuote',
-    note: 'Brent / WTI 报价，需确认是否延时、是否允许展示'
+    enabled: true,
+    priority: 1,
+    provides: ['market'],
+    symbol: 'wti',
+    // 快照：最新价 / 最高 / 最低 / 今开 / 昨收 / 涨跌额 / 涨跌幅 / 报价时间
+    quoteUrl: 'https://push2.eastmoney.com/api/qt/stock/get?secid=102.CL00Y&fltt=2&invt=2&fields=f43,f44,f45,f46,f57,f58,f60,f86,f169,f170',
+    // 历史曲线：5 分钟线（覆盖最近一个交易日）+ 日线（近 120 期，够 3 个月视图）
+    seriesUrls: [
+      'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=102.CL00Y&klt=5&fqt=0&lmt=320&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58',
+      'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=102.CL00Y&klt=101&fqt=0&lmt=120&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58'
+    ],
+    allowedHosts: ['push2.eastmoney.com', 'push2his.eastmoney.com'],
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
+    },
+    parser: 'eastmoneyQuote',
+    seriesParser: 'eastmoneyKline',
+    // 采集节奏跟 cron 走（默认 30 分钟一轮），这里不做新鲜期判定
+    // ⚠️ 授权条款：东方财富的公开行情接口**不是**官方授权数据接口，
+    //    只作市场趋势参考，不作交易依据 —— 展示侧必须带上这句口径说明。
+    note: 'NYMEX 近月（当月连续）合约。来自东方财富公开行情接口，非官方授权数据，仅作市场趋势参考。'
+  },
+  {
+    id: 'market-brent',
+    name: '新浪财经·布伦特原油',
+    kind: 'market',
+    enabled: true,
+    priority: 2,
+    provides: ['market'],
+    symbol: 'brent',
+    quoteUrl: 'https://hq.sinajs.cn/list=hf_OIL',
+    // 公开接口没有历史曲线：曲线靠采集时点累积（每轮一个真实报价点）
+    seriesUrls: [],
+    allowedHosts: ['hq.sinajs.cn'],
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+      // 新浪的行情接口不带来源页 Referer 会回空
+      'Referer': 'https://finance.sina.com.cn/'
+    },
+    // 响应是 GB18030 编码（品种名是中文），抓取层要按这个编码解
+    charset: 'gbk',
+    parser: 'sinaQuote',
+    // 采集节奏跟 cron 走（默认 30 分钟一轮）
+    // ⚠️ 口径：这个品种在新浪那边是**场外差价合约（CFD）**报价，
+    //    与 ICE 布伦特期货结算价有基差（2026-11-27：ICE 1 月合约结算 95.44，
+    //    同期 CFD 报价约 90.7）。不写清楚，用户只会以为「数对不上」。
+    note: '布伦特为场外差价合约（CFD）报价，与 ICE 布伦特期货结算价存在基差；公开接口无历史曲线，曲线由采集时点累积。'
   }
 ];
 
@@ -521,24 +563,138 @@ const PARSERS = {
   },
 
   /**
-   * 解析行情：要求同时拿到品种名、价格和时间，缺一不可。
+   * 解析东方财富行情快照（push2 stock/get，带 fltt=2）。
+   *
+   * 字段：f43 最新价 / f44 最高 / f45 最低 / f46 今开 / f60 昨收 /
+   *       f86 报价时间（Unix 秒）/ f169 涨跌额 / f170 涨跌幅(%) / f58 品种名。
+   *
+   * ⚠️ **必须带 fltt=2**：不带的话这些字段是放大 100 倍的整数
+   *    （f43 给 8333 而不是 83.33），显示出来就是 8333 美元/桶。
    */
-  genericQuote(raw) {
+  eastmoneyQuote(raw) {
     var data;
     try {
       data = JSON.parse(raw);
     } catch (e) {
       return null;
     }
-    if (!data || typeof data.price !== 'number' || !data.symbol) return null;
+    var d = data && data.data;
+    if (!d || typeof d !== 'object') return null;
+    var price = Number(d.f43);
+    if (!isFinite(price) || price <= 0) return null;
+    // 国际原油在 10~300 美元/桶：超出说明字段错位或接口结构变了
+    if (price < 10 || price > 300) return null;
+    var high = Number(d.f44);
+    var low = Number(d.f45);
+    var open = Number(d.f46);
+    var prevClose = Number(d.f60);
+    var changeAmount = Number(d.f169);
+    var changePercent = Number(d.f170);
+    // 接口没给涨跌时自己算（现价 - 昨收），算不出来就留空 —— 不猜
+    if (!isFinite(changeAmount)) {
+      changeAmount = (isFinite(prevClose) && prevClose) ? price - prevClose : null;
+    }
+    if (!isFinite(changePercent)) {
+      changePercent = (changeAmount !== null && prevClose) ? (changeAmount / prevClose) * 100 : null;
+    }
+    var ts = Number(d.f86);
     return {
-      symbol: data.symbol,
-      name: data.name || data.symbol,
-      price: data.price,
-      changeAmount: Number(data.changeAmount) || 0,
-      changePercent: Number(data.changePercent) || 0,
-      quoteTime: data.quoteTime || '',
-      delayed: !!data.delayed
+      name: String(d.f58 || ''),
+      price: round2(price),
+      high: isFinite(high) ? high : null,
+      low: isFinite(low) ? low : null,
+      open: isFinite(open) ? open : null,
+      prevClose: isFinite(prevClose) ? prevClose : null,
+      // 四舍五入到两位：接口给的涨跌是浮点运算出来的，不收口会出现
+      // -0.972999999999999 这种尾巴，传到界面上很难看
+      changeAmount: (changeAmount === null || !isFinite(changeAmount)) ? null : round2(changeAmount),
+      changePercent: (changePercent === null || !isFinite(changePercent)) ? null : round2(changePercent),
+      // 报价时刻：Unix 秒 → UTC+8 的 'YYYY-MM-DD HH:mm:ss'
+      quoteTime: (isFinite(ts) && ts > 0) ? utc8Stamp(ts * 1000) : ''
+    };
+  },
+
+  /**
+   * 解析东方财富 K 线（push2his kline/get）。
+   *
+   * 每行格式：时间,开,收,高,低,成交量,?,涨跌幅 —— 取**收盘价**（第 3 段）。
+   * 分钟线的「时间」带时刻（2026-11-28 05:55），日线只有日期（2026-11-27）。
+   *
+   * ⚠️ 日线保持纯日期：曲线的横轴标签要按「有没有时刻」区分显示格式，
+   *    补成 00:00 会在图上显示成「11-27 00:00」。
+   */
+  eastmoneyKline(raw) {
+    var data;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      return null;
+    }
+    var klines = data && data.data && data.data.klines;
+    if (!Array.isArray(klines) || !klines.length) return null;
+    var points = [];
+    for (var i = 0; i < klines.length; i++) {
+      var cols = String(klines[i]).split(',');
+      if (cols.length < 3) continue;
+      var t = String(cols[0]).trim();
+      var close = Number(cols[2]);
+      if (!isFinite(close) || close <= 0) continue;
+      if (!/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$/.test(t)) continue;
+      points.push({
+        date: t.length > 10 ? (t + ':00') : t,
+        value: close
+      });
+    }
+    if (!points.length) return null;
+    return { points: points };
+  },
+
+  /**
+   * 解析新浪财经外盘行情快照（hq.sinajs.cn）。
+   *
+   * 格式：var hq_str_hf_OIL="现价,,买价,卖价,最高,最低,时间,昨收,开盘,持仓,买量,卖量,日期,名称,总量";
+   *
+   * ⚠️ 响应是 GB18030 编码（品种名是中文），抓取层要按 charset 解；
+   *    接口不给涨跌额与涨跌幅，用「现价 - 昨收」算。
+   */
+  sinaQuote(raw) {
+    var text = String(raw || '');
+    var m = text.match(/hq_str_hf_([A-Za-z0-9_]+)\s*=\s*"([^"]*)"/);
+    if (!m) return null;
+    var cols = m[2].split(',');
+    if (cols.length < 13) return null;
+    var price = Number(cols[0]);
+    if (!isFinite(price) || price <= 0) return null;
+    if (price < 10 || price > 300) return null;
+    var high = Number(cols[4]);
+    var low = Number(cols[5]);
+    var prevClose = Number(cols[7]);
+    var open = Number(cols[8]);
+    var changeAmount = (isFinite(prevClose) && prevClose) ? round2(price - prevClose) : null;
+    var changePercent = (changeAmount !== null && prevClose) ? round2((changeAmount / prevClose) * 100) : null;
+    // 报价时刻：日期 + 时间（北京时间）
+    var quoteTime = '';
+    var date = String(cols[12] || '').trim();
+    var time = String(cols[6] || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      if (/^\d{2}:\d{2}:\d{2}$/.test(time)) {
+        quoteTime = date + ' ' + time;
+      } else if (/^\d{2}:\d{2}$/.test(time)) {
+        quoteTime = date + ' ' + time + ':00';
+      } else {
+        quoteTime = date + ' 00:00:00';
+      }
+    }
+    return {
+      name: String(cols[13] || ''),
+      price: price,
+      high: isFinite(high) ? high : null,
+      low: isFinite(low) ? low : null,
+      open: isFinite(open) ? open : null,
+      prevClose: isFinite(prevClose) ? prevClose : null,
+      changeAmount: changeAmount,
+      changePercent: changePercent,
+      quoteTime: quoteTime
     };
   }
 };
@@ -656,6 +812,23 @@ function stripTags(s) {
 function pad(n) {
   n = String(n);
   return n.length < 2 ? '0' + n : n;
+}
+
+/** 两位小数（行情字段都要收口，别把浮点尾巴传出去） */
+function round2(v) {
+  return Math.round(Number(v) * 100) / 100;
+}
+
+/**
+ * Unix 毫秒 → 'YYYY-MM-DD HH:mm:ss'（UTC+8）
+ *
+ * ⚠️ 统一按 UTC+8：行情源给的是 Unix 时间戳，东财的 K 线标签也是北京时间，
+ *    两边不统一的话曲线会整体偏 8 小时。
+ */
+function utc8Stamp(ms) {
+  var t = new Date(Number(ms) + 8 * 3600000);
+  return t.getUTCFullYear() + '-' + pad(t.getUTCMonth() + 1) + '-' + pad(t.getUTCDate()) +
+    ' ' + pad(t.getUTCHours()) + ':' + pad(t.getUTCMinutes()) + ':' + pad(t.getUTCSeconds());
 }
 
 /**

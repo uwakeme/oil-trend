@@ -69,6 +69,8 @@ function fetchSource(source) {
   return httpClient.get(source.url, {
     headers: Object.assign({ 'User-Agent': 'oil-trend-collector/1.0' }, source.headers || {}),
     timeout: 15000,
+    // 响应编码（新浪行情接口是 GB18030，品种名是中文）
+    charset: source.charset || '',
     // 重定向只允许跳到白名单里的主机
     allowedHosts: source.allowedHosts || [],
     // 熔断按来源记：这个来源连续被拒到阈值，冷却期内一个请求都不再发
@@ -364,6 +366,147 @@ function saveMarket(source, parsed) {
     series: parsed.series || [],
     source: source.id
   });
+}
+
+/**
+ * 合并行情曲线点。
+ *
+ * 规则：
+ *   1. 同一个时间戳只留最后一个（后抓到的更贴近当前状态）；
+ *   2. 同一天里既有日线（纯日期）又有分钟线时，**留分钟线** ——
+ *      日线那根是「当天收盘」，和当天的分钟线重复，画出来是一根多余的台阶；
+ *   3. 按时间升序；只留最近 3000 个点，别让库里无限长。
+ *
+ * @param {Array} points [{date, value}]
+ * @returns {Array} 合并后的点
+ */
+function mergeMarketPoints(points) {
+  var list = [];
+  var dayHasIntraday = {};
+  (points || []).forEach(function (p) {
+    if (!p || typeof p.value !== 'number' || !isFinite(p.value)) return;
+    var d = String(p.date || '');
+    if (!/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$/.test(d)) return;
+    var intraday = d.length > 10;
+    if (intraday) dayHasIntraday[d.slice(0, 10)] = true;
+    list.push({ date: d, value: p.value, intraday: intraday });
+  });
+  var byTime = {};
+  var order = [];
+  list.forEach(function (p) {
+    if (!p.intraday && dayHasIntraday[p.date.slice(0, 10)]) return;
+    // 用 hasOwnProperty 而不是「值是不是 0」判断首次出现：
+    // 值为 0 的点会被当成没出现过，序号里就会重复
+    if (!Object.prototype.hasOwnProperty.call(byTime, p.date)) order.push(p.date);
+    byTime[p.date] = p.value;
+  });
+  var merged = order.map(function (k) { return { date: k, value: byTime[k] }; });
+  merged.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+  return merged.length > 3000 ? merged.slice(merged.length - 3000) : merged;
+}
+
+/**
+ * 国际行情采集（kind = market）。
+ *
+ * 一个品种要打两类接口：快照（最新价/涨跌/开高低/昨收/报价时刻）
+ * 与历史曲线（K 线）。两类接口的失败**分开对待**：
+ *   快照失败 → 整条失败（价格是最要紧的，没有就没有）；
+ *   曲线失败 → 只缺曲线，价格照旧入库，库里已有的曲线继续用。
+ *
+ * ⚠️ 曲线是「库里已有的 + 本轮抓到的 + 本次快照」三份合并：
+ *    某一次 K 线接口挂掉时，不能把历史抹成空 —— 那样 1周/1月/3月
+ *    的曲线会突然全空，看起来像数据被清了。
+ *
+ * @param {object} source 来源配置
+ */
+async function collectMarketSource(source) {
+  var fetched = await fetchSource({
+    id: source.id,
+    url: source.quoteUrl,
+    headers: source.headers,
+    allowedHosts: source.allowedHosts,
+    charset: source.charset
+  });
+  if (!fetched.ok) {
+    return { sourceId: source.id, status: 'failed', reason: fetched.reason, message: fetched.message };
+  }
+  var parsed = null;
+  try {
+    parsed = sources.PARSERS[source.parser](fetched.body);
+  } catch (err) {
+    parsed = null;
+  }
+  if (!parsed) {
+    return {
+      sourceId: source.id,
+      status: 'needsReview',
+      reason: 'PARSE_FAILED',
+      message: '行情快照抓取成功但解析不出字段，已转人工核对'
+    };
+  }
+
+  // ---- 历史曲线 ----
+  var fetchedPoints = [];
+  var seriesFailed = 0;
+  var urls = source.seriesUrls || [];
+  for (var i = 0; i < urls.length; i++) {
+    var one = await fetchSource({
+      id: source.id + '-series-' + i,
+      url: urls[i],
+      headers: source.headers,
+      allowedHosts: source.allowedHosts,
+      charset: source.charset
+    });
+    if (!one.ok) {
+      seriesFailed++;
+      continue;
+    }
+    var sp = null;
+    try {
+      sp = sources.PARSERS[source.seriesParser](one.body);
+    } catch (err) {
+      sp = null;
+    }
+    if (!sp || !sp.points || !sp.points.length) {
+      seriesFailed++;
+      continue;
+    }
+    fetchedPoints = fetchedPoints.concat(sp.points);
+  }
+
+  // ---- 合并入库 ----
+  var doc = await dao.markets.findBySymbol(source.symbol);
+  var existing = (doc && Array.isArray(doc.series)) ? doc.series : [];
+  var all = existing.concat(fetchedPoints);
+  // 本次快照本身也是一个真实报价点：没有历史接口的来源靠它把曲线攒起来
+  if (parsed.quoteTime) all.push({ date: parsed.quoteTime, value: parsed.price });
+  var series = mergeMarketPoints(all);
+
+  await saveMarket(source, {
+    symbol: source.symbol,
+    name: parsed.name || source.symbol,
+    price: parsed.price,
+    changeAmount: parsed.changeAmount,
+    changePercent: parsed.changePercent,
+    open: parsed.open,
+    prevClose: parsed.prevClose,
+    high: parsed.high,
+    low: parsed.low,
+    quoteTime: parsed.quoteTime,
+    // 国际期货行情本来就是延时报价：如实标延时，时长由报价时刻算出来
+    delayed: true,
+    series: series
+  });
+
+  return {
+    sourceId: source.id,
+    status: seriesFailed ? 'degraded' : 'ok',
+    saved: 1,
+    points: series.length,
+    message: seriesFailed
+      ? ('行情快照已更新（' + parsed.price + ' 美元/桶），' + seriesFailed + ' 个曲线接口没取到，曲线沿用库里已有数据')
+      : ('行情已更新：' + parsed.price + ' 美元/桶，曲线 ' + series.length + ' 点')
+  };
 }
 
 /* ---------------- 地区油价采集（kind = price） ---------------- */
@@ -1539,6 +1682,7 @@ function run(options) {
   var forecastSources = enabled.filter(function (s) { return s.kind === 'forecast'; });
   var timelineSources = enabled.filter(function (s) { return s.kind === 'timeline'; });
   var noticeSources = enabled.filter(function (s) { return s.kind === 'notice'; });
+  var marketSources = enabled.filter(function (s) { return s.kind === 'market'; });
 
   var chain = null;
   var series = {};
@@ -1771,7 +1915,17 @@ function run(options) {
       return promise;
     })
     .then(function () {
-      // ---- 8. 汇总价格链结果 ----
+      // ---- 8. 国际行情源 ----
+      var promise = Promise.resolve();
+      marketSources.forEach(function (src) {
+        promise = promise.then(function () {
+          return collectMarketSource(src).then(push);
+        });
+      });
+      return promise;
+    })
+    .then(function () {
+      // ---- 9. 汇总价格链结果 ----
       // 先按来源分别报一遍：主源被拒、备源接管了多少省份，
       // 必须能从「来源健康」里看出来（以前只看最终结果，主源全挂也看不出来）
       if (chain && chain.sourceStats) {
@@ -1871,6 +2025,8 @@ module.exports = {
   crossDeviation: crossDeviation,
   collectPriceChain: collectPriceChain,
   collectForecastSource: collectForecastSource,
+  collectMarketSource: collectMarketSource,
+  mergeMarketPoints: mergeMarketPoints,
   deriveAdjustEvents: deriveAdjustEvents,
   crossProvinceStats: crossProvinceStats,
   timelineCrossCheck: timelineCrossCheck,

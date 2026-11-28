@@ -130,6 +130,39 @@ function resetBlocked() {
 }
 
 /**
+ * 按响应编码解码正文。
+ *
+ * ⚠️ 新浪的行情接口回的是 **GB18030**（品种名是中文）：
+ *    按 UTF-8 解会变成乱码。抓取层统一在这里处理，
+ *    解析器拿到的保证是解码后的文本。
+ *
+ * 编码判断顺序：来源配置里指定的 charset → 响应头 content-type。
+ *
+ * @param {Buffer} buf         原始字节
+ * @param {string} contentType 响应头 content-type
+ * @param {string} [charset]   来源配置的 charset（如 'gbk'）
+ * @returns {string} 解码后的文本
+ */
+function decodeBody(buf, contentType, charset) {
+  var cs = String(charset || '').toLowerCase();
+  if (!cs) {
+    var m = String(contentType || '').match(/charset=([\w-]+)/i);
+    if (m) cs = m[1].toLowerCase();
+  }
+  if (/gbk|gb2312|gb18030/.test(cs)) {
+    // GB18030 是 GBK 的超集：标注 gb18030 就按 gb18030 解
+    var label = cs.indexOf('gb18030') >= 0 ? 'gb18030' : 'gbk';
+    try {
+      return new TextDecoder(label).decode(buf);
+    } catch (e) {
+      // Node 没带完整 ICU 时降级：数字字段仍解析得出来，中文会乱码
+      return buf.toString('utf8');
+    }
+  }
+  return buf.toString('utf8');
+}
+
+/**
  * 发起一次 GET 请求
  * @param {string} url 地址
  * @param {object} options { headers, timeout, totalTimeout, maxRedirects, allowedHosts }
@@ -252,7 +285,7 @@ function get(url, options) {
           });
           res.on('end', function () {
             if (tooLarge) return;
-            var body = Buffer.concat(chunks).toString('utf8');
+            var body = decodeBody(Buffer.concat(chunks), res.headers['content-type'], opts.charset);
             // 站点可能用「HTTP 200 + 错误页」拒绝访问（xmgcn 就是这么干的），
             // 状态码看不出被拒，得看正文。命中就把这次记成「被拒」并计入熔断。
             var blocked = detectBlockPage(body);
@@ -295,6 +328,7 @@ function get(url, options) {
 
 module.exports = {
   get: get,
+  decodeBody: decodeBody,
   detectBlockPage: detectBlockPage,
   markBlocked: markBlocked,
   isBlocked: isBlocked,

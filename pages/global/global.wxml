@@ -90,6 +90,7 @@
       <view>
         <text class="info-strip-title">国际油价不等于国内加油价</text>
         <text class="info-strip-text">国内成品油还受定价周期、汇率、税费及流通成本等因素影响，此页仅作市场趋势参考。</text>
+        <text class="info-strip-text" wx:if="{{market.basis}}">{{market.basis}}</text>
       </view>
     </view>
 

@@ -210,7 +210,12 @@ async function main() {
     check('home.trend30 有数据点',
       home.body.data.trend30['92'].points.length > 0);
     var m = await request(port, 'GET', '/api/market?symbol=brent&period=1d');
-    check('market.axis 是字符串（不是数组）', typeof m.body.data.axis === 'string', typeof m.body.data.axis);
+    // ⚠️ axis 必须是**数组**：以前这里断言「是字符串」，把 bug 写进了测试 ——
+    //    小程序 wx:for 遍历字符串会把字符一个个渲染出来。
+    check('market.axis 是三档数组（不是字符串）',
+      Array.isArray(m.body.data.axis) && m.body.data.axis.length === 3, JSON.stringify(m.body.data.axis));
+    check('market 带品种口径（basis）',
+      typeof m.body.data.basis === 'string' && m.body.data.basis.length > 0, m.body.data.basis);
     var t = await request(port, 'GET', '/api/trend?regionCode=440000&fuelId=92&period=3m');
     check('trend.axis 是数组', Array.isArray(t.body.data.axis));
 

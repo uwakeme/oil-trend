@@ -109,11 +109,35 @@ function actionNotices(payload) {
 /** 行情周期对应的天数跨度 */
 var MARKET_PERIOD_DAYS = { '1d': 1, '1w': 7, '1m': 30, '3m': 90 };
 
-/** 'YYYY-MM-DD HH:mm:ss' → 时间戳；解析不出来返回 null */
+/**
+ * 'YYYY-MM-DD HH:mm:ss' / 'YYYY-MM-DD' → 时间戳；解析不出来返回 null
+ *
+ * ⚠️ 曲线上的时间一律按 **UTC+8 的墙上时间** 解释（东财的 K 线标签、
+ *    新浪的报价时刻都是北京时间）：统一减 8 小时，日线点与分钟线点
+ *    才落在同一条时间轴上，否则两者会差 8 小时、切周期时错位。
+ * ⚠️ 纯日期（日 K）也要认：日线点没有时刻，解析不出来的话
+ *    1周/1月/3月 的切片会全部落空，只剩最后一个点。
+ */
 function seriesTime(dateStr) {
-  var m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  var m = String(dateStr || '').match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}):(\d{2}))?/);
   if (!m) return null;
-  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6]));
+  var h = m[4] ? Number(m[4]) : 0;
+  var mi = m[5] ? Number(m[5]) : 0;
+  var se = m[6] ? Number(m[6]) : 0;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), h, mi, se) - 8 * 3600000;
+}
+
+/** 'YYYY-MM-DD HH:mm:ss' → 'MM-DD HH:mm:ss'（展示用，与演示源同格式） */
+function shortQuoteTime(value) {
+  var s = String(value || '');
+  if (/^\d{4}-\d{2}-\d{2} /.test(s)) return s.slice(5);
+  return s;
+}
+
+/** 行情来源的口径说明（取来源配置里的 note） */
+function marketSourceNote(doc) {
+  var cfg = (sources.SOURCES || []).filter(function (s) { return s.id === doc.source; })[0];
+  return cfg ? (cfg.note || '') : '';
 }
 
 /**
@@ -124,7 +148,11 @@ function sliceSeries(series, period) {
   var list = series || [];
   if (!list.length) return [];
   var days = MARKET_PERIOD_DAYS[period] || 1;
-  var times = list.map(seriesTime);
+  // ⚠️ 必须传 **p.date**，不能直接把点对象丢给 seriesTime：
+  //   以前写的是 list.map(seriesTime)，回调收到的是 {date, value} 整个对象，
+  //   String(对象) = '[object Object]' → 全部解析不出来 → last 为 null
+  //   → 曲线永远只剩最后一个点（真实行情入库后国际页就画不出曲线了）。
+  var times = list.map(function (p) { return seriesTime(p && p.date); });
   var last = null;
   for (var i = times.length - 1; i >= 0; i--) {
     if (times[i] !== null) { last = times[i]; break; }
@@ -139,6 +167,53 @@ function sliceSeries(series, period) {
 }
 
 /**
+ * 解析行情报价时刻 → 时间戳（毫秒）；解析不出来返回 null。
+ *
+ * ⚠️ 报价时刻有两种写法，两种都不能直接交给 Date.parse：
+ *   'MM-DD HH:mm:ss'     —— 缺年份（演示源与部分行情源的写法）。
+ *     Date.parse 把缺年份的补成 2001 年，「现在 - 报价时刻」算出来是
+ *     1300 多万分钟（≈25 年），线上接口实际吐出的是 13148652 分钟。
+ *   'YYYY-MM-DD HH:mm:ss' —— 服务端共享模块的写法。
+ * 无时区标注的一律按 UTC+8 解释（与项目日历口径一致）；
+ * 带 Z / ±HH:MM 的按其偏移量折算。
+ *
+ * @param {string} value 报价时刻字符串
+ * @returns {number|null} 毫秒时间戳
+ */
+function parseQuoteTime(value) {
+  var str = String(value == null ? '' : value).trim();
+  if (!str) return null;
+
+  var full = str.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?(Z|[+-]\d{2}:?\d{2})?$/);
+  if (full) {
+    var y = Number(full[1]);
+    var mo = Number(full[2]);
+    var d = Number(full[3]);
+    var h = Number(full[4]);
+    var mi = Number(full[5]);
+    var se = full[6] ? Number(full[6]) : 0;
+    var tz = full[7];
+    // 无时区标注：按 UTC+8 解释
+    if (!tz) return Date.UTC(y, mo - 1, d, h, mi, se) - 8 * 3600000;
+    if (tz === 'Z') return Date.UTC(y, mo - 1, d, h, mi, se);
+    var sign = tz.charAt(0) === '-' ? -1 : 1;
+    var tzMin = Number(tz.slice(-2)) + Number(tz.slice(1, 3)) * 60;
+    return Date.UTC(y, mo - 1, d, h, mi, se) - sign * tzMin * 60000;
+  }
+
+  // 缺年份：按 UTC+8 的当前年补上
+  var shortM = str.match(/^(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (shortM) {
+    var cn = new Date(Date.now() + 8 * 3600000);
+    return Date.UTC(cn.getUTCFullYear(), Number(shortM[1]) - 1, Number(shortM[2]),
+      Number(shortM[3]), Number(shortM[4]), shortM[5] ? Number(shortM[5]) : 0) - 8 * 3600000;
+  }
+
+  var t = Date.parse(str);
+  return isFinite(t) ? t : null;
+}
+
+/**
  * 延时分钟数。
  *
  * ⚠️ 后端原来不返回这个字段，前端直接拼「延时 undefined 分钟」。
@@ -147,8 +222,8 @@ function sliceSeries(series, period) {
  */
 function delayMinutesOf(doc) {
   if (!doc || !doc.delayed) return 0;
-  var t = Date.parse(doc.quoteTime || '');
-  if (!isFinite(t)) return null;
+  var t = parseQuoteTime(doc.quoteTime);
+  if (t === null) return null;
   var minutes = Math.round((Date.now() - t) / 60000);
   return minutes > 0 ? minutes : null;
 }
@@ -171,6 +246,8 @@ function actionMarket(payload) {
         symbol: fallback.symbol,
         name: fallback.name,
         code: marketCode(symbol),
+        // 演示数据也标口径：用户点进来看到的是哪个品种、哪个报价口径
+        basis: (shared.MARKET_INSTRUMENTS[symbol] || {}).basis || '',
         price: fallback.price,
         changeAmount: fallback.changeAmount,
         changePercent: fallback.changePercent,
@@ -198,10 +275,14 @@ function actionMarket(payload) {
     });
 
     var changeAmount = doc.changeAmount || 0;
+    // 品种口径（名称 + 口径说明）：真源在 data/markets.js，服务端是它的同步副本。
+    // 布伦特是 CFD 报价、纽约是 NYMEX 近月 —— 不标出来用户没法跟新闻对账。
+    var instrument = shared.MARKET_INSTRUMENTS[doc.symbol] || {};
     return {
       symbol: doc.symbol,
-      name: doc.name || doc.symbol,
+      name: instrument.name || doc.name || doc.symbol,
       code: marketCode(doc.symbol),
+      basis: instrument.basis || '',
       price: doc.price,
       changeAmount: changeAmount,
       changePercent: doc.changePercent || 0,
@@ -214,19 +295,16 @@ function actionMarket(payload) {
       high: doc.high,
       low: doc.low,
       points: points,
-      axis: shared.marketAxisLabel(quoteTimeOf(sliced), period === '1d' ? 'time' : 'day'),
+      // ⚠️ axis 必须是**数组**（首/中/尾三档标签）：
+      //    以前这里塞的是「最后一个点的时刻」这个字符串，
+      //    小程序 wx:for 遍历字符串会把字符一个个渲染出来。
+      axis: shared.marketAxisLabels(points, period),
       delayed: !!doc.delayed,
       delayMinutes: delayMinutesOf(doc),
-      quoteTime: doc.quoteTime || '',
-      source: { mode: 'server', name: '服务端定时采集', note: '数据来自服务端采集的国际行情' }
+      quoteTime: shortQuoteTime(doc.quoteTime),
+      source: { mode: 'server', name: '服务端定时采集', note: marketSourceNote(doc) }
     };
   });
-}
-
-function quoteTimeOf(sliced) {
-  if (!sliced.length) return '';
-  var last = sliced[sliced.length - 1];
-  return last.date || '';
 }
 
 /* ---------------- 同步状态 ---------------- */
@@ -309,5 +387,6 @@ module.exports = {
   actionSyncStatus: actionSyncStatus,
   sourceHealth: sourceHealth,
   sliceSeries: sliceSeries,
-  seriesTime: seriesTime
+  seriesTime: seriesTime,
+  parseQuoteTime: parseQuoteTime
 };

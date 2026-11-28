@@ -44,6 +44,9 @@ function timelinessText(main, prefix) {
   if (!main.delayed) return prefix + '实时';
   var minutes = fmt.priceValue(main.delayMinutes);
   if (minutes === null || minutes <= 0) return '延时行情';
+  // 国际期货休市时能差出十几个小时，「延时 710 分钟」没人读得懂
+  if (minutes >= 60 * 24) return prefix + '延时 ' + Math.round(minutes / (60 * 24)) + ' 天';
+  if (minutes >= 60) return prefix + '延时 ' + Math.round(minutes / 60) + ' 小时';
   return prefix + '延时 ' + minutes + ' 分钟';
 }
 
@@ -174,6 +177,9 @@ Page({
         lowText: fmt.price(main.low),
         quoteTime: main.quoteTime,
         delayText: delayText,
+        // 品种口径：布伦特是 CFD 报价、纽约是 NYMEX 近月。
+        // 不显示出来，用户拿页面上的数去比新闻里的结算价，只会以为「又对不上」。
+        basis: main.basis || '',
         points: points,
         axis: dataEmpty ? [] : (main.axis || [])
       },

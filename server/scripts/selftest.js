@@ -173,6 +173,79 @@ async function main() {
   var market = await notices.actionMarket({ symbol: 'brent', period: '1d' });
   check('market 有 price', typeof market.price === 'number');
   check('market 有 points', Array.isArray(market.points) && market.points.length > 0);
+  // ⚠️ quoteTime 是 'MM-DD HH:mm:ss'（缺年份）：Date.parse 会把它补成 2001 年，
+  //    「现在 - 报价时刻」算出来是 1300 多万分钟（≈25 年），
+  //    线上接口实际吐过 delayMinutes=13148652。这条钉住解析口径。
+  check('market 延时分钟数在合理范围（不是几千万分钟）',
+    market.delayMinutes === null ||
+    (typeof market.delayMinutes === 'number' &&
+      market.delayMinutes >= 0 && market.delayMinutes <= 60 * 24 * 7),
+    String(market.delayMinutes));
+  check('parseQuoteTime 认 MM-DD 写法（补当前年，不落到 2001 年）',
+    (function () {
+      var t = notices.parseQuoteTime('01-02 03:04:05');
+      if (typeof t !== 'number') return false;
+      var d = new Date(t + 8 * 3600000);
+      return d.getUTCFullYear() === new Date().getUTCFullYear() &&
+        d.getUTCMonth() === 0 && d.getUTCDate() === 2 &&
+        d.getUTCHours() === 3 && d.getUTCMinutes() === 4;
+    })());
+  check('parseQuoteTime 认 YYYY-MM-DD 写法（按 UTC+8）',
+    (function () {
+      var t = notices.parseQuoteTime('2026-11-27 08:30:00');
+      if (typeof t !== 'number') return false;
+      return new Date(t + 8 * 3600000).toISOString().slice(0, 19) === '2026-11-27T08:30:00';
+    })());
+
+  // ---- 真实行情行：库里真有一条行情时的对外载荷 ----
+  // ⚠️ 上面的 market 用例走的是「库里没有这个品种」的演示回落分支，
+  //    真实分支（库里那条记录）以前没人测过：axis 给成字符串、
+  //    日线点被切片丢掉，都是在那条分支上出的问题。
+  await dao.markets.upsert({
+    symbol: 'wti',
+    name: 'NYMEX原油',
+    price: 83.33,
+    changeAmount: -0.35,
+    changePercent: -0.42,
+    open: 84.81,
+    prevClose: 83.68,
+    high: 86.6,
+    low: 82.57,
+    quoteTime: '2026-11-28 03:56:01',
+    delayed: true,
+    series: [
+      { date: '2026-11-25', value: 84.15 },
+      { date: '2026-11-26', value: 84.91 },
+      { date: '2026-11-27', value: 83.33 },
+      { date: '2026-11-27 23:50:00', value: 83.33 },
+      { date: '2026-11-28 03:50:00', value: 83.33 }
+    ],
+    source: 'market-wti'
+  });
+  var liveMarket = await notices.actionMarket({ symbol: 'wti', period: '1d' });
+  check('真实行情：来源是真实数据（不是演示回落）',
+    liveMarket.source && liveMarket.source.mode === 'server', JSON.stringify(liveMarket.source));
+  check('真实行情：axis 是三档数组（给字符串的话小程序 wx:for 会拆成字符）',
+    Array.isArray(liveMarket.axis) && liveMarket.axis.length === 3, JSON.stringify(liveMarket.axis));
+  check('真实行情：axis 三档都有内容',
+    liveMarket.axis.every(function (a) { return typeof a === 'string' && a.length > 0; }),
+    JSON.stringify(liveMarket.axis));
+  check('真实行情：points 非空',
+    Array.isArray(liveMarket.points) && liveMarket.points.length >= 2,
+    JSON.stringify(liveMarket.points));
+  check('真实行情：带品种口径说明（布伦特是 CFD、纽约是 NYMEX 近月）',
+    typeof liveMarket.basis === 'string' && liveMarket.basis.length > 0, liveMarket.basis);
+  check('真实行情：延时分钟数在合理范围（不是几千万分钟）',
+    typeof liveMarket.delayMinutes === 'number' && liveMarket.delayMinutes >= 0 &&
+    liveMarket.delayMinutes <= 60 * 24 * 30, String(liveMarket.delayMinutes));
+  check('真实行情：涨跌方向是三态',
+    ['up', 'down', 'flat'].indexOf(liveMarket.direction) >= 0, liveMarket.direction);
+  check('真实行情：报价时间是 MM-DD 展示格式',
+    /^\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(liveMarket.quoteTime), liveMarket.quoteTime);
+  var weekMarket = await notices.actionMarket({ symbol: 'wti', period: '1w' });
+  check('真实行情：1 周周期切得出多个点（日线点不能被丢掉）',
+    Array.isArray(weekMarket.points) && weekMarket.points.length >= 3,
+    JSON.stringify(weekMarket.points));
 
   var sync = await notices.actionSyncStatus();
   check('sync-status 有 status', typeof sync.status === 'string');

@@ -1,0 +1,6 @@
+{
+  "note": "新浪财经外盘行情快照原始字节（2026-11-28 抓取）。响应是 GB18030 编码，base64 存原始字节，解析前要按 charset 解码。",
+  "url": "https://hq.sinajs.cn/list=hf_OIL",
+  "contentType": "application/javascript; charset=GB18030",
+  "base64": "dmFyIGhxX3N0cl9oZl9PSUw9IjkwLjY5NywsOTAuNzQwLDkwLjc4MCw5My4xNzAsODkuODYwLDAzOjU5OjU4LDkxLjY3MCw5MS44NDAsMCwzLDEsMjAyNi0xMS0yOCyyvMLXzNjUrdPNLDI2Nzc5OSI7Cg=="
+}

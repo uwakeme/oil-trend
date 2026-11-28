@@ -425,6 +425,131 @@ function runSuite(label, sources) {
   });
 }
 
+/* ---------- 国际行情（kind = market） ---------- */
+
+/**
+ * 行情源与解析器的离线回归。
+ *
+ * 夹具是 2026-11-28 的真实响应：
+ *   scripts/fixtures/eastmoney-wti-quote.json    东财快照（JSON）
+ *   scripts/fixtures/eastmoney-wti-kline-5m.json  东财 5 分钟 K 线
+ *   scripts/fixtures/eastmoney-wti-kline-day.json 东财日 K 线
+ *   scripts/fixtures/sina-hf-oil.json             新浪快照（原始字节，GB18030）
+ */
+function runMarketSuite(label, sources) {
+  const httpClient = require(path.join(ROOT, 'server', 'src', 'services', 'http-client'));
+  const collector = require(path.join(ROOT, 'server', 'src', 'services', 'collector'));
+  const fx = (name) => JSON.parse(fs.readFileSync(path.join(ROOT, 'scripts', 'fixtures', name), 'utf8'));
+
+  check(label + ' 行情源配置：两个品种都有源、启用、走 HTTPS、解析器齐全', () => {
+    const wti = sources.SOURCES.find(x => x.id === 'market-wti');
+    const brent = sources.SOURCES.find(x => x.id === 'market-brent');
+    assert(wti, '缺少 market-wti 来源');
+    assert(brent, '缺少 market-brent 来源');
+    [wti, brent].forEach(s => {
+      assert.strictEqual(s.enabled, true, s.id + ' 没启用');
+      assert.strictEqual(s.kind, 'market');
+      assert(s.provides.includes('market'), s.id + ' 要提供行情');
+      assert(s.quoteUrl.startsWith('https://'), s.id + ' 快照要走 HTTPS');
+      assert(s.allowedHosts && s.allowedHosts.length, s.id + ' 要有跳转白名单');
+      assert.strictEqual(typeof sources.PARSERS[s.parser], 'function', s.id + ' 解析器缺失');
+      // 口径与授权说明必须写清楚：这是用户能看到的数字
+      assert(s.note && s.note.length > 10, s.id + ' 要写清口径与授权说明');
+    });
+    assert(wti.seriesUrls && wti.seriesUrls.length >= 1, 'WTI 要有历史曲线接口');
+    assert.strictEqual(typeof sources.PARSERS[wti.seriesParser], 'function', 'K 线解析器缺失');
+    // ⚠️ 新浪的接口要带来源页 Referer，否则回空
+    assert(/Referer/i.test(JSON.stringify(brent.headers)), '新浪行情接口要带 Referer');
+  });
+
+  check(label + ' 东财快照解析：价格/涨跌/开高低/昨收/报价时刻', () => {
+    const q = sources.PARSERS.eastmoneyQuote(JSON.stringify(fx('eastmoney-wti-quote.json').body));
+    assert(q, '解析为 null');
+    assert.strictEqual(q.price, 83.33);
+    assert.strictEqual(q.prevClose, 83.68);
+    assert.strictEqual(q.open, 84.81);
+    assert.strictEqual(q.high, 86.6);
+    assert.strictEqual(q.low, 82.57);
+    assert.strictEqual(q.changeAmount, -0.35);
+    assert.strictEqual(q.changePercent, -0.42);
+    assert.strictEqual(q.name, 'NYMEX原油');
+    assert(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(q.quoteTime), q.quoteTime);
+    // Unix 秒 1795809361 = UTC+8 的 2026-11-28 03:56:01
+    assert.strictEqual(q.quoteTime, '2026-11-28 03:56:01');
+  });
+
+  check(label + ' 东财快照漏了 fltt=2（字段放大 100 倍）→ 不采信', () => {
+    // f43 会是 8333 而不是 83.33：不挡住的话页面上就是 8333 美元/桶
+    const bad = JSON.stringify({ data: { f43: 8333, f58: 'NYMEX原油' } });
+    assert.strictEqual(sources.PARSERS.eastmoneyQuote(bad), null);
+  });
+
+  check(label + ' 东财 K 线解析：分钟线补秒、日线保持纯日期', () => {
+    const m = sources.PARSERS.eastmoneyKline(JSON.stringify(fx('eastmoney-wti-kline-5m.json').body));
+    assert(m && m.points.length, '分钟线解析为空');
+    assert(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(m.points[0].date), m.points[0].date);
+    const d = sources.PARSERS.eastmoneyKline(JSON.stringify(fx('eastmoney-wti-kline-day.json').body));
+    assert(d && d.points.length, '日线解析为空');
+    // 日线保持纯日期：补成 00:00 的话图上会显示「11-27 00:00」
+    assert(/^\d{4}-\d{2}-\d{2}$/.test(d.points[0].date), d.points[0].date);
+    // 取的是**收盘价**（第 3 段），不是开盘价
+    const row = fx('eastmoney-wti-kline-day.json').body.data.klines[0].split(',');
+    assert.strictEqual(d.points[0].value, Number(row[2]), '应取收盘价');
+  });
+
+  check(label + ' 新浪快照：GB18030 解码后字段齐全', () => {
+    const f = fx('sina-hf-oil.json');
+    const body = httpClient.decodeBody(Buffer.from(f.base64, 'base64'), f.contentType, '');
+    const q = sources.PARSERS.sinaQuote(body);
+    assert(q, '解析为 null');
+    assert.strictEqual(q.price, 90.697);
+    assert.strictEqual(q.prevClose, 91.67);
+    assert.strictEqual(q.open, 91.84);
+    assert.strictEqual(q.high, 93.17);
+    assert.strictEqual(q.low, 89.86);
+    assert.strictEqual(q.name, '布伦特原油');
+    assert.strictEqual(q.quoteTime, '2026-11-28 03:59:58');
+    // 接口自己不给涨跌：用「现价 - 昨收」算，并收口到两位小数
+    // （不收口会出现 -0.972999999999999 这种尾巴，传到界面上很难看）
+    assert.strictEqual(q.changeAmount, -0.97, String(q.changeAmount));
+    assert.strictEqual(q.changePercent, -1.06, String(q.changePercent));
+  });
+
+  check(label + ' 新浪快照：GB18030 字节流解码（按 UTF-8 解会变乱码）', () => {
+    const f = fx('sina-hf-oil.json');
+    const buf = Buffer.from(f.base64, 'base64');
+    assert(buf.toString('utf8').indexOf('布伦特原油') < 0, '按 UTF-8 解不该读得出中文（否则测不到编码差异）');
+    assert(httpClient.decodeBody(buf, f.contentType, '').indexOf('布伦特原油') >= 0, '按 GB18030 解要读得出中文');
+  });
+
+  check(label + ' 行情解析：坏结构 → null（转人工，不猜）', () => {
+    assert.strictEqual(sources.PARSERS.eastmoneyQuote('not json'), null);
+    assert.strictEqual(sources.PARSERS.eastmoneyQuote(JSON.stringify({ data: null })), null);
+    assert.strictEqual(sources.PARSERS.eastmoneyKline(JSON.stringify({ data: { klines: [] } })), null);
+    assert.strictEqual(sources.PARSERS.sinaQuote(''), null);
+    assert.strictEqual(sources.PARSERS.sinaQuote('var hq_str_hf_OIL="1,2,3";'), null);
+  });
+
+  check(label + ' 曲线合并：同一天有分钟线时不再留日线那根，且按时间升序', () => {
+    const merged = collector.mergeMarketPoints([
+      { date: '2026-11-27', value: 83.33 },
+      { date: '2026-11-27 23:50:00', value: 83.33 },
+      { date: '2026-11-26', value: 84.91 },
+      { date: '2026-11-26', value: 99.99 }
+    ]);
+    // 11-27 有分钟线 → 那根日线不要了（画出来是一根多余的台阶）
+    assert.strictEqual(merged.filter(p => p.date === '2026-11-27').length, 0, '日线那根应被去掉');
+    assert(merged.some(p => p.date === '2026-11-27 23:50:00'), '分钟线要留着');
+    // 11-26 没有分钟线 → 日线留着；同一时间戳只留最后一个
+    assert.strictEqual(merged.filter(p => p.date === '2026-11-26').length, 1);
+    assert.strictEqual(merged.find(p => p.date === '2026-11-26').value, 99.99);
+    // 升序
+    for (let i = 1; i < merged.length; i++) {
+      assert(merged[i].date > merged[i - 1].date, '曲线必须按时间升序');
+    }
+  });
+}
+
 /* ---------- 主流程 ---------- */
 
 console.log('--- 采集源配置 ---');
@@ -512,6 +637,8 @@ function runNetworkSuite(label, sources) {
 for (const [label, sources] of IMPLS) {
   console.log('--- ' + label + ' 解析器 ---');
   runSuite(label, sources);
+  console.log('--- ' + label + ' 国际行情 ---');
+  runMarketSuite(label, sources);
   console.log('--- ' + label + ' 抓取层 ---');
   runNetworkSuite(label, sources);
 }
