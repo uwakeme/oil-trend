@@ -431,10 +431,13 @@ function runSuite(label, sources) {
  * 行情源与解析器的离线回归。
  *
  * 夹具是 2026-11-28 的真实响应：
- *   scripts/fixtures/eastmoney-wti-quote.json    东财快照（JSON）
- *   scripts/fixtures/eastmoney-wti-kline-5m.json  东财 5 分钟 K 线
- *   scripts/fixtures/eastmoney-wti-kline-day.json 东财日 K 线
- *   scripts/fixtures/sina-hf-oil.json             新浪快照（原始字节，GB18030）
+ *   scripts/fixtures/eastmoney-wti-quote.json      东财纽约原油快照（JSON）
+ *   scripts/fixtures/eastmoney-wti-kline-5m.json    东财纽约原油 5 分钟 K 线
+ *   scripts/fixtures/eastmoney-wti-kline-day.json   东财纽约原油日 K 线
+ *   scripts/fixtures/eastmoney-brent-quote.json     东财布伦特快照（IPE 当月连续，JSON）
+ *   scripts/fixtures/eastmoney-brent-kline-5m.json 东财布伦特 5 分钟 K 线
+ *   scripts/fixtures/eastmoney-brent-kline-day.json 东财布伦特日 K 线
+ *   scripts/fixtures/sina-hf-oil.json               新浪快照（原始字节，GB18030，布伦特旧源，解析器留作备用）
  */
 function runMarketSuite(label, sources) {
   const httpClient = require(path.join(ROOT, 'server', 'src', 'services', 'http-client'));
@@ -458,8 +461,16 @@ function runMarketSuite(label, sources) {
     });
     assert(wti.seriesUrls && wti.seriesUrls.length >= 1, 'WTI 要有历史曲线接口');
     assert.strictEqual(typeof sources.PARSERS[wti.seriesParser], 'function', 'K 线解析器缺失');
-    // ⚠️ 新浪的接口要带来源页 Referer，否则回空
-    assert(/Referer/i.test(JSON.stringify(brent.headers)), '新浪行情接口要带 Referer');
+    // 布伦特（东财 IPE 当月连续）也要有历史曲线 —— 没有曲线就画不出图
+    assert(brent.seriesUrls && brent.seriesUrls.length >= 1, '布伦特要有历史曲线接口');
+    assert.strictEqual(typeof sources.PARSERS[brent.seriesParser], 'function', '布伦特 K 线解析器缺失');
+    // ⚠️ 换口径时旧曲线要整个丢掉：来源必须显式声明自己的曲线口径
+    assert(wti.seriesBasis, 'WTI 要声明曲线口径 seriesBasis');
+    assert(brent.seriesBasis, '布伦特要声明曲线口径 seriesBasis');
+    assert.notStrictEqual(wti.seriesBasis, brent.seriesBasis, '两个品种的曲线口径不能相同');
+    // ⚠️ 东财的 secid 市场号不能搞错：102 = NYMEX（纽约），112 = IPE（布伦特）
+    assert(/secid=102\./.test(wti.quoteUrl), 'WTI 的 secid 应是 NYMEX 102 市场');
+    assert(/secid=112\./.test(brent.quoteUrl), '布伦特的 secid 应是 IPE 112 市场');
   });
 
   check(label + ' 东财快照解析：价格/涨跌/开高低/昨收/报价时刻', () => {
@@ -495,6 +506,47 @@ function runMarketSuite(label, sources) {
     // 取的是**收盘价**（第 3 段），不是开盘价
     const row = fx('eastmoney-wti-kline-day.json').body.data.klines[0].split(',');
     assert.strictEqual(d.points[0].value, Number(row[2]), '应取收盘价');
+  });
+
+  check(label + ' 东财布伦特快照解析：IPE 当月连续（不是新浪的 CFD）', () => {
+    const q = sources.PARSERS.eastmoneyQuote(JSON.stringify(fx('eastmoney-brent-quote.json').body));
+    assert(q, '解析为 null');
+    assert.strictEqual(q.price, 90.79);
+    assert.strictEqual(q.prevClose, 91.67);
+    assert.strictEqual(q.open, 91.84);
+    assert.strictEqual(q.high, 93.17);
+    assert.strictEqual(q.low, 89.86);
+    assert.strictEqual(q.changeAmount, -0.88);
+    assert.strictEqual(q.changePercent, -0.96);
+    assert.strictEqual(q.name, '布伦特原油当月连续');
+    // Unix 秒 1795809600 = UTC+8 的 2026-11-28 04:00:00
+    assert.strictEqual(q.quoteTime, '2026-11-28 04:00:00', q.quoteTime);
+  });
+
+  check(label + ' 东财布伦特历史线：日线有真实波动（曲线要画得出）', () => {
+    const d = sources.PARSERS.eastmoneyKline(JSON.stringify(fx('eastmoney-brent-kline-day.json').body));
+    assert(d && d.points.length > 100, '日线点数不足：' + (d ? d.points.length : 0));
+    // 日线保持纯日期
+    assert(/^\d{4}-\d{2}-\d{2}$/.test(d.points[0].date), d.points[0].date);
+    // ⚠️ 收盘价不能是一条直线：全是同一个值的话画出来是横线，不是走势
+    const values = d.points.map(p => p.value);
+    assert(new Set(values).size > 100, '收盘价几乎全是同一个值：' + new Set(values).size);
+    const m = sources.PARSERS.eastmoneyKline(JSON.stringify(fx('eastmoney-brent-kline-5m.json').body));
+    assert(m && m.points.length > 100, '分钟线点数不足');
+    assert(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(m.points[0].date), m.points[0].date);
+  });
+
+  check(label + ' 换口径时旧曲线要整个丢掉（否则中间是假波动台阶）', () => {
+    // 布伦特从新浪 CFD 换到东财 IPE：旧点 90.697 与新点 90.79 不是一回事
+    // 混在一起画，中间那道台阶是**口径差**，不是油价波动。
+    assert.strictEqual(collector.curveBasisChanged('sina-cfd', 'ipe-brent-near-month'), true,
+      '口径变了必须认出来');
+    assert.strictEqual(collector.curveBasisChanged('ipe-brent-near-month', 'ipe-brent-near-month'), false,
+      '口径没变不该丢曲线');
+    // 库里还没记口径（老数据）→ 不动它
+    assert.strictEqual(collector.curveBasisChanged('', 'ipe-brent-near-month'), false,
+      '库里没记过口径时不该丢曲线');
+    assert.strictEqual(collector.curveBasisChanged(null, 'x'), false);
   });
 
   check(label + ' 新浪快照：GB18030 解码后字段齐全', () => {

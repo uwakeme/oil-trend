@@ -178,7 +178,7 @@ Page({
         lowText: fmt.price(main.low),
         quoteTime: main.quoteTime,
         delayText: delayText,
-        // 品种口径：布伦特是 CFD 报价、纽约是 NYMEX 近月。
+        // 品种口径：布伦特是 IPE 当月连续、纽约是 NYMEX 近月。
         // 不显示出来，用户拿页面上的数去比新闻里的结算价，只会以为「又对不上」。
         basis: main.basis || '',
         points: points,

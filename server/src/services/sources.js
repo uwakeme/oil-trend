@@ -14,8 +14,10 @@
  *   - xmgcn-timeline（官方调价时间表）：已启用，**只做口径互校**，不对外展示。
  *   - market-wti（东方财富 NYMEX 近月）：已启用，**国际原油 WTI 主源**。
  *     快照取实时价，5 分钟线与日线取历史曲线。
- *   - market-brent（新浪财经外盘 CFD 报价）：已启用，**Brent 报价源**。
- *     只有快照、没有历史序列，曲线因此只有一个点。
+ *   - market-brent（东方财富 IPE 布伦特当月连续）：已启用，**Brent 报价源**。
+ *     快照 + 5 分钟线 + 日线，曲线完整。
+ *     （2026-11-28 从新浪 hf_OIL 换过来：新浪那边是场外差价合约（CFD）
+ *     报价且只有快照，画不出曲线；IPE 合约的口径也更贴近 ICE 结算价。）
  *
  * 硬约束（所有来源一致）：解析不出结构化字段就进人工核对队列，
  * 绝不把猜测值发布成正式结果；预测类信息必须标注非官方。
@@ -133,6 +135,8 @@ const SOURCES = [
     },
     parser: 'eastmoneyQuote',
     seriesParser: 'eastmoneyKline',
+    // 曲线口径标识：换口径时用它判断旧曲线该不该整个丢掉
+    seriesBasis: 'nymex-near-month',
     // 采集节奏跟 cron 走（默认 30 分钟一轮），这里不做新鲜期判定
     // ⚠️ 授权条款：东方财富的公开行情接口**不是**官方授权数据接口，
     //    只作市场趋势参考，不作交易依据 —— 展示侧必须带上这句口径说明。
@@ -140,29 +144,33 @@ const SOURCES = [
   },
   {
     id: 'market-brent',
-    name: '新浪财经·布伦特原油',
+    name: '东方财富·ICE布伦特原油',
     kind: 'market',
     enabled: true,
-    priority: 2,
+    priority: 1,
     provides: ['market'],
     symbol: 'brent',
-    quoteUrl: 'https://hq.sinajs.cn/list=hf_OIL',
-    // 公开接口没有历史曲线：曲线靠采集时点累积（每轮一个真实报价点）
-    seriesUrls: [],
-    allowedHosts: ['hq.sinajs.cn'],
+    // IPE（ICE 布伦特）当月连续合约。secid 的 112 是 IPE 市场号，
+    // 与纽约原油的 102（NYMEX）不是同一个市场 —— 写错就取不到数据。
+    quoteUrl: 'https://push2.eastmoney.com/api/qt/stock/get?secid=112.B00Y&fltt=2&invt=2&fields=f43,f44,f45,f46,f57,f58,f60,f86,f169,f170',
+    // 历史曲线：5 分钟线（覆盖最近一个交易日）+ 日线（近 130 期，够 3 个月视图）
+    seriesUrls: [
+      'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=112.B00Y&klt=5&fqt=0&lmt=320&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58',
+      'https://push2his.eastmoney.com/api/qt/stock/kline/get?secid=112.B00Y&klt=101&fqt=0&lmt=130&end=20500101&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57,f58'
+    ],
+    allowedHosts: ['push2.eastmoney.com', 'push2his.eastmoney.com'],
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
-      // 新浪的行情接口不带来源页 Referer 会回空
-      'Referer': 'https://finance.sina.com.cn/'
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
     },
-    // 响应是 GB18030 编码（品种名是中文），抓取层要按这个编码解
-    charset: 'gbk',
-    parser: 'sinaQuote',
-    // 采集节奏跟 cron 走（默认 30 分钟一轮）
-    // ⚠️ 口径：这个品种在新浪那边是**场外差价合约（CFD）**报价，
-    //    与 ICE 布伦特期货结算价有基差（2026-11-27：ICE 1 月合约结算 95.44，
-    //    同期 CFD 报价约 90.7）。不写清楚，用户只会以为「数对不上」。
-    note: '布伦特为场外差价合约（CFD）报价，与 ICE 布伦特期货结算价存在基差；公开接口无历史曲线，曲线由采集时点累积。'
+    parser: 'eastmoneyQuote',
+    seriesParser: 'eastmoneyKline',
+    // 曲线口径标识：与新浪 CFD 那套不同，换源时旧曲线会被整个丢掉
+    seriesBasis: 'ipe-brent-near-month',
+    // 采集节奏跟 cron 走（默认 30 分钟一轮），这里不做新鲜期判定
+    // ⚠️ 口径：这是 IPE（ICE 布伦特）**当月连续合约**，不是场外差价合约。
+    //    与新闻里的 ICE 布伦特结算价口径接近，但仍是不同合约（基差 1~2 美元）。
+    //    不写清楚，用户只会以为「数对不上」。
+    note: 'ICE 布伦特当月连续（IPE）合约报价。与 ICE 布伦特期货结算价仍有合约基差；来自东方财富公开行情接口，非官方授权数据，仅作市场趋势参考。'
   }
 ];
 

@@ -286,7 +286,7 @@ function actionMarket(payload) {
 
     var changeAmount = doc.changeAmount || 0;
     // 品种口径（名称 + 口径说明）：真源在 data/markets.js，服务端是它的同步副本。
-    // 布伦特是 CFD 报价、纽约是 NYMEX 近月 —— 不标出来用户没法跟新闻对账。
+    // 布伦特是 IPE 当月连续、纽约是 NYMEX 近月 —— 不标出来用户没法跟新闻对账。
     var instrument = shared.MARKET_INSTRUMENTS[doc.symbol] || {};
     return {
       symbol: doc.symbol,

@@ -234,7 +234,7 @@ async function main() {
   check('真实行情：points 非空',
     Array.isArray(liveMarket.points) && liveMarket.points.length >= 2,
     JSON.stringify(liveMarket.points));
-  check('真实行情：带品种口径说明（布伦特是 CFD、纽约是 NYMEX 近月）',
+  check('真实行情：带品种口径说明（布伦特是 IPE 当月连续、纽约是 NYMEX 近月）',
     typeof liveMarket.basis === 'string' && liveMarket.basis.length > 0, liveMarket.basis);
   check('真实行情：延时分钟数在合理范围（不是几千万分钟）',
     typeof liveMarket.delayMinutes === 'number' && liveMarket.delayMinutes >= 0 &&

@@ -350,6 +350,23 @@ function saveNotice(source, parsed) {
   });
 }
 
+/**
+ * 曲线口径是否变了。
+ *
+ * ⚠️ 换行情源（或换合约口径）时**必须**把旧曲线整个丢掉：
+ *    旧口径的点与新口径的点混在一起画，中间那道台阶是口径差造成的
+ *    **假波动** —— 用户会以为油价真那么跳。
+ *
+ * @param {string} storedBasis 库里记的曲线口径（oil_markets.source）
+ * @param {string} curveBasis  当前来源声明的曲线口径
+ * @returns {boolean} true = 口径变了，旧曲线要丢
+ */
+function curveBasisChanged(storedBasis, curveBasis) {
+  // 库里还没记过口径（老数据）→ 当作没变，不动它
+  if (!storedBasis) return false;
+  return storedBasis !== curveBasis;
+}
+
 function saveMarket(source, parsed) {
   return dao.markets.upsert({
     symbol: parsed.symbol,
@@ -364,7 +381,9 @@ function saveMarket(source, parsed) {
     quoteTime: parsed.quoteTime,
     delayed: !!parsed.delayed,
     series: parsed.series || [],
-    source: source.id
+    // parsed.source 是**曲线口径**标识（可能与 source.id 不同）：
+    // 换口径时要能认出「旧曲线是哪套口径攒的」。
+    source: parsed.source || source.id
   });
 }
 
@@ -477,6 +496,15 @@ async function collectMarketSource(source) {
   // ---- 合并入库 ----
   var doc = await dao.markets.findBySymbol(source.symbol);
   var existing = (doc && Array.isArray(doc.series)) ? doc.series : [];
+  // ⚠️ **换口径时旧曲线必须整个丢掉**：
+  //    布伦特 2026-11-28 从新浪 CFD 换到东财 IPE 合约，两者不是同一个东西。
+  //    混在一起画出来的曲线，中间的台阶是口径差造成的假波动 ——
+  //    用户会以为油价真那么跳。
+  //    判据：库里记的曲线口径与当前源的 seriesBasis 不一致 → 只用本轮抓到的点。
+  var curveBasis = source.seriesBasis || source.id;
+  var storedBasis = doc ? (doc.source || '') : '';
+  var basisChanged = curveBasisChanged(storedBasis, curveBasis);
+  if (basisChanged) existing = [];
   var all = existing.concat(fetchedPoints);
   // 本次快照本身也是一个真实报价点：没有历史接口的来源靠它把曲线攒起来
   if (parsed.quoteTime) all.push({ date: parsed.quoteTime, value: parsed.price });
@@ -495,7 +523,9 @@ async function collectMarketSource(source) {
     quoteTime: parsed.quoteTime,
     // 国际期货行情本来就是延时报价：如实标延时，时长由报价时刻算出来
     delayed: true,
-    series: series
+    series: series,
+    // 曲线口径：换源时用它判断旧曲线该不该丢（见上面的 basisChanged）
+    source: curveBasis
   });
 
   return {
@@ -2027,6 +2057,7 @@ module.exports = {
   collectForecastSource: collectForecastSource,
   collectMarketSource: collectMarketSource,
   mergeMarketPoints: mergeMarketPoints,
+  curveBasisChanged: curveBasisChanged,
   deriveAdjustEvents: deriveAdjustEvents,
   crossProvinceStats: crossProvinceStats,
   timelineCrossCheck: timelineCrossCheck,
