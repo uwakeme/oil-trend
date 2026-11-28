@@ -28,11 +28,25 @@ const COLORS = {
   tipSub: '#b9bdb4'
 };
 
+/**
+ * 日期字符串 → 时间戳。
+ *
+ * ⚠️ **必须带上时刻**：国际行情的曲线是 5 分钟级的，
+ *    「1 日」视图里两百多个点只跨两个日期。只取日期的话，
+ *    同一个日期内的所有点时间戳完全相同 → 全叠在同一横坐标上，
+ *    曲线画成「一根竖线 + 一条水平线」。
+ *    带时刻的格式：'2026-11-27 09:05:00'（或 'T' 分隔）。
+ *    只有日期的格式：'2026-11-27'（国内油价的日线点）。
+ */
 function toTimestamp(dateStr) {
   if (!dateStr) return 0;
-  var m = String(dateStr).match(/(\d{4})-(\d{2})-(\d{2})/);
+  var s = String(dateStr);
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2})(?::(\d{2}))?)?/);
   if (!m) return 0;
-  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  var hour = m[4] ? Number(m[4]) : 0;
+  var minute = m[5] ? Number(m[5]) : 0;
+  var second = m[6] ? Number(m[6]) : 0;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), hour, minute, second);
 }
 
 /**

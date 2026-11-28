@@ -56,6 +56,62 @@ const vmax = Math.max.apply(null, vals);
 check('取值范围把上下留了余量', layout.min < vmin && layout.max > vmax,
   '范围 ' + layout.min.toFixed(2) + '~' + layout.max.toFixed(2) + ' 数据 ' + vmin + '~' + vmax);
 
+console.log('\n--- 分钟级曲线：同一日期内不同时刻要分开 ---');
+// ⚠️ 回归：国际行情的「1 日」视图是 5 分钟级的，两百多个点只跨两个日期。
+//    横坐标的时间戳以前只取到日期 → 同一天的点全部叠在同一个 x 上，
+//    曲线画成「一根竖线 + 一条水平线」。
+// 数据要**跨天且间隔不均**：
+//   真实场景是「1 日」视图 —— 昨天 200 根分钟线 + 今天几根休市平值，
+//   跨越两个日期、且时间间隔不均等。
+//   全放同一天的话，日期截断后 span=0 会退化成序号均分，
+//   而等间隔数据上「均分」与「按时刻」恰好一样，测不出差别。
+const MINUTE_POINTS = [];
+for (let i = 0; i < 100; i++) {
+  const t = new Date(Date.UTC(2026, 10, 27, 9, i * 5));
+  MINUTE_POINTS.push({
+    date: t.toISOString().slice(0, 19).replace('T', ' '),
+    value: 90 + Math.sin(i / 8) * 0.5
+  });
+}
+// 隔 6 小时后又是 20 根（休市平值），再跨到第二天
+for (let i = 0; i < 20; i++) {
+  const t = new Date(Date.UTC(2026, 10, 28, 6, i * 5));
+  MINUTE_POINTS.push({
+    date: t.toISOString().slice(0, 19).replace('T', ' '),
+    value: 90.79
+  });
+}
+const minuteLayout = chart.computeLayout(
+  MINUTE_POINTS, { points: MINUTE_POINTS, mode: 'line', gridLines: 4, showYAxis: false }, WIDTH, HEIGHT);
+let minuteDistinct = new Set(minuteLayout.xs.map(function (x) { return Math.round(x); })).size;
+check('分钟级曲线的横坐标不重叠（同一日期内也分开）',
+  minuteDistinct === MINUTE_POINTS.length,
+  MINUTE_POINTS.length + ' 个点只落到 ' + minuteDistinct + ' 个不同横坐标上');
+// ⚠️ 这条才是关键：横坐标必须**按时刻比例**排，不能退化成序号均分。
+//    序号均分看着「不重叠」，但同一小时内的点会被拉得很开 ——
+//    真实时间间隔在图上失真，休市那段也会被画成一段假走势。
+//    取两个相隔 20 分钟的点，看横坐标差是否接近 20/总跨度的比例。
+const t0 = new Date(Date.UTC(2026, 10, 27, 9, 0)).getTime();
+const tEnd = new Date(Date.UTC(2026, 10, 28, 6, 95)).getTime();
+const msTotal = tEnd - t0;
+const first = new Date(Date.UTC(2026, 10, 27, 9, 0)).getTime();
+const twentieth = new Date(Date.UTC(2026, 10, 27, 9, 100)).getTime();
+const expectedGap = minuteLayout.plotW * (twentieth - first) / msTotal;
+const actualGap = minuteLayout.xs[20] - minuteLayout.xs[0];
+check('分钟级曲线的横坐标按时刻比例分配（不是序号均分）',
+  Math.abs(actualGap - expectedGap) < 0.5,
+  '期望间距 ' + expectedGap.toFixed(2) + ' 实际 ' + actualGap.toFixed(2));
+// 序号均分会把这个间距画成 20/(n-1) 的比例，明显偏小
+const evenGap = minuteLayout.plotW * 20 / (MINUTE_POINTS.length - 1);
+check('序号均分会被这条断言抓住',
+  Math.abs(actualGap - evenGap) > 0.5,
+  '实际间距 ' + actualGap.toFixed(2) + ' 与序号均分的 ' + evenGap.toFixed(2) + ' 几乎一样，说明退化成了均分');
+let minuteMono = true;
+for (let i = 1; i < minuteLayout.xs.length; i++) {
+  if (minuteLayout.xs[i] <= minuteLayout.xs[i - 1]) minuteMono = false;
+}
+check('分钟级曲线的横坐标单调递增', minuteMono);
+
 console.log('\n--- 选点：手指横坐标 → 最近的点 ---');
 let miss = 0;
 for (let i = 0; i < layout.xs.length; i++) {
