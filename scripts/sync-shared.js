@@ -5,7 +5,7 @@
  * 和小程序端 data/adjustments.js（24 条、正序）对不上 ——
  * 切到云端后价格从 7.36 变成 7.47、涨跌方向也反了。
  *
- * 现在单一真源：服务端的调价时间线、地区价差、油品定义、行情生成
+ * 现在单一真源：服务端的调价时间线、地区价差、油品定义、行情品种口径
  * 全部由 data/ 下的文件生成，禁止再手工维护第二份。
  *
  * 生成一份副本：server/src/shared/shared.js（自建后端用）
@@ -24,18 +24,28 @@ const config = require(path.join(ROOT, 'config', 'index.js'));
 
 const ANCHOR = config.demoAnchorDate || '2026-11-10';
 
-// 把 data/markets.js 的源码整份内联进副本：
-// 行情载荷的组装逻辑只有一份实现，避免再次分叉。
-const marketsSource = fs.readFileSync(path.join(ROOT, 'data', 'markets.js'), 'utf8')
-  .replace(/\nmodule\.exports[\s\S]*$/, '\n');
-// 把 data/adjust-cycle.js 整份内联：调价周期推算（法定节假日表 + 下一轮推算）。
+/**
+ * 读一个真源文件并内联进共享模块。
+ *
+ * ⚠️ 统一把行尾规范成 LF：源文件在 Windows 上可能是 CRLF，
+ *    直接内联会让生成物出现混合行尾 —— 每次重跑生成的 diff 都不一样，
+ *    分不清「改了代码」还是「只改了行尾」。
+ */
+function inlineSource(file) {
+  return fs.readFileSync(path.join(ROOT, file), 'utf8')
+    .replace(/\r\n/g, '\n')
+    .replace(/\nmodule\.exports[\s\S]*$/, '\n');
+}
+
+// data/markets.js 整份内联：行情**品种口径**与轴标签算法。
+// 行情数值不在这里 —— 演示行情已删，行情由服务端采集入库。
+const marketsSource = inlineSource(path.join('data', 'markets.js'));
+// data/adjust-cycle.js 整份内联：调价周期推算（法定节假日表 + 下一轮推算）。
 // 两端共用同一份实现 —— 节假日表与推算规则一旦分叉，推出来的日期就对不上。
-const cycleSource = fs.readFileSync(path.join(ROOT, 'data', 'adjust-cycle.js'), 'utf8')
-  .replace(/\nmodule\.exports[\s\S]*$/, '\n');
-// 把 data/ton-conversion.js 整份内联：官方吨价 → 每升折算系数。
+const cycleSource = inlineSource(path.join('data', 'adjust-cycle.js'));
+// data/ton-conversion.js 整份内联：官方吨价 → 每升折算系数。
 // 两端共用同一份实现 —— 系数一旦分叉，折算出来的每升幅度与调后价就跟着对不上。
-const conversionSource = fs.readFileSync(path.join(ROOT, 'data', 'ton-conversion.js'), 'utf8')
-  .replace(/\nmodule\.exports[\s\S]*$/, '\n');
+const conversionSource = inlineSource(path.join('data', 'ton-conversion.js'));
 const SHARED_DIR = path.join(ROOT, 'server', 'src', 'shared');
 const TARGET = path.join(SHARED_DIR, 'shared.js');
 
@@ -52,6 +62,7 @@ const template = [
   ' *   data/regions.js      地区价差',
   ' *   data/fuels.js        油品定义',
   ' *   data/adjust-cycle.js 调价周期推算（节假日表 + 下一轮调价日）',
+  ' *   data/markets.js      行情品种口径（名称 + 报价口径说明）',
   ' *',
   ' * 改了上面任意一个文件，都要重新跑 scripts/sync-shared.js。',
   ' * 只有这一份副本，供自建后端（server/）使用。',
@@ -253,15 +264,10 @@ const template = [
   '  currentPrice: currentPrice,',
   '  allPrices: allPrices,',
   '  dedupKey: dedupKey,',
-  '  MARKETS: MARKETS,',
-  '  buildSeries: buildSeries,',
-  '  MARKET_PERIODS: MARKET_PERIODS,',
   '  MARKET_INSTRUMENTS: MARKET_INSTRUMENTS,',
-  '  marketAxisLabel: marketAxisLabel,',
   '  marketAxisLabels: marketAxisLabels,',
   '  ADJUST_CYCLE: ADJUST_CYCLE,',
   '  TON_CONVERSION: TON_CONVERSION,',
-  '  buildMarketPayload: buildMarketPayload,',
   '  clock: { today: today, shiftDate: shiftDate, daysUntil: daysUntil, offsetDays: offsetDays }',
   '};'
 ].join('\n');
@@ -312,32 +318,30 @@ regions.REGIONS.forEach(function (region) {
 });
 if (mismatches) fail(mismatches + ' 组价格不一致');
 
-// 行情载荷：两端必须同构同值（时间戳按秒走，比对时只比格式不比具体时刻）
-var marketMismatch = 0;
-['brent', 'wti'].forEach(function (symbol) {
-  ['1d', '1w', '1m', '3m'].forEach(function (period) {
-    var mini = demo.getMarket(symbol, period);
-    var cloud = shared.buildMarketPayload(symbol, period);
-    var miniKeys = Object.keys(mini).filter(function (k) { return k !== 'source'; }).sort().join(',');
-    var cloudKeys = Object.keys(cloud).sort().join(',');
-    if (miniKeys !== cloudKeys) {
-      marketMismatch++;
-      console.error('✗ 行情载荷字段不一致 ' + symbol + ' ' + period + '：' + miniKeys + ' vs ' + cloudKeys);
-    }
-    if (JSON.stringify(mini.points.map(function (p) { return p.value; })) !==
-        JSON.stringify(cloud.points.map(function (p) { return p.value; }))) {
-      marketMismatch++;
-      console.error('✗ 行情曲线不一致 ' + symbol + ' ' + period);
-    }
-    // 轴标签只比格式（把数字换成 #），避免因为秒级时间差误报
-    var shape = function (list) { return list.map(function (a) { return String(a).replace(/\d/g, '#'); }).join('|'); };
-    if (shape(mini.axis) !== shape(cloud.axis)) {
-      marketMismatch++;
-      console.error('✗ 行情轴标签格式不一致 ' + symbol + ' ' + period + '：' + mini.axis + ' vs ' + cloud.axis);
-    }
-  });
+// 行情：两端共用同一份**品种口径**与轴标签算法。
+// ⚠️ 以前这里比对的是「小程序端演示行情」与「服务端演示行情」两份载荷：
+//    两边都出自同一个生成器，看着一致，其实验证的是「假数据两端一样假」。
+//    演示行情已删，现在要比的是真正会被两端用到的东西。
+var markets = require(path.join(ROOT, 'data', 'markets.js'));
+if (JSON.stringify(markets.MARKET_INSTRUMENTS) !== JSON.stringify(shared.MARKET_INSTRUMENTS)) {
+  fail('行情品种口径两端不一致（data/markets.js 与服务端副本）');
+}
+var axisSample = [
+  { date: '2026-11-28 09:30:00', value: 83.1 },
+  { date: '2026-11-28 12:00:00', value: 83.5 },
+  { date: '2026-11-28 15:00:00', value: 83.3 }
+];
+['1d', '1w', '1m', '3m'].forEach(function (period) {
+  if (JSON.stringify(markets.marketAxisLabels(axisSample, period)) !==
+      JSON.stringify(shared.marketAxisLabels(axisSample, period))) {
+    fail('行情轴标签两端算得不一样：' + period);
+  }
 });
-if (marketMismatch) fail(marketMismatch + ' 处行情载荷与演示源不一致');
+// 日线点没有时刻：'1d' 视图里要退回日期，不能是空字符串
+var dayAxis = markets.marketAxisLabels([{ date: '2026-11-27', value: 83.3 }], '1d');
+if (!dayAxis.length || !dayAxis.every(function (a) { return typeof a === 'string' && a.length > 0; })) {
+  fail('日线点的轴标签应有内容：' + JSON.stringify(dayAxis));
+}
 
 // 调价周期推算：两端必须算出同一个日期
 var cycle = require(path.join(ROOT, 'data', 'adjust-cycle.js'));

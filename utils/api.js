@@ -6,6 +6,10 @@
  *   2. 后端不可用 / 调用失败 / 返回为空 → 自动回落本地演示数据源；
  *   3. 每次取数都会回报来源，页面据此如实展示。
  *
+ * ⚠️ 唯一的例外是**国际行情**：它的演示数据已删（写死的 78.42 / 74.16
+ *    加伪随机曲线，时间戳却按「现在」打），没有可回落的东西。
+ *    现在后端连不上就是失败态、后端说没采到就是空态 —— 绝不造假曲线。
+ *
  * ⚠️ 这里没有「全局来源状态」：并发请求谁先返回谁覆盖，判定必然漂。
  * 来源一律随 payload.source 走，页面只认自己那份 payload。
  *
@@ -230,11 +234,30 @@ function getNotices(regionCode, filter, fuelId) {
   }, ['notices']);
 }
 
-/** 国际行情 */
+/**
+ * 国际行情
+ *
+ * ⚠️ 这里**不走 fetchWithFallback**：国际行情没有本地兜底。
+ *   以前后端没采到行情就回落演示载荷（写死的 78.42 / 74.16，
+ *   曲线是 mulberry32 伪随机生成的，时间戳却按「现在」打）——
+ *   用户看到的是「刚更新的实时行情」，却是假的。
+ *   现在只有两条路：
+ *     后端明确标 empty:true → 页面显示空态（还没采到行情）
+ *     连不上后端            → 页面显示失败态 + 重试按钮
+ */
 function getMarket(symbol, period) {
-  return fetchWithFallback('oilApi', { action: 'market', symbol: symbol, period: period }, function () {
-    return demo.getMarket(symbol, period);
-  }, ['price', 'points'], ['points']);
+  if (!preferBackend()) {
+    return Promise.reject(new Error('未配置后端，国际行情需要服务端采集真实数据'));
+  }
+  return cloud.callFunction('oilApi', { action: 'market', symbol: symbol, period: period })
+    .then(function (data) {
+      if (!data || typeof data !== 'object') {
+        throw new Error('国际行情返回为空');
+      }
+      // 后端标了 empty:true —— 那是「合法为空」，不是「后端没给成」，
+      // 页面据此显示空态；这里原样透传，不回落任何假数据。
+      return stampSource(data, 'live', cloud.backendName());
+    });
 }
 
 /* ---------- 提醒规则与记录 ---------- */

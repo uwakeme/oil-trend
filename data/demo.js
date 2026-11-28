@@ -16,7 +16,6 @@ const { ADJUST_WINDOW, NOTICES, SYNC_STATUS } = require('./notices');
 const { LITER_PER_100TON, convertTonToLiterAll } = require('./ton-conversion');
 // 调价周期推算：与服务端共用同一份实现（服务端副本由 scripts/sync-shared.js 生成）
 const ADJUST_CYCLE = require('./adjust-cycle');
-const { buildMarketPayload } = require('./markets');
 const clock = require('../utils/demo-clock');
 
 function round2(v) {
@@ -435,18 +434,6 @@ function buildPricesFor(region, notice) {
   return out;
 }
 
-/**
- * 国际行情。
- *
- * 载荷由 data/markets.js 的 buildMarketPayload 生成 —— 服务端用的是同一份
- * 实现（由 scripts/sync-shared.js 从 data/ 内联过去），两端不会再分叉。
- */
-function getMarket(symbol, period) {
-  var payload = buildMarketPayload(symbol, period);
-  payload.source = { mode: 'demo', name: '内置演示数据集', note: '演示数据，非真实行情' };
-  return payload;
-}
-
 function getAlertHistory() {
   return [
     {
@@ -472,7 +459,6 @@ module.exports = {
   getHome: getHome,
   getTrend: getTrend,
   getNotices: getNotices,
-  getMarket: getMarket,
   findRegion: findRegion,
   currentPrice: currentPrice,
   priceOn: priceOn

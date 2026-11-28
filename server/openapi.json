@@ -1510,21 +1510,32 @@
                 ],
                 "example": "brent"
               },
+              "empty": {
+                "type": "boolean",
+                "description": "服务端还没采到这个品种的行情时为 true。合法空结果，不是故障 —— 前端据此显示空态，而不是回落演示数据（国际行情已无演示数据可回落）",
+                "example": false
+              },
               "name": {
                 "type": "string",
                 "example": "布伦特原油"
               },
               "price": {
                 "type": "number",
-                "example": 78.42
+                "nullable": true,
+                "description": "最新价；empty=true（还没采到行情）时为 null",
+                "example": 90.7
               },
               "changeAmount": {
                 "type": "number",
-                "example": 0.64
+                "nullable": true,
+                "description": "涨跌额；empty=true 时为 null",
+                "example": -0.97
               },
               "changePercent": {
                 "type": "number",
-                "example": 0.82
+                "nullable": true,
+                "description": "涨跌幅（%）；empty=true 时为 null",
+                "example": -1.06
               },
               "direction": {
                 "type": "string",
@@ -1549,19 +1560,27 @@
               },
               "open": {
                 "type": "number",
-                "example": 77.81
+                "nullable": true,
+                "description": "今开；empty=true 时为 null",
+                "example": 91.05
               },
               "prevClose": {
                 "type": "number",
-                "example": 77.78
+                "nullable": true,
+                "description": "昨收；empty=true 时为 null",
+                "example": 91.67
               },
               "high": {
                 "type": "number",
-                "example": 78.67
+                "nullable": true,
+                "description": "最高；empty=true 时为 null",
+                "example": 91.9
               },
               "low": {
                 "type": "number",
-                "example": 77.56
+                "nullable": true,
+                "description": "最低；empty=true 时为 null",
+                "example": 89.6
               },
               "points": {
                 "type": "array",

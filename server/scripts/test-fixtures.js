@@ -10,6 +10,76 @@
 const dao = require('../src/dao');
 const shared = require('../src/shared/shared');
 
+/* ---------------- 行情夹具 ---------------- */
+
+function round2(v) {
+  return Math.round(v * 100) / 100;
+}
+
+/**
+ * 造一条行情记录，形状与采集器写库的一致。
+ *
+ * ⚠️ 点的时间必须按「现在」生成：服务端切周期是按**最后一个点**往前切的
+ *    （notices.js 的 sliceSeries），日期写死的话 1 日视图里只剩最后一个点，
+ *    页面那半边曲线就测不到了。
+ *
+ * @param {string} symbol 'brent' | 'wti'
+ */
+function marketFixture(symbol) {
+  var isWti = symbol === 'wti';
+  var base = isWti ? 83.33 : 90.7;
+  var source = isWti ? 'market-wti' : 'market-brent';
+  var name = isWti ? 'NYMEX原油' : '布伦特原油';
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function dateStr(d) {
+    return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate());
+  }
+  function stampStr(d) {
+    return dateStr(d) + ' ' + pad2(d.getUTCHours()) + ':' + pad2(d.getUTCMinutes()) + ':' +
+      pad2(d.getUTCSeconds());
+  }
+
+  // 报价时刻：20 分钟前（国际期货通常是延时行情）
+  var quoteAt = new Date(Date.now() - 20 * 60000 + 8 * 3600000);
+  var dayStart = Date.UTC(quoteAt.getUTCFullYear(), quoteAt.getUTCMonth(), quoteAt.getUTCDate());
+  var series = [];
+  var i;
+
+  // 过去 90 天的日线（不含今天：今天有分钟线，同一天的日线那根会被丢掉）
+  for (i = 90; i >= 1; i--) {
+    var day = new Date(dayStart - i * 86400000);
+    series.push({ date: dateStr(day), value: round2(base + 0.6 * Math.sin(i / 5)) });
+  }
+  // 今天的分钟线：每 30 分钟一点，到报价时刻
+  var step = 30 * 60000;
+  for (var t = 0; t <= quoteAt.getTime() - dayStart; t += step) {
+    var at = new Date(dayStart + t);
+    series.push({ date: stampStr(at), value: round2(base + 0.35 * Math.sin(t / 3600000)) });
+  }
+
+  var intraday = series.slice(90);
+  var price = series[series.length - 1].value;
+  var prevClose = series[89].value;
+  var changeAmount = round2(price - prevClose);
+  var values = series.map(function (p) { return p.value; });
+
+  return {
+    name: name,
+    price: price,
+    changeAmount: changeAmount,
+    changePercent: round2(changeAmount / prevClose * 100),
+    open: intraday.length ? intraday[0].value : price,
+    prevClose: prevClose,
+    high: Math.max.apply(null, values),
+    low: Math.min.apply(null, values),
+    quoteTime: stampStr(quoteAt),
+    delayed: true,
+    series: series,
+    source: source
+  };
+}
+
 /**
  * 灌一套演示数据到当前数据库连接
  * @returns {Promise<{ok: boolean, prices: number}>}
@@ -19,7 +89,11 @@ function seed() {
     dao.prices.removeBySource('seed'),
     dao.history.removeBySource('seed'),
     dao.events.removeBySource('seed'),
-    dao.markets.removeBySource('seed')
+    dao.markets.removeBySource('seed'),
+    // 行情夹具用真实来源 id（决定对外的口径说明），也要清：
+    // 不清的话换夹具后旧行还留在库里，测的就不是这一份数据了。
+    dao.markets.removeBySource('market-wti'),
+    dao.markets.removeBySource('market-brent')
   ]).then(function () {
     // 当前价
     var priceDocs = shared.allPrices().map(function (p) {
@@ -87,24 +161,27 @@ function seed() {
       source: 'seed'
     });
   }).then(function () {
-    // 行情：直接用共享模块生成的曲线
+    // 行情：造两条「长得像真实采集结果」的记录
+    // ⚠️ 国际行情的演示数据已删，不能再调共享模块的生成器造曲线。
+    //    但夹具仍需要行情记录 —— 否则接口返回空态，
+    //    页面渲染（价格、轴标签、延时文案、口径）那一段就测不到了。
     var marketTasks = ['brent', 'wti'].map(function (symbol) {
-      var payload = shared.buildMarketPayload(symbol, '3m');
+      var fixture = marketFixture(symbol);
       return dao.markets.upsert({
         symbol: symbol,
-        name: payload.name,
-        price: payload.price,
-        changeAmount: payload.changeAmount,
-        changePercent: payload.changePercent,
-        open: payload.open,
-        prevClose: payload.prevClose,
-        high: payload.high,
-        low: payload.low,
-        quoteTime: payload.quoteTime,
-        delayed: payload.delayed,
-        // 库里存 points 字段（{date, value}），不是 series
-        series: payload.points || [],
-        source: 'seed'
+        name: fixture.name,
+        price: fixture.price,
+        changeAmount: fixture.changeAmount,
+        changePercent: fixture.changePercent,
+        open: fixture.open,
+        prevClose: fixture.prevClose,
+        high: fixture.high,
+        low: fixture.low,
+        quoteTime: fixture.quoteTime,
+        delayed: fixture.delayed,
+        // 库里存 series 字段（{date, value} 点数组）
+        series: fixture.series,
+        source: fixture.source
       });
     });
     return Promise.all(marketTasks);

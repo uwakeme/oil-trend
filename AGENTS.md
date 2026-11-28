@@ -40,7 +40,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - `components/` — `trend-chart`（Canvas 2D 阶梯线）、`bottom-sheet`（底部弹层）
 - 底部 tabBar 用**原生 tabBar**（`app.json` 里配 `iconPath`），别用自定义组件 —— 见下方「微信小程序特有坑」
 - `utils/` — `api`（**唯一取数入口**）/ `chart` / `store` / `format` / `cloud` / `subscribe` / `demo-clock`
-- `data/` — 演示数据集、调价时间线、地区价差
+- `data/` — 演示数据集（**只覆盖国内油价**）、调价时间线、地区价差；国际行情这里只有品种口径，没有行情数据
 - `styles/` — `tokens.wxss`（设计令牌）+ `components.wxss`（通用类）
 - `server/` — **后端**（Node + Express + PostgreSQL），填 `config.apiBaseUrl` 才启用；留空则只用演示数据
   - `server/src/data/provinces.json` 是**生成产物**（省界数据，脚本产出），手改会被覆盖
@@ -65,6 +65,8 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 
 - **数据层与数据来源分离**：`utils/api.js` 是唯一对外取数入口，后端失败自动回落本地演示源。
   页面只认数据结构，不认来源；但**必须如实展示当前来源**，不允许把演示数据包装成实时行情
+  —— ⚠️ **国际行情是唯一的例外**：它的演示数据已删，没有可回落的东西。
+  后端连不上 = 失败态（页面给重试），后端说没采到 = 空态（顶层 `empty:true`），两条路都不给假曲线
 - **价格模型分两层**：`某地某油品价格 = 全国价（累加所有调价幅度）+ 地区价差（该地区、该油品）`。调价幅度全国统一，零售价按地区定价
   —— 地区价差**必须按油品分别存**：各省标号结构不同（98# 相对 92# 的地区差跨度 1.57 元/升），共用一套价差误差最大到 0.89 元/升
   —— `data/reference-prices.js` 存各省真实挂牌价作校验基准，自检逐省比对（124 个值）
@@ -191,7 +193,8 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 推导节点的日期是**生效日**，不是执行日 | 官方公告的 `executeAt` 是执行日，`oil_adjust_events` 的 date 是挂牌价生效日（新价从执行日次日 00:00 才开始挂） | 推算基准要把推导节点**减一天**（`server/src/services/query.js` 的 `latestAdjustDate`）；不减的话下一轮整体多推一天（11-26 变 11-27） |
 | 公告发布日 ≠ 采集入库时刻 | `publishedAt` 是采集入库时间，列表里 4 条公告全显示成入库那天的日期，看着像刚发的 | 展示层读 `announcedAt`（发改委公告的 PubDate）；实测 35 条公告的**发布日与调价执行日全部同一天**（提前天数分布：提前 0 天 35 条），发布时刻 09:15~16:59 |
 | 「下次通知时间」跟「下次调价日」是同一天 | 发改委公告在**调价执行当天**发布，不是提前几天 —— 写成「提前 N 天收到通知」就是错的 | 下次通知日 = 下次调价日（同一天），差别只在时刻：公告上午发，24:00 才调价。口径写进 `data/adjust-cycle.js` 的 `NOTICE_TIME_NOTE` |
-| 国际页现在显示的是**写死的演示常量**，不是真实行情 | `market-quote` 源默认 `enabled:false`（`server/src/services/sources.js`），`oil_markets` 表一直是空的 → 接口回落共享模块的演示载荷：78.42 / 74.16 是 `data/markets.js` 里的常量，曲线是 mulberry32 伪随机生成，时间戳却按「现在」打 —— 看着像刚更新的实时行情 | 启用真实源前先验证可访问性/字段稳定性/更新频率/授权条款；未接入前保留 `source.mode='demo'`（页面顶部会显示「演示数据 · 非实时行情」） |
+| 国际页显示的是**写死的演示常量**，不是真实行情 | `market-quote` 源默认 `enabled:false`（`server/src/services/sources.js`），`oil_markets` 表一直是空的 → 接口回落共享模块的演示载荷：78.42 / 74.16 是 `data/markets.js` 里的常量，曲线是 mulberry32 伪随机生成，时间戳却按「现在」打 —— 看着像刚更新的实时行情 | 2026-11-28 已接真实源；**演示行情已删**，服务端查不到记录就返回 `empty:true` 空态。`source.mode='demo'` 这条退路没有了 —— 宁可空着也不能造一条假曲线 |
+| 空态还挂着「真实数据 · 服务端定时采集」 | 后端返回 `empty:true`（还没采到行情），前端照样套通用来源文案 → 页面同时写着「还没有采集到行情」和「真实数据」，等于骗用户 | 空态时来源条改用后端给的 `note`，不套通用文案；`scripts/verify-contract.js` 有断言钉住 |
 | 行情 `quoteTime` 是 `MM-DD HH:mm:ss`（缺年份） | `Date.parse` 把缺年份的补成 **2001 年** → 「现在 - 报价时刻」= 1300 多万分钟（线上接口实际吐过 `delayMinutes: 13148652`） | 用 `notices.js` 的 `parseQuoteTime()`：无时区标注按 UTC+8 解释、缺年份补当前年；`server/scripts/selftest.js` 有断言钉住 |
 | 行情曲线切片把**点对象**丢给 `seriesTime` | `list.map(seriesTime)` 的回调收到的是 `{date, value}` 整个对象，`String(对象)` = `'[object Object]'` → 全部解析失败 → `last` 为 null → **曲线永远只剩最后一个点**，真实行情入库后国际页画不出线 | 必须传 `p.date`：`list.map(function (p) { return seriesTime(p && p.date); })`；自检里用「库里真有一条行情」的行钉住四个周期都能切出多个点 |
 | 行情的 `axis` 给成**字符串** | 小程序 `wx:for` 遍历字符串会把字符一个个渲染出来，图下面出现一排乱码 | `axis` 必须是首/中/尾**三档数组**（`data/markets.js` 的 `marketAxisLabels()`，两端共用一份） |
@@ -296,6 +299,9 @@ NYMEX 当月连续），布伦特原油走新浪财经（快照，**场外差价
 存在基差（同期 CFD 约 90.70）—— **两个都是真实报价，但不是同一个东西**，
 国际页必须把口径写出来（真源 `data/markets.js` 的 `MARKET_INSTRUMENTS`），
 否则用户只会觉得「数和网上搜的对不上」。
+⚠️ 国际行情的**演示数据已删**（2026-11-28）：以前是写死的 78.42 / 74.16、曲线靠伪随机生成、
+时间戳却按「现在」打。现在服务端查不到记录就返回 `empty:true` 空态，页面显示
+「还没有采集到行情」；连不上后端就是失败态 + 重试按钮。**没有任何演示数据可回落**。
 
 订阅消息链路还没走通到底（需正式 AppID + 模板 ID），未配置时「提醒」页要明说未配置，不假装授权成功。
 

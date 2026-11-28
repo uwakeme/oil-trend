@@ -198,9 +198,10 @@ async function main() {
     })());
 
   // ---- 真实行情行：库里真有一条行情时的对外载荷 ----
-  // ⚠️ 上面的 market 用例走的是「库里没有这个品种」的演示回落分支，
-  //    真实分支（库里那条记录）以前没人测过：axis 给成字符串、
+  // ⚠️ 真实分支（库里那条记录）以前没人测过：axis 给成字符串、
   //    日线点被切片丢掉，都是在那条分支上出的问题。
+  //    上面那条 brent 用例走的是**夹具写入的**行情记录（同样是真实分支）；
+  //    「库里没有这个品种」的空态分支在下面单独钉。
   await dao.markets.upsert({
     symbol: 'wti',
     name: 'NYMEX原油',
@@ -246,6 +247,28 @@ async function main() {
   check('真实行情：1 周周期切得出多个点（日线点不能被丢掉）',
     Array.isArray(weekMarket.points) && weekMarket.points.length >= 3,
     JSON.stringify(weekMarket.points));
+
+  // ---- 空态：库里没有这个品种时，不许再冒出演示数据 ----
+  // ⚠️ 以前这里回落到共享模块的演示载荷（写死的 78.42 / 74.16，
+  //    曲线是伪随机生成的，时间戳却按「现在」打）——
+  //    用户看到的是「刚更新的实时行情」，却是假的。演示数据已删。
+  await dao.markets.removeBySource('market-brent');
+  var emptyMarket = await notices.actionMarket({ symbol: 'brent', period: '1d' });
+  check('没有行情记录时返回空态标记（不是演示数据）',
+    emptyMarket.empty === true, JSON.stringify(emptyMarket.empty));
+  check('空态不标成演示源',
+    !!emptyMarket.source && emptyMarket.source.mode !== 'demo',
+    JSON.stringify(emptyMarket.source));
+  check('空态没有价格也没有曲线',
+    emptyMarket.price === null &&
+    Array.isArray(emptyMarket.points) && emptyMarket.points.length === 0,
+    JSON.stringify(emptyMarket.price) + ' / ' + JSON.stringify(emptyMarket.points));
+  check('空态仍然给品种口径（页面要显示是哪个品种）',
+    typeof emptyMarket.basis === 'string' && emptyMarket.basis.length > 0,
+    emptyMarket.basis);
+  check('空态的来源说明讲清楚「还没采到」',
+    !!emptyMarket.source && String(emptyMarket.source.note).indexOf('还没有采集到') >= 0,
+    emptyMarket.source ? emptyMarket.source.note : '无');
 
   var sync = await notices.actionSyncStatus();
   check('sync-status 有 status', typeof sync.status === 'string');

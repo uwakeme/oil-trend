@@ -15,16 +15,16 @@
       <text class="page-sub">原油市场参考 · 美元 / 桶</text>
     </view>
 
-    <!-- 数据来源：后端挂了回落演示数据时必须看得见 -->
-    <!-- aria-live：来源变了（后端挂了变黄）要能被读屏软件念出来 -->
+    <!-- 数据来源：统一由后端给的 source 决定（空态时显示「还没采到行情」的原因） -->
+    <!-- aria-live：来源变了要能被读屏软件念出来 -->
     <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}" role="status" aria-live="polite">
       <text class="source-bar-text">{{sourceText}}</text>
     </view>
 
     <!-- 后端明确说「还没采到行情」：显示空态，不回落演示数据也不当加载失败 -->
     <view wx:if="{{dataEmpty}}" class="state-box">
-      <text class="state-box-title">暂无行情数据</text>
-      <text>国际行情来源接入后会自动显示</text>
+      <text class="state-box-title">还没有采集到行情</text>
+      <text>服务端采集成功后会自动显示，稍后再来看看</text>
     </view>
 
     <text class="delay-badge" wx:if="{{!dataEmpty}}">{{delayText}}</text>
@@ -66,8 +66,8 @@
       <!-- 点少于 2 个画不出曲线：不渲染图表组件，改显示空态文案 -->
       <trend-chart wx:if="{{hasChart}}" points="{{market.points}}" mode="line" height="{{145}}" direction="{{market.direction}}" />
       <view wx:else class="chart-empty">
-        <text class="chart-empty-text">暂无行情数据</text>
-        <text class="chart-empty-hint">行情来源接入后会自动显示</text>
+        <text class="chart-empty-text">曲线数据还在采集</text>
+        <text class="chart-empty-hint">采集到历史价格后会自动显示</text>
       </view>
 
       <view class="market-axis" wx:if="{{hasChart}}">

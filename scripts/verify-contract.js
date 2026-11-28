@@ -989,6 +989,21 @@ async function main() {
       globalPage.data.market.basis);
     check('国际页渲染里没有 undefined', hasBadToken(allText(globalPage.data)) === false);
 
+    // 国际页空态：服务端说「还没采到行情」时，
+    // 既不能显示「真实数据」，也不能拿演示曲线顶上（国际行情的演示数据已删）
+    await dao.markets.removeBySource('market-brent');
+    await dao.markets.removeBySource('market-wti');
+    await globalPage.load();
+    check('国际页空态：标记为空态', globalPage.data.dataEmpty === true,
+      JSON.stringify(globalPage.data.market));
+    check('国际页空态：价格显示 -- 而不是假价格',
+      globalPage.data.market.priceText === '--', globalPage.data.market.priceText);
+    check('国际页空态：来源条不声称「真实数据」',
+      globalPage.data.sourceText.indexOf('真实数据') < 0, globalPage.data.sourceText);
+    check('国际页空态：来源条说清楚还没采到',
+      globalPage.data.sourceText.indexOf('还没有采集到') >= 0, globalPage.data.sourceText);
+    check('国际页空态：渲染里没有 undefined', hasBadToken(allText(globalPage.data)) === false);
+
     // 提醒页
     var alertPage = makeInstance(loadPageDef('pages/alert/alert.js'));
     await alertPage.load();

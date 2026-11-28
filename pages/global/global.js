@@ -142,20 +142,21 @@ Page({
         direction: directionOf(item)
       };
     }
-    // 演示数据（服务端还没采集到真实行情）不能标「实时」——
-    // 那会把演示曲线说成真实行情，与「如实展示来源」冲突。
-    var isDemo = !!(main.source && main.source.mode === 'demo');
     // direction 必须有值：trend-chart 声明它是 String 属性，传 null 会报类型警告。
     // 国际行情的涨跌方向要从涨跌幅算，不能直接用 main.direction（那里没有这个字段）。
     var marketDirection = directionOf(main);
-    var delayText = isDemo ? '演示数据' : timelinessText(main, '');
+    var delayText = timelinessText(main, '');
     // 品种代码：后端会给 BRENT / WTI，没给时按 symbol 兜底，别显示空字符串
     var symbol = main.symbol || this.data.symbol;
     var code = main.code || (symbol === 'wti' ? 'WTI' : 'BRENT');
-    // 来源提示条：后端挂了回落演示数据时必须是 warn 样式
-    var sourceLine = fmt.sourceLine(main.source);
     // 后端明确说「合法为空」（还没采到行情）：显示空态，不回落演示数据
     var dataEmpty = main.empty === true;
+    // 来源提示条：空态时**不能**显示「真实数据 · 服务端定时采集」——
+    // 那会和「还没有采集到行情」自相矛盾（等于告诉用户这里有真实数据）。
+    // 空态直接说后端给的原因。
+    var sourceLine = dataEmpty
+      ? { text: (main.source && main.source.note) || '服务端还没有采集到国际行情', warn: false }
+      : fmt.sourceLine(main.source);
     var points = dataEmpty ? [] : (main.points || []);
     // 只有一个点画不出曲线（canvas 只会画出一个孤点）
     var hasChart = points.length >= 2;
@@ -185,7 +186,7 @@ Page({
       },
       hasChart: hasChart,
       dataEmpty: dataEmpty,
-      delayText: isDemo ? '演示数据' : timelinessText(main, '行情'),
+      delayText: timelinessText(main, '行情'),
       sourceNote: (main.source && main.source.note) || '',
       sourceText: sourceLine.text,
       sourceWarn: sourceLine.warn

@@ -239,31 +239,41 @@ function actionMarket(payload) {
 
   return dao.markets.findBySymbol(symbol).then(function (doc) {
     if (!doc) {
-      // 库里还没有这个品种：回落到共享模块生成的演示载荷，
-      // 保证接口结构完整（前端会检查 price / points 字段）
-      var fallback = shared.buildMarketPayload(symbol, period);
+      // 库里还没有这个品种：**没有演示数据可回落**。
+      // ⚠️ 以前这里回落到共享模块生成的演示载荷（写死的 78.42 / 74.16，
+      //    曲线是伪随机生成的，时间戳却按「现在」打）——
+      //    用户看到的是「刚更新的实时行情」，却是假的。演示数据已删。
+      // 现在返回**合法空态**：页面显示「还没有采集到行情」，不造任何假数据。
+      var emptyInstrument = shared.MARKET_INSTRUMENTS[symbol] || {};
       return {
-        symbol: fallback.symbol,
-        name: fallback.name,
+        // empty=true 是给前端的信号：这是「真的没数据」，不是「接口坏了」，
+        // 前端据此显示空态，既不回落演示数据，也不显示加载失败。
+        empty: true,
+        symbol: symbol,
+        name: emptyInstrument.name || symbol,
         code: marketCode(symbol),
-        // 演示数据也标口径：用户点进来看到的是哪个品种、哪个报价口径
-        basis: (shared.MARKET_INSTRUMENTS[symbol] || {}).basis || '',
-        price: fallback.price,
-        changeAmount: fallback.changeAmount,
-        changePercent: fallback.changePercent,
-        direction: fallback.direction,
-        open: fallback.open,
-        prevClose: fallback.prevClose,
-        high: fallback.high,
-        low: fallback.low,
-        points: fallback.points,
-        axis: fallback.axis,
-        delayed: fallback.delayed,
-        delayMinutes: delayMinutesOf({ delayed: fallback.delayed, quoteTime: fallback.quoteTime }),
-        quoteTime: fallback.quoteTime,
-        // mode 必须标 demo：前端靠它判断该不该显示「（演示数据）」，
-        // 以及该不该把延迟状态写成「实时」。
-        source: { mode: 'demo', name: '服务端定时采集', note: '演示数据（尚未采集真实行情）' }
+        // 口径仍然要给：用户点进来至少要知道这是哪个品种、哪个报价口径
+        basis: emptyInstrument.basis || '',
+        price: null,
+        changeAmount: null,
+        changePercent: null,
+        direction: 'flat',
+        open: null,
+        prevClose: null,
+        high: null,
+        low: null,
+        points: [],
+        axis: [],
+        delayed: false,
+        delayMinutes: null,
+        quoteTime: '',
+        // mode 是 server（真实采集通道），但 note 必须说清楚「还没采到」——
+        // 前端空态时用 note 代替「真实数据」那句话。
+        source: {
+          mode: 'server',
+          name: '服务端定时采集',
+          note: '服务端还没有采集到国际行情，稍后会自动更新'
+        }
       };
     }
 

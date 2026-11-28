@@ -34,12 +34,20 @@ const notices = demo.getNotices('440000', 'all', '92');
 out.push('  条数: ' + notices.notices.length + '  同步: ' + notices.sync.status + ' @ ' + notices.sync.lastCheckedAt);
 notices.notices.forEach(n => out.push('  [' + n.kind + '] ' + n.title + '  92#=' + n.changes['92'] + '  执行 ' + n.executeAt));
 
-out.push('--- 国际行情 ---');
-['brent','wti'].forEach(s => {
-  const m = demo.getMarket(s, '1d');
-  out.push('  ' + m.name + ' ' + m.price + ' ' + m.changeAmount + ' (' + m.changePercent + '%) 时间 ' + m.quoteTime + ' 延时 ' + m.delayMinutes + '分 点数 ' + m.points.length);
-  out.push('      曲线: ' + m.points.map(p => p.value).join(','));
+// ⚠️ 国际行情的演示数据已删：这里不再有行情载荷可打。
+//    行情由服务端采集入库，小程序端只保留**品种口径**（名称 + 报价口径）。
+out.push('--- 国际行情（只有品种口径，行情数据在服务端采集）---');
+const markets = require('../data/markets');
+Object.keys(markets.MARKET_INSTRUMENTS).forEach(s => {
+  const inst = markets.MARKET_INSTRUMENTS[s];
+  out.push('  ' + inst.code + ' ' + inst.name + '  口径: ' + inst.basis);
 });
+const axisSample = [
+  { date: '2026-11-28 09:30:00', value: 83.1 },
+  { date: '2026-11-28 15:00:00', value: 83.3 }
+];
+out.push('  轴标签(1日): ' + markets.marketAxisLabels(axisSample, '1d').join(' / '));
+out.push('  轴标签(1月): ' + markets.marketAxisLabels(axisSample, '1m').join(' / '));
 
 out.push('--- 其他地区 92# ---');
 demo.getRegions().forEach(r => out.push('  ' + r.fullName + ' ' + r.price92));
