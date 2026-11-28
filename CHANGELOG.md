@@ -6,6 +6,8 @@
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+## [1.0.7] - 2026-11-28
 ### Changed
 - 国际行情的布伦特原油换源：从新浪财经 `hf_OIL`（场外差价合约 CFD 报价，公开接口没有历史序列，曲线只有一个点）换到东方财富的 **IPE（ICE 布伦特）当月连续**合约 `112.B00Y`，快照 + 5 分钟线 + 日线俱全，四个周期都画得出曲线；口径与新闻里的 ICE 结算价更贴近（仍有合约基差），界面与文档里的「CFD」表述同步改正
 ### Fixed
@@ -41,7 +43,8 @@
 ### Added
 - 首页「数据来源与说明」底部展示小程序备案号与工信部查询地址，点一下即可复制到剪贴板
 
-[Unreleased]: https://github.com/uwakeme/oil-trend/compare/v1.0.6...HEAD
+[Unreleased]: https://github.com/uwakeme/oil-trend/compare/v1.0.7...HEAD
+[1.0.7]: https://github.com/uwakeme/oil-trend/compare/v1.0.6...v1.0.7
 [1.0.6]: https://github.com/uwakeme/oil-trend/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/uwakeme/oil-trend/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/uwakeme/oil-trend/compare/v1.0.3...v1.0.4
