@@ -164,8 +164,8 @@ Page({
       self.applyHome(payload);
     }).catch(function () {
       if (seq !== self._reqSeq) return;
-      // 能走到这里说明后端失败之后本地兜底也出错了 ——
-      // 那是数据源本身的问题，不是网络问题，别把原因写错
+      // 后端读不到数据 —— 如实报失败
+      // （没有本地兜底，不拿假数据顶上）
       self.setData({ loading: false, loadError: '油价数据读取失败，请稍后重试' });
     });
   },
@@ -310,7 +310,7 @@ Page({
       return;
     }
     // 后端可能明确标记「合法为空」（还没采到该地区的挂牌价）：
-    // 这是真的没数据，显示空态 —— 不能回落演示数据，也不能当加载失败。
+    // 这是真的没数据，显示空态 —— 不能当加载失败，也不能拿别的东西顶上。
     // 顺带把「一个价格都没有」也当空态：那样首页只剩一张空白大卡。
     var dataEmpty = payload.empty === true;
     var prices = (dataEmpty ? [] : (payload.prices || [])).map(function (p) {
@@ -400,8 +400,7 @@ Page({
     // 通知的来源名用通知自己的：整体来源和通知来源不是一回事
     // 通知的来源名用通知自己的：整体来源和通知来源不是一回事。
     // 通知没带来源名时退回整体来源的公开说法，不暴露内部来源名。
-    var noticeSourceName = ((latest.source && latest.source.name) || fmt.sourceName(source)) +
-      (source.mode === 'demo' ? '（演示数据）' : '');
+    var noticeSourceName = (latest.source && latest.source.name) || fmt.sourceName(source);
 
     // 公告发布日用 announcedAt（真实的公告发布日）——
     // publishedAt 是**采集入库时刻**，写成「发布于 2026-11-16 20:03」是误导：
@@ -493,7 +492,7 @@ Page({
       sourceWarn: srcLine.warn,
       cloudStatus: source.mode === 'live'
         ? '本次数据来自服务端采集'
-        : (source.mode === 'demo' ? '当前显示演示数据，非实时行情' : '数据来源待确认'),
+        : '数据来源待确认',
       aboutNote: '国内成品油价格按调价节点展示，不代表实时成交价。国际原油仅作市场参考，与国内零售价之间存在税费与定价周期差异。'
     });
   },

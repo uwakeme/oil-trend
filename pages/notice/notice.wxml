@@ -9,7 +9,7 @@
   </view>
 
   <block wx:else>
-    <!-- 来源提示：后端挂了回落演示数据时必须看得见 -->
+    <!-- 来源提示：数据来自哪里必须看得见 -->
     <!-- aria-live：来源变了（后端挂了变黄）要能被读屏软件念出来 -->
     <view class="source-bar {{sourceWarn ? 'warn' : ''}}" wx:if="{{sourceText}}" role="status" aria-live="polite">
       <text class="source-bar-text">{{sourceText}}</text>

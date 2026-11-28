@@ -118,8 +118,6 @@ Page({
     targetSummary: '',
     forecastSummary: '',
     history: [],
-    // 历史记录是不是演示数据（后端返回的记录带 dedupKey）
-    historyIsDemo: false,
     sourceText: '',
     sourceWarn: false,
     sheetVisible: false,
@@ -230,14 +228,11 @@ Page({
       }
 
       // 来源：提醒页的当前价来自 home，home.source 原来被整份丢掉了，
-      // 现在存下来如实展示 —— 后端挂了回落演示数据时必须看得见。
+      // 现在存下来如实展示 —— 后端读不到时也要有记录可看。
       var sourceLine = fmt.sourceLine(home.source, '目标价以此为基准');
       // 历史记录是不是演示的：后端返回的记录带 dedupKey，
       // 本地演示记录没有这个字段（{id,title,time,channel,priceText}）。
       // ⚠️ 不看模块级全局来源状态：那种状态被 home / rules / history
-      // 三个并发请求互相覆盖，判定会漂。来源一律随 payload.source 走。
-      var isBackendHistory = history.length > 0 && !!history[0].dedupKey;
-
       self.setData({
         loading: false,
         loadError: '',
@@ -247,7 +242,6 @@ Page({
         currentPriceText: fmt.price(price),
         rule: rule,
         history: history.map(historyView),
-        historyIsDemo: history.length > 0 && !isBackendHistory,
         sourceText: sourceLine.text,
         sourceWarn: sourceLine.warn,
         hasTemplate: subscribe.hasTemplate()
@@ -255,7 +249,7 @@ Page({
       self.applyRule();
     }).catch(function () {
       if (seq !== self._reqSeq) return;
-      // 能走到这里说明后端失败之后本地兜底也出错了 —— 那是数据源本身的问题
+      // 后端读不到数据 —— 如实报失败（没有本地兜底，不拿假数据顶上）
       self.setData({ loading: false, loadError: '提醒数据读取失败，请稍后重试' });
     });
   },

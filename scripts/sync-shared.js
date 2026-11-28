@@ -5,8 +5,11 @@
  * 和小程序端 data/adjustments.js（24 条、正序）对不上 ——
  * 切到云端后价格从 7.36 变成 7.47、涨跌方向也反了。
  *
- * 现在单一真源：服务端的调价时间线、地区价差、油品定义、行情品种口径
+ * 现在单一真源：服务端的地区价差、油品定义、行情品种口径、调价周期推算
  * 全部由 data/ 下的文件生成，禁止再手工维护第二份。
+ *
+ * ⚠️ 演示数据不在这里：调价时间线与价格阶梯是**测试种子**，
+ *    已经搬进 server/scripts/test-fixtures.js（演示数据只属于测试）。
  *
  * 生成一份副本：server/src/shared/shared.js（自建后端用）
  * 断言：生成物与 data/ 算出来的值逐项一致，否则 exit 1。
@@ -17,12 +20,8 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.resolve(__dirname, '..');
-const adjustments = require(path.join(ROOT, 'data', 'adjustments.js'));
 const regions = require(path.join(ROOT, 'data', 'regions.js'));
 const fuels = require(path.join(ROOT, 'data', 'fuels.js'));
-const config = require(path.join(ROOT, 'config', 'index.js'));
-
-const ANCHOR = config.demoAnchorDate || '2026-11-10';
 
 /**
  * 读一个真源文件并内联进共享模块。
@@ -58,7 +57,6 @@ const template = [
   ' * 服务端共享模块 —— 由 scripts/sync-shared.js 自动生成，请勿手改。',
   ' *',
   ' * 数据真源在小程序端 data/ 下：',
-  ' *   data/adjustments.js  调价时间线（全国统一幅度）',
   ' *   data/regions.js      地区价差',
   ' *   data/fuels.js        油品定义',
   ' *   data/adjust-cycle.js 调价周期推算（节假日表 + 下一轮调价日）',
@@ -103,58 +101,12 @@ const template = [
   '    convertTonToLiterAll: convertTonToLiterAll',
   '  };',
   '})();',
-  'var DEMO_ANCHOR = ' + JSON.stringify(ANCHOR) + ';',
   '',
   'var FUELS = ' + j(fuels.FUELS) + ';',
   '',
   'var REGIONS = ' + j(regions.REGIONS) + ';',
   '',
   'var DEFAULT_REGION_CODE = ' + JSON.stringify(regions.DEFAULT_REGION_CODE) + ';',
-  '',
-  'var ADJUSTMENTS = ' + j(adjustments.ADJUSTMENTS) + ';',
-  '',
-  'var NATIONAL_BASE = ' + j(adjustments.NATIONAL_BASE) + ';',
-  '',
-  '/* ---------- 演示时钟：与小程序端 utils/demo-clock.js 同一套规则 ---------- */',
-  '',
-  'function parseUtc(dateStr) {',
-  '  var m = String(dateStr).slice(0, 10).match(/^(\\d{4})-(\\d{2})-(\\d{2})$/);',
-  '  if (!m) return null;',
-  '  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));',
-  '}',
-  '',
-  'function localDayNumber(date) {',
-  '  // 与小程序端 utils/demo-clock.js 一致：统一按 UTC+8 日历日算，',
-  '  // 否则客户端在东八区、服务器在 UTC 时，凌晨会差一天。',
-  '  var t = new Date(date.getTime() + 8 * 3600000);',
-  '  return Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate());',
-  '}',
-  '',
-  'function offsetDays() {',
-  '  var anchor = parseUtc(DEMO_ANCHOR);',
-  '  if (anchor === null) return 0;',
-  '  return Math.round((localDayNumber(new Date()) - anchor) / 86400000);',
-  '}',
-  '',
-  'function shiftDate(dateStr) {',
-  "  if (!dateStr) return '';",
-  '  var base = parseUtc(dateStr);',
-  '  if (base === null) return dateStr;',
-  '  var d = new Date(base);',
-  '  d.setUTCDate(d.getUTCDate() + offsetDays());',
-  "  return d.toISOString().slice(0, 10);",
-  '}',
-  '',
-  'function today() {',
-  '  return shiftDate(DEMO_ANCHOR);',
-  '}',
-  '',
-  'function daysUntil(dateStr) {',
-  '  var target = parseUtc(dateStr);',
-  '  if (target === null) return 0;',
-  '  var todayTs = parseUtc(today());',
-  '  return Math.round((target - todayTs) / 86400000);',
-  '}',
   '',
   '/* ---------- 价格计算 ---------- */',
   '',
@@ -183,92 +135,22 @@ const template = [
   '  return null;',
   '}',
   '',
-  'var LEVEL_CACHE = {};',
-  '',
-  'function levels(fuelId) {',
-  '  if (LEVEL_CACHE[fuelId]) return LEVEL_CACHE[fuelId];',
-  '  var price = NATIONAL_BASE[fuelId];',
-  '  var list = [{ date: null, price: price, delta: 0, title: null }];',
-  '  ADJUSTMENTS.forEach(function (item) {',
-  '    price = round2(price + item.deltas[fuelId]);',
-  '    list.push({',
-  '      // 日期统一平移，和小程序端保持同一时间基准',
-  '      date: shiftDate(item.date),',
-  '      price: price,',
-  '      delta: item.deltas[fuelId],',
-  '      title: item.title',
-  '    });',
-  '  });',
-  '  LEVEL_CACHE[fuelId] = list;',
-  '  return list;',
-  '}',
-  '',
-  'function nationalPriceOn(fuelId, dateStr) {',
-  '  var list = levels(fuelId);',
-  '  var price = list[0].price;',
-  '  for (var i = 1; i < list.length; i++) {',
-  '    if (list[i].date <= dateStr) price = list[i].price;',
-  '    else break;',
-  '  }',
-  '  return price;',
-  '}',
-  '',
-  'function priceOn(regionCode, fuelId, dateStr) {',
-  '  var region = regionByCode(regionCode);',
-  '  // 地区价差按油品分别取：各省标号结构不同，共用一套 offset 误差太大',
-
-  '  var offset = (region.offset && region.offset[fuelId] !== undefined) ? region.offset[fuelId] : 0;',
-  '  return round2(nationalPriceOn(fuelId, dateStr) + offset);',
-  '}',
-  '',
-  'function currentPrice(regionCode, fuelId) {',
-  '  return priceOn(regionCode, fuelId, today());',
-  '}',
-  '',
-  'function allPrices() {',
-  '  var out = [];',
-  '  REGIONS.forEach(function (region) {',
-  '    FUELS.forEach(function (fuel) {',
-  '      var list = levels(fuel.id);',
-  '      out.push({',
-  "        regionCode: region.code,",
-  "        regionName: region.name + ' · ' + region.city,",
-  '        fuelId: fuel.id,',
-  '        fuelName: fuel.name,',
-  '        price: currentPrice(region.code, fuel.id),',
-  '        changeAmount: list[list.length - 1].delta,',
-  '        changeAt: list[list.length - 1].date',
-  '      });',
-  '    });',
-  '  });',
-  '  return out;',
-  '}',
-  '',
   'function dedupKey(sourceId, title, executeAt) {',
   "  return [sourceId, String(executeAt || '').slice(0, 10), String(title || '').replace(/\\s+/g, '')].join('::');",
   '}',
   '',
   'module.exports = {',
-  '  DEMO_ANCHOR: DEMO_ANCHOR,',
   '  FUELS: FUELS,',
   '  REGIONS: REGIONS,',
   '  DEFAULT_REGION_CODE: DEFAULT_REGION_CODE,',
-  '  ADJUSTMENTS: ADJUSTMENTS,',
-  '  NATIONAL_BASE: NATIONAL_BASE,',
   '  round2: round2,',
   '  regionByCode: regionByCode,',
   '  findRegion: findRegion,',
-  '  levels: levels,',
-  '  nationalPriceOn: nationalPriceOn,',
-  '  priceOn: priceOn,',
-  '  currentPrice: currentPrice,',
-  '  allPrices: allPrices,',
   '  dedupKey: dedupKey,',
   '  MARKET_INSTRUMENTS: MARKET_INSTRUMENTS,',
   '  marketAxisLabels: marketAxisLabels,',
   '  ADJUST_CYCLE: ADJUST_CYCLE,',
-  '  TON_CONVERSION: TON_CONVERSION,',
-  '  clock: { today: today, shiftDate: shiftDate, daysUntil: daysUntil, offsetDays: offsetDays }',
+  '  TON_CONVERSION: TON_CONVERSION',
   '};'
 ].join('\n');
 
@@ -286,37 +168,19 @@ function fail(message) {
 // 重新加载生成的模块，确保断言的是落盘后的内容
 delete require.cache[require.resolve(TARGET)];
 var shared = require(TARGET);
-var demo = require(path.join(ROOT, 'data', 'demo.js'));
 
-if (shared.ADJUSTMENTS.length !== adjustments.ADJUSTMENTS.length) {
-  fail('调价条数不一致：服务端 ' + shared.ADJUSTMENTS.length + ' ≠ 小程序端 ' + adjustments.ADJUSTMENTS.length);
-}
 if (shared.REGIONS.length !== regions.REGIONS.length) fail('地区数不一致');
 if (shared.FUELS.length !== fuels.FUELS.length) fail('油品数不一致');
 
-for (var i = 0; i < adjustments.ADJUSTMENTS.length; i++) {
-  var a = adjustments.ADJUSTMENTS[i];
-  var b = shared.ADJUSTMENTS[i];
-  if (!b || a.date !== b.date || JSON.stringify(a.deltas) !== JSON.stringify(b.deltas)) {
-    fail('第 ' + (i + 1) + ' 条调价不一致：' + JSON.stringify(a) + ' vs ' + JSON.stringify(b));
+// 地区表：两端的地区码必须一致（顺序也一致，页面按这个顺序显示）
+for (var i = 0; i < regions.REGIONS.length; i++) {
+  var r = regions.REGIONS[i];
+  var c = shared.REGIONS[i];
+  if (!c || r.code !== c.code || r.name !== c.name) {
+    fail('第 ' + (i + 1) + ' 个地区不一致：' + JSON.stringify(r) + ' vs ' + JSON.stringify(c));
     break;
   }
 }
-
-// 每个地区 × 每个油品的当前价必须一致
-var mismatches = 0;
-regions.REGIONS.forEach(function (region) {
-  fuels.FUELS.forEach(function (fuel) {
-    var mini = demo.currentPrice(region.code, fuel.id);
-    var cloud = shared.currentPrice(region.code, fuel.id);
-    if (Math.abs(mini - cloud) > 0.0001) {
-      mismatches++;
-      console.error('✗ 价格不一致 ' + region.name + ' ' + fuel.name +
-        '：小程序端 ' + mini + ' vs 服务端 ' + cloud);
-    }
-  });
-});
-if (mismatches) fail(mismatches + ' 组价格不一致');
 
 // 行情：两端共用同一份**品种口径**与轴标签算法。
 // ⚠️ 以前这里比对的是「小程序端演示行情」与「服务端演示行情」两份载荷：
@@ -404,15 +268,6 @@ if (shared.TON_CONVERSION.convertTonToLiterAll({ gasoline: -440, diesel: -425 })
 if (!cycle.isWorkday('2026-10-10')) fail('2026-10-10 是调休上班日，应算工作日');
 if (cycle.isWorkday('2026-10-03')) fail('2026-10-03 在国庆假期内，不该算工作日');
 if (cycle.isWorkday('2026-11-14')) fail('2026-11-14 是周六，不该算工作日');
-
-// 调价节点数也要一致
-fuels.FUELS.forEach(function (fuel) {
-  var miniTrend = demo.getTrend('440000', fuel.id, '1y');
-  var cloudList = shared.levels(fuel.id);
-  if (miniTrend.count !== cloudList.length - 1) {
-    fail(fuel.name + ' 调价节点数不一致：' + miniTrend.count + ' vs ' + (cloudList.length - 1));
-  }
-});
 
 if (process.exitCode) {
   console.error('\n共享规则与小程序端不一致，已中止。');

@@ -755,9 +755,21 @@ async function main() {
     check('窗口过期但推算值有效时，不挂失效的预测',
       indexPage.data.forecast.text.indexOf('预计') < 0, indexPage.data.forecast.text);
 
-    // 推算值自己也过期了（夹具里的真实情况：推算日 11-13，今天 11-18）
+    // 推算值自己也过期了（推算基准太久没更新，推出来的「下一轮」落在过去）
+    //
+    // ⚠️ 这里**显式**把推算值改成过期：夹具的时间线现在是自洽的
+    //    （调价节点、历史价、窗口都按同一个锚点平移，推算日落在未来），
+    //    「推算也过期」是另一种状态，得自己造出来测 ——
+    //    以前它是靠夹具里「调价节点日期没跟着平移」意外造成的。
     var staleHome = JSON.parse(JSON.stringify(home));
-    staleHome.window = Object.assign({}, staleHome.window || {}, { daysLeft: -1 });
+    var staleEstimate = JSON.parse(JSON.stringify(home.window.estimate || {}));
+    staleEstimate.nextAdjustDate = '2026-11-13';
+    staleEstimate.nextNoticeDate = '2026-11-13';
+    staleEstimate.daysLeft = -5;
+    staleHome.window = Object.assign({}, staleHome.window || {}, {
+      daysLeft: -1,
+      estimate: staleEstimate
+    });
     indexPage.applyHome(staleHome);
     check('推算值也过期时退回「上一轮调价窗口」',
       indexPage.data.window.titleText === '上一轮调价窗口', indexPage.data.window.titleText);
@@ -901,8 +913,15 @@ async function main() {
       noticePage.data.window.titleText);
 
     // 推算值自己也过期时：退回上一轮，不能再写「预计下次调价窗口」
+    // ⚠️ 同样显式把推算值改成过期（理由见首页那处）
     var staleNoticePayload = JSON.parse(JSON.stringify(noticeList));
     staleNoticePayload.window.daysLeft = -1;
+    staleNoticePayload.window.estimate = JSON.parse(
+      JSON.stringify(noticeList.window.estimate || {})
+    );
+    staleNoticePayload.window.estimate.nextAdjustDate = '2026-11-13';
+    staleNoticePayload.window.estimate.nextNoticeDate = '2026-11-13';
+    staleNoticePayload.window.estimate.daysLeft = -5;
     noticePage.applyNotices(staleNoticePayload);
     check('调价页推算值也过期时退回上一轮窗口',
       noticePage.data.window.titleText === '上一轮调价窗口',
@@ -1104,39 +1123,48 @@ async function main() {
     // 还原价格，后面的用例还要用
     await fixtures.seed();
 
-    /* ===== 六、后端不可达时回落演示源 ===== */
-    console.log('\n--- 后端不可达：如实回落演示数据 ---');
+    /* ===== 六、后端不可达：如实失败，不给假数据 ===== */
+    console.log('\n--- 后端不可达：如实失败 ---');
     await new Promise(function (r) {
       server.close(r);
       if (server.closeAllConnections) server.closeAllConnections();
     });
-    var fallbackPage = makeInstance(loadPageDef('pages/index/index.js'));
-    await fallbackPage.load('440000');
-    check('后端挂了仍然有数据（回落演示源）', fallbackPage.data.prices.length === 4,
-      '实际：' + fallbackPage.data.prices.length);
-    check('回落时来源要报警', fallbackPage.data.sourceWarn === true);
-    check('回落时说明用的是演示数据',
-      fallbackPage.data.sourceText.indexOf('演示数据') >= 0, fallbackPage.data.sourceText);
-    check('回落时状态条不谎称服务端采集',
-      fallbackPage.data.cloudStatus.indexOf('演示数据') >= 0, fallbackPage.data.cloudStatus);
-    check('回落时来源名是演示数据集',
-      fallbackPage.data.sourceName === '演示数据集', fallbackPage.data.sourceName);
-    check('回落时渲染里没有 undefined', hasBadToken(allText(fallbackPage.data)) === false);
-    check('回落演示源时通知也给出每升幅度',
-      !!fallbackPage.data.notice.value && fallbackPage.data.notice.value !== '--',
-      String(fallbackPage.data.notice.value));
-    check('回落演示源时通知也给出调价前后价（四个油品）',
-      fallbackPage.data.notice.priceRows.length === 4,
-      '实际：' + fallbackPage.data.notice.priceRows.length);
-    check('回落演示源时价格表的前后价与幅度自洽',
-      fallbackPage.data.notice.priceRows.every(function (row) {
-        var before = Number(row.beforeText);
-        var after = Number(row.afterText);
-        var delta = Number(String(row.deltaText).replace(' 元/升', ''));
-        return isFinite(before) && isFinite(after) && isFinite(delta) &&
-          Math.abs((after - before) - delta) < 0.001;
-      }),
-      JSON.stringify(fallbackPage.data.notice.priceRows));
+
+    // ⚠️ 以前这里是「回落演示源」：后端一挂就显示内置演示数据，
+    //    用户看到的是一份看起来很正常的价格，根本不知道服务已经挂了。
+    //    演示数据已删除，现在的行为是如实失败（失败态 + 重试按钮）——
+    //    宁可告诉用户读不到，也不给一份假价格。
+    var downIndex = makeInstance(loadPageDef('pages/index/index.js'));
+    await downIndex.load('440000');
+    check('后端挂了首页显示失败态', !!downIndex.data.loadError, downIndex.data.loadError);
+    check('后端挂了首页不显示任何价格',
+      !downIndex.data.prices || downIndex.data.prices.length === 0,
+      '实际：' + (downIndex.data.prices ? downIndex.data.prices.length : '无'));
+    check('后端挂了不出现「演示数据」字样',
+      allText(downIndex.data).indexOf('演示数据') < 0, allText(downIndex.data).slice(0, 160));
+    check('后端挂了不谎称真实数据',
+      downIndex.data.sourceText.indexOf('真实数据') < 0, downIndex.data.sourceText);
+    check('后端挂了渲染里没有 undefined', hasBadToken(allText(downIndex.data)) === false);
+
+    // 走势、调价、提醒、国际行情四页同样要如实失败，不能各说各话
+    var downPages = [
+      ['pages/trend/trend.js', '走势'],
+      ['pages/notice/notice.js', '调价'],
+      ['pages/alert/alert.js', '提醒'],
+      ['pages/global/global.js', '国际行情']
+    ];
+    for (var di = 0; di < downPages.length; di++) {
+      var downLabel = downPages[di][1];
+      var downPage = makeInstance(loadPageDef(downPages[di][0]));
+      await downPage.load();
+      check(downLabel + '页在后端不可达时显示失败态',
+        !!downPage.data.loadError, downPage.data.loadError);
+      check(downLabel + '页在后端不可达时不谎称真实数据',
+        String(downPage.data.sourceText || '').indexOf('真实数据') < 0,
+        downPage.data.sourceText);
+      check(downLabel + '页在后端不可达时渲染里没有 undefined',
+        hasBadToken(allText(downPage.data)) === false);
+    }
 
     // 提醒规则保存：后端不可达时必须如实报失败
     // ⚠️ 以前 utils/api.js 的 saveAlertRules 吞掉后端错误，页面紧接着弹「订阅已开启」——

@@ -82,7 +82,7 @@ Page({
       })
       .catch(function () {
         if (seq !== self._reqSeq) return;
-        // 能走到这里说明后端失败之后本地兜底也出错了 —— 那是数据源本身的问题
+        // 后端读不到数据 —— 如实报失败（没有本地兜底，不拿假数据顶上）
         self.setData({ loading: false, loadError: '走势数据读取失败，请稍后重试' });
       });
   },
@@ -94,7 +94,7 @@ Page({
     }
     var fuelName = (payload.fuel && payload.fuel.name) || '92# 汽油';
     var srcLine = fmt.sourceLine(payload.source);
-    // 后端明确说「合法为空」（该地区还没有历史价）：显示空态，不回落演示数据
+    // 后端明确说「合法为空」（该地区还没有历史价）：显示空态，不当加载失败
     var dataEmpty = payload.empty === true;
     var points = dataEmpty ? [] : (payload.points || []);
     // 只有一个点画不出曲线（canvas 只会画出一个孤点）

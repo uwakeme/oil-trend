@@ -95,19 +95,18 @@ function fullDate(dateStr) {
 /**
  * 采集同步状态 → 展示文案与样式。
  *
- * 单一真源：后端和演示端都可能新增状态，
- * 这里漏了映射，前端就会掉进「其他」分支显示成「同步异常」。
+ * 单一真源：后端会新增状态，这里漏了映射，
+ * 前端就会掉进「其他」分支显示成「同步异常」。
  *
- * 'demo' 不是后端给的状态，而是「这次拿到的是演示数据」时的兜底：
- * 演示数据下写「自动同步正常」是误导 —— 用户看到的根本不是采集来的结果。
+ * ⚠️ 没有「演示数据」这一档：演示数据已删除，后端也不会给这个状态 ——
+ *    真出现了，说明还有地方在造假数据。
  */
 var SYNC_STATUS_META = {
   ok:      { text: '自动同步正常',       style: '' },
   idle:    { text: '真实数据源尚未接入', style: 'muted' },
   pending: { text: '等待人工核对',       style: 'warn' },
   partial: { text: '部分来源采集失败',   style: 'warn' },
-  error:   { text: '采集出错',           style: 'error' },
-  demo:    { text: '演示数据 · 真实公告源尚未接入', style: 'muted' }
+  error:   { text: '采集出错',           style: 'error' }
 };
 
 /**
@@ -147,19 +146,10 @@ function syncSourceHint(sources) {
  * 同步状态的展示信息；未知状态给中性文案，不要报异常。
  *
  * @param {string} status 后端给的同步状态（payload.sync.status）
- * @param {object} source 这次数据的来源（payload.source）
- *   演示数据下不能报「自动同步正常」—— 那是在替来源吹牛。
- *   但真出错 / 部分失败 / 待核对还是要照实说。
+ * @returns {{text: string, style: string}}
  */
-function syncStatus(status, source) {
-  var src = source || {};
+function syncStatus(status) {
   var meta = SYNC_STATUS_META[status] || null;
-  if (src.mode === 'demo') {
-    if (status === 'error') return SYNC_STATUS_META.error;
-    if (status === 'partial') return SYNC_STATUS_META.partial;
-    if (status === 'pending') return SYNC_STATUS_META.pending;
-    return SYNC_STATUS_META.demo;
-  }
   return meta || { text: '同步状态未知', style: 'muted' };
 }
 
@@ -212,7 +202,7 @@ function dayDiff(fromDate, toDate) {
  *      所以它与下一轮调价日同一天，差别只在时刻：
  *      公告上午发，油价当晚 24:00 才变。
  *
- * @param {object} win 后端/演示源给的窗口对象
+ * @param {object} win 后端给的窗口对象
  * @returns {object} 页面直接可用的展示字段
  */
 function windowMeta(win) {
@@ -303,17 +293,16 @@ function windowMeta(win) {
 /**
  * 来源 mode 白名单 → 固定文案。
  *
- * 只认两种：
- *   'demo' → 演示数据文案
- *   'live' → 真实数据文案
- * 其余 mode 一律走中性文案「数据来源待确认」。
+ * 只认 'live'（真实数据）；其余 mode 一律走中性文案「数据来源待确认」。
+ *
+ * ⚠️ 没有「演示数据」这一档：演示数据已全部删除，
+ *    页面上不该再出现这句话 —— 真出现的话说明后端在返回假数据。
  *
  * ⚠️ 不要把 source.name 铺到用户面前：那是内部来源名。
  * 五页都用它当主文案会出现同一句话重复，而且可能互相矛盾
  * （首页说「来自服务端」，调价页说「来自采集器」）。
  */
 var SOURCE_MODE_TEXT = {
-  demo: '演示数据 · 非实时行情',
   live: '真实数据 · 服务端定时采集'
 };
 
@@ -321,18 +310,14 @@ var SOURCE_MODE_TEXT = {
  * 来源提示条文案。
  *
  * ⚠️ 统一由 source 驱动，不要在 WXML 里硬写「数据由服务端定时采集」——
- * 后端挂了回落演示数据时，硬写的那句话会变成骗人的话。
+ * 后端没给成时，那句话会变成骗人的话。
  *
- * @param {object} source 后端/演示源给的 source 对象
+ * @param {object} source 后端给的 source 对象
  * @param {string} extra  页面自己的补充说明（如「目标价以此为基准」）
  * @returns {{text:string, warn:boolean}}
  */
 function sourceLine(source, extra) {
   var src = source || {};
-  // 后端挂了 → 回落演示数据，必须明确说出来
-  if (src.fellBack) {
-    return { text: src.reason || '后端连接失败，当前显示演示数据', warn: true };
-  }
   var text = SOURCE_MODE_TEXT[src.mode] || '数据来源待确认';
   if (extra) text = text + ' · ' + extra;
   return { text: text, warn: false };
@@ -343,7 +328,6 @@ function sourceLine(source, extra) {
  */
 function sourceName(source) {
   var src = source || {};
-  if (src.mode === 'demo') return '演示数据集';
   if (src.mode === 'live') return '服务端采集数据';
   return '待确认';
 }

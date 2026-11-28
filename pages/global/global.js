@@ -118,7 +118,7 @@ Page({
       self.applyMarket(map[symbol], map.brent, map.wti);
     }).catch(function () {
       if (seq !== self._reqSeq) return;
-      // 能走到这里说明后端失败之后本地兜底也出错了 —— 那是数据源本身的问题
+      // 后端读不到数据 —— 如实报失败（没有本地兜底，不拿假数据顶上）
       self.setData({ loading: false, loadError: '行情数据读取失败，请稍后重试' });
     });
   },
@@ -149,7 +149,7 @@ Page({
     // 品种代码：后端会给 BRENT / WTI，没给时按 symbol 兜底，别显示空字符串
     var symbol = main.symbol || this.data.symbol;
     var code = main.code || (symbol === 'wti' ? 'WTI' : 'BRENT');
-    // 后端明确说「合法为空」（还没采到行情）：显示空态，不回落演示数据
+    // 后端明确说「合法为空」（还没采到行情）：显示空态，不当加载失败
     var dataEmpty = main.empty === true;
     // 来源提示条：空态时**不能**显示「真实数据 · 服务端定时采集」——
     // 那会和「还没有采集到行情」自相矛盾（等于告诉用户这里有真实数据）。

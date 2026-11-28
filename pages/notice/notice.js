@@ -88,7 +88,7 @@ Page({
       })
       .catch(function () {
         if (seq !== self._reqSeq) return;
-        // 能走到这里说明后端失败之后本地兜底也出错了 —— 那是数据源本身的问题
+        // 后端读不到数据 —— 如实报失败（没有本地兜底，不拿假数据顶上）
         self.setData({ loading: false, loadError: '调价通知读取失败，请稍后重试' });
       });
   },
@@ -104,9 +104,7 @@ Page({
     // 同时给出「下次通知」= 下一轮调价公告的发布日。
     var winMeta = fmt.windowMeta(win);
     var sync = payload.sync || {};
-    // 同步状态要同时看 payload.source：
-    // 演示数据下报「自动同步正常」是误导（看到的不是采集结果）
-    var syncMeta = fmt.syncStatus(sync.status, payload.source);
+    var syncMeta = fmt.syncStatus(sync.status);
     // 有待人工核对的记录时不能只报「同步正常」
     if (sync.needsReview && sync.needsReview.length && syncMeta.style !== 'error') {
       syncMeta = {
@@ -114,7 +112,7 @@ Page({
         style: 'warn'
       };
     }
-    // 后端明确说「合法为空」：显示空态，不回落演示数据也不当加载失败
+    // 后端明确说「合法为空」：显示空态，不当加载失败
     var dataEmpty = payload.empty === true;
     var self = this;
 
@@ -165,20 +163,16 @@ Page({
 
     var srcLine = fmt.sourceLine(payload.source);
 
-    // 空列表要说清楚为什么空：
-    // 演示数据 → 提示换个筛选；真实来源 → 直说还没有正式公告
+    // 空列表要说清楚为什么空：预测分类还没有预测源，就直说「暂无市场预测」；
+    // 正式公告分类则说明「公告发布后会自动同步到这里」。
     var emptyText = '该分类下暂无通知';
     var emptyHint = '切换筛选条件查看其它记录';
-    var isDemo = !!(payload.source && payload.source.mode === 'demo');
-    // 后端明确说「合法为空」时也按真实来源的空态说（别让演示源的说法混进来）
-    if (!isDemo || dataEmpty) {
-      if (this.data.filter === 'forecast') {
-        emptyText = '暂无市场预测';
-        emptyHint = '预测来源接入后会自动同步';
-      } else {
-        emptyText = '还没有正式调价公告';
-        emptyHint = '正式公告发布后会自动同步到这里';
-      }
+    if (this.data.filter === 'forecast') {
+      emptyText = '暂无市场预测';
+      emptyHint = '预测来源接入后会自动同步';
+    } else {
+      emptyText = '还没有正式调价公告';
+      emptyHint = '正式公告发布后会自动同步到这里';
     }
 
     this.setData({

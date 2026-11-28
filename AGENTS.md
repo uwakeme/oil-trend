@@ -39,10 +39,10 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - `pages/` — 五个一级页面，每页四件套 `.js/.json/.wxml/.wxss`
 - `components/` — `trend-chart`（Canvas 2D 阶梯线）、`bottom-sheet`（底部弹层）
 - 底部 tabBar 用**原生 tabBar**（`app.json` 里配 `iconPath`），别用自定义组件 —— 见下方「微信小程序特有坑」
-- `utils/` — `api`（**唯一取数入口**）/ `chart` / `store` / `format` / `cloud` / `subscribe` / `demo-clock`
-- `data/` — 演示数据集（**只覆盖国内油价**）、调价时间线、地区价差；国际行情这里只有品种口径，没有行情数据
+- `utils/` — `api`（**唯一取数入口**）/ `chart` / `store` / `format` / `cloud` / `subscribe`
+- `data/` — 地区价差、油品定义、调价周期推算、吨价折算系数、各省基准价；**没有演示数据**
 - `styles/` — `tokens.wxss`（设计令牌）+ `components.wxss`（通用类）
-- `server/` — **后端**（Node + Express + PostgreSQL），填 `config.apiBaseUrl` 才启用；留空则只用演示数据
+- `server/` — **后端**（Node + Express + PostgreSQL），填 `config.apiBaseUrl` 才启用；留空则没有后端（页面显示失败态）
   - `server/src/data/provinces.json` 是**生成产物**（省界数据，脚本产出），手改会被覆盖
 - `scripts/` — 检查与构建脚本
 - `ci/` — 小程序包上传工具（`miniprogram-ci`）：`upload.js` 是上传逻辑的唯一真源，本地与 CI 共用
@@ -63,11 +63,13 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 
 ## 架构约定
 
-- **数据层与数据来源分离**：`utils/api.js` 是唯一对外取数入口，后端失败自动回落本地演示源。
+- **数据层与数据来源分离**：`utils/api.js` 是唯一对外取数入口，**一切走后端，没有本地兜底**。
   页面只认数据结构，不认来源；但**必须如实展示当前来源**，不允许把演示数据包装成实时行情
-  —— ⚠️ **国际行情是唯一的例外**：它的演示数据已删，没有可回落的东西。
-  后端连不上 = 失败态（页面给重试），后端说没采到 = 空态（顶层 `empty:true`），两条路都不给假曲线
+  —— ⚠️ 演示数据已全部删除（2026-11-28）：后端连不上 = 失败态（页面给重试按钮），
+  后端明确说没采到 = 空态（顶层 `empty:true`）。两条路都不给假数据
 - **价格模型分两层**：`某地某油品价格 = 全国价（累加所有调价幅度）+ 地区价差（该地区、该油品）`。调价幅度全国统一，零售价按地区定价
+  —— ⚠️ 这一层现在只是**校验模型**，不是线上算法：线上价格来自采集器抓到的各省挂牌价。
+    模型留在 `server/scripts/test-fixtures.js`（演示数据只属于测试），用来验证地区价差口径
   —— 地区价差**必须按油品分别存**：各省标号结构不同（98# 相对 92# 的地区差跨度 1.57 元/升），共用一套价差误差最大到 0.89 元/升
   —— `data/reference-prices.js` 存各省真实挂牌价作校验基准，自检逐省比对（124 个值）
 - **走势图画阶梯线**，不画折线 —— 国内油价只在调价日变化，横段按真实日期比例分配，不伪造连续成交价
@@ -81,7 +83,8 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 - **地区定位在服务端做**：经纬度 → 省份靠 `server/src/data/provinces.json` 的省界多边形判断
   （由 `scripts/gen-province-geo.js` 从 DataV 生成），前端只负责拿经纬度，不往小程序包里塞地理数据
   —— 坐标系全程 **GCJ-02**，与 `wx.getLocation` 的 `type:'gcj02'` 对齐
-- **演示数据日期整体平移**（`utils/demo-clock.js`，锚点 `config.demoAnchorDate`），保证长期打开数据仍然新鲜
+- **测试种子日期整体平移**（`server/scripts/test-fixtures.js`，锚点写死在该文件里），保证长期跑测试时窗口仍在未来；
+  平移坏了自检会红（`selftest.js` 的「夹具日期平移」一条）
 - **调价窗口的推算值**：来源没公布下一轮时，用「最近一次实际调价日 + 10 个工作日」推算（`data/adjust-cycle.js`，含法定节假日表；遇节假日顺延、调休上班日算工作日）。
   单一真源在小程序端 `data/`，服务端副本由 `scripts/sync-shared.js` 生成 —— 节假日表一旦分叉，推出来的日期就对不上。
   推算值**必须标「推算 · 非官方」**（项目铁律：绝不把猜测值发布成正式结果）
@@ -117,7 +120,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 模板没有「温馨提示」字段 → 地区与口径挤进「油品种类」 | 当前模板把第 6 个关键词换成了「实时油价」，**「温馨提示」没有了**：地区（广东）与口径（实测/测算/非官方）只能并进「油品种类」那一行（≤20 字符），塞不下时先丢地区、再丢额外说明 | 契约表加 role=`price` 后现价有了自己的字段；没有 tip 字段时由 `carrierOf()` 挑「油品种类」承载（`compose()` 的 rank：现价 → 地区 → 额外说明 → 幅度整句），**口径说明必留** —— 测算值不标口径就是误导；被丢弃的内容要 `console.warn` 留痕，别闷声丢掉 |
 | 一次性订阅额度是**按模板**给的 | 两个模板同时在用时，用户只授权了主模板 → 服务器拿方向模板下发吃 43101（用户没有该模板的额度），一次性额度白废 | 小程序端 `utils/subscribe.js` 把两个模板 ID 一起请求（`templateIds()`）；自检钉死「服务端配了方向模板 → 小程序端也要配上」 |
 | `amount` 字段不能带「元/升」 | 微信的 amount 类型只认「数字+元」，`"0.13 元/升"` 格式非法（47002） | 一律走契约表的 `formatAmount()`，别在业务代码里手拼 |
-| `date` 字段不吃 ISO 短日期 | `"2026-11-24"` 解析失败，要 `"2026年11月24日"` | 走契约表的 `formatDate()`；服务端取「今天」自己按 UTC+8 日历日算，**不能**用 `shared.clock.today()`（那是演示数据的平移日期）。⚠️ 服务端三个地方各算各的会差一天：`collector.js` / `alert.js` 已经是 UTC+8，`query.js` 的 `todayStr()` 原来按本地时区 —— 服务器跑 UTC 时凌晨 8 点前差一天，窗口卡上的日期整张错 |
+| `date` 字段不吃 ISO 短日期 | `"2026-11-24"` 解析失败，要 `"2026年11月24日"` | 走契约表的 `formatDate()`；服务端取「今天」自己按 UTC+8 日历日算，**不能**用演示平移日期（`shared.clock` 已随演示数据一起删除）。⚠️ 服务端三个地方各算各的会差一天：`collector.js` / `alert.js` 已经是 UTC+8，`query.js` 的 `todayStr()` 原来按本地时区 —— 服务器跑 UTC 时凌晨 8 点前差一天，窗口卡上的日期整张错 |
 | 一次性订阅授权用完即失效 | 用户每次同意只够发一条。写成永久布尔标记后，界面一直显示「微信提醒已开启」，微信那边其实已经拒收（43101） | 服务端发成功后把 `subscribe_granted` 置回 false 并记 `subscribe_used_at`；前端只在「刚拿到授权」的那一次保存里带 `subscribeGranted`，其它保存一律不带 |
 | 命中多条提醒不能连发 | 一次性授权额度只有 1 条，连发第二条必被拒 | `alert.js` 命中多条只发第一条（按 official → target → forecast 的顺序） |
 | 公告里的油品泛称会串号 | 正文写「98号汽油每升下调0.10元」，按「汽油」泛称匹配会把 98# 的幅度记到 92# 头上（后一段覆盖前一段），而 `perFuel` 还判定成「解析成功」 | 标号必须从正文**明确抓到数字**（92号/95#/98号/0号）；泛称猜不出标号就不填，`changes` 宁可留空也不复制总幅度 |
@@ -134,7 +137,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | `<button>` 在 flex 容器里被撑成宽条 / 停在行中间 | 小程序 button 的 UA 默认样式带 `margin-left/right: auto`，放进 flex 行后自动外边距会**吸收剩余空间**（`space-between` 的自由空间被它平分吃掉）—— 作者写 `margin: 0` **压不住**。实测弹层关闭按钮停在屏幕 62% 处，不贴右 | `margin: 0 !important` 钉死外边距 + `flex: 0 0 <宽>`；再让同行的标题 `flex: 1` 把剩余空间吃掉，`space-between` 才有意义（见 `styles/components.wxss` 的 `.sheet-head-title`）。**别只写 `width`** |
 | 前端读 `latestNotice`、后端只给 `notice` | 字段契约漂一个名字，首页通知在真实后端下整块失真（标题空白、金额 0.00、日期 `--`），而 `expectKeys` 不含通知字段所以照样判 live | 两个名字都给（`notice` 与 `latestNotice` 同源），前端读 `payload.latestNotice \|\| payload.notice`；`scripts/verify-contract.js` 把后端真实响应喂给页面的 `applyXxx()` 钉住 |
 | `Number(null) === 0`，空价格会显示成 `0.00` | 后端没给价格时，前端渲染「92# 0.00 元/升」—— 0.00 是真实价格，`--` 才是没有数据 | `fmt.price(null/undefined/'')` 统一返回 `'--'`；要继续算数的用 `fmt.priceValue()`（返回 null，区别于 0） |
-| 「空数据」不能整包回落演示源 | 通知列表为空是合法的（后端确实还没有正式公告），回落演示会凭空造出假通知；而行情曲线为空是真的没数据 | `utils/api.js` 分开「字段存在」与「字段有值」两套校验：通知只查存在，行情/价格要查非空 |
+| 「空数据」不能整包兜底成别的数据 | 通知列表为空是合法的（后端确实还没有正式公告），兜一份演示数据会凭空造出假通知；而行情曲线为空是真的没数据 | `utils/api.js` 分开「字段存在」与「字段有值」两套校验：通知只查存在，行情/价格要查非空；两者都不成立就**如实失败** |
 | 去重发生在副作用之后就晚了 | 「查有没有发过 → 发消息 → 落库」两个实例同时跑会各发一遍，用户收到两条 | 先占位再发送：`dao.logs.reserve()` 插入占位行（唯一键冲突就说明别人抢到了），拿到行的人才有资格发 |
 | pg-mem 的 `ON CONFLICT DO NOTHING RETURNING` 会把冲突行也返回 | 真库冲突时返回 0 行，pg-mem 却返回已有行 —— 自检分不清「抢到了」还是「撞上了」 | 用「直接插入 + 捕获 23505 唯一键冲突」，两种引擎行为一致（`dao.logs.reserve`） |
 | 部署时 `pm2 delete` 之后失败 = 线上直接没了 | `delete → npm install → apply-schema → start` 是串行的，中间任一步失败就留下「旧进程已删、新进程没起」 | 结构与配置检查放在**动进程之前**（`apply-schema` + `config.validate()`），失败时旧进程还活着；健康检查探 `/ready`（真连库），不探只查进程存活的 `/health` |
@@ -156,7 +159,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 机器判定 `approved` 的门槛定太低 = 人工关卡被取消 | 只解析出 1~2 个油品也判 approved，等于替公告补了缺失的幅度 | 门槛：**四油品齐全 + 方向明确 + 执行日期明确 + 无自相矛盾**；否则 pending 进 `needsReview` 队列，`listPublic` 只发 approved |
 | 发送失败永久占住 `dedupKey` | 占位行插了不删，下一轮 `reserve()` 唯一键冲突恒失败 —— 网络抖动这类**可重试**失败被永久跳过 | 可重试失败**释放占位行**（不消费用户额度），不可重试失败保留记录并消费额度；`listByUser` 过滤「sent=FALSE 且 fail_reason IS NULL」的僵尸行 |
 | 契约测试 stub `utils/api.js` 的 `module.exports` = 没测传输层 | `fetchWithFallback` / `hasExpected` / `stampSource` 一次都没跑，页面吃的是后端原始响应 —— 字段漂了也照样全绿 | 在 **`wx.request` 层**打本地测试服务，让 `utils/cloud.js` 与 `utils/api.js` 一行不改地真跑；通知用夹具正文驱动 `collectFromSource` 产出，**禁止手插 approved 夹具** |
-| 「合法为空」与「后端没给成」要分开 | 回落演示源会让用户看到假价格，还以为服务挂了 | 后端在合法为空时返回顶层 `empty:true`，前端 `hasExpected` 见到它就不回落演示源 |
+| 「合法为空」与「后端没给成」要分开 | 两者都兜一份演示数据，会让用户看到假价格，还以为服务正常 | 后端在合法为空时返回顶层 `empty:true`，前端 `hasExpected` 见到它就放行（显示空态）；真失败则 reject，页面显示失败态 |
 | `scroll-view` 光有 `max-height` 滚不动 | 项目自己的 AGENTS.md 就记着这条，但代码里只给了 `max-height` + `flex:1 1 auto` | 父容器给**确定高度**，滚动区 `flex: 1 1 0; min-height: 0`（basis 0 + min-height 0 才有确定高度） |
 | 发改委公告只给吨价，不给每升四油品幅度 | 正文写「国内汽、柴油（标准品）价格每吨分别下调645元、625元」—— 只有吨价、只分汽/柴油两类，附表还是 JPG 图片 | 每升四油品幅度靠各地挂牌价的**前后快照差值**测算（`server/src/services/measure.js`），界面必须写清口径（`utils/format.js` 的 `MEASURED_NOTE`），不能让人把测算值当官方公布值；测算值不能写进官方字段 |
 | 调控类公告同段有两个数 | 「每吨分别应上调440元、420元，……调控后实际上调345元、335元」—— 前者是机制理论值，后者才是实际执行值 | 只认「实际上调/下调」；只解析到「应上调」时方向明确但幅度存疑，判 pending 不发布 |
@@ -310,7 +313,7 @@ NYMEX 当月连续），布伦特原油走新浪财经（快照，**场外差价
 接口权限需在公众平台「开发管理 → 接口设置」申请 `wx.getLocation`，未开通时静默降级到默认地区。
 
 微信云开发那套已下线（云函数目录已删，见 git 历史）；`config/index.js` 的
-`apiBaseUrl` 留空则一律使用演示数据。
+`apiBaseUrl` 留空则没有后端，小程序一律显示读取失败（演示数据已删除，不会给假价格）。
 小程序图标已定为 **8-bit 像素风**：`assets/app-icon/app-icon.png`（512×512，公众平台后台上传用）。tabBar 导航图标仍是细描边 SVG 风格，与像素风**尚未统一**。
 
 `docs/assets/og.png` 是 1200×630 **位图**，品牌名烧在像素里 —— 改名字时 grep 搜不到它，得单独重绘。

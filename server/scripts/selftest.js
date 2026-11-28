@@ -1085,13 +1085,14 @@ async function main() {
       usedAt: afterConsumeNow.subscribeUsedAt }));
   check('同一个快照不能重复消费额度', await dao.rules.consumeSubscribe(afterRegrant) === false);
 
-  console.log('\n--- 三端数值一致性 ---');
-  var demo = require(path.join(ROOT, '..', 'data', 'demo.js'));
-
   console.log('\n--- 各省价格 vs 真实挂牌价 ---');
   // data/reference-prices.js 是各省发改委公布的最高零售价基准。
   // 算出来的价格必须与它一致 —— 这条守住「地区价差」模型的核心正确性：
   // offset 写错、基准价没校准、offset 忘了按油品分列，都会被抓出来。
+  //
+  // ⚠️ 算价的是**测试夹具**里的价格阶梯（scripts/test-fixtures.js）：
+  //    演示数据已从小程序端删除，生产价格来自采集器抓到的各省挂牌价，
+  //    这套「全国价 + 地区价差」的模型现在只用来验证地区价差口径。
   var reference = require(path.join(ROOT, '..', 'data', 'reference-prices.js')).REFERENCE_PRICES;
   var priceMismatch = [];
   var compared = 0;
@@ -1103,7 +1104,7 @@ async function main() {
     }
     shared.FUELS.forEach(function (fuel) {
       compared++;
-      var calc = demo.currentPrice(region.code, fuel.id);
+      var calc = fixtures.currentPrice(region.code, fuel.id);
       if (Math.abs(calc - ref[fuel.id]) > 0.011) {
         priceMismatch.push(region.name + ' ' + fuel.id + '# 算 ' + calc.toFixed(2) +
           ' 基准 ' + ref[fuel.id].toFixed(2));
@@ -1118,15 +1119,52 @@ async function main() {
   check('各省价格与真实挂牌价一致（' + compared + ' 个值）', priceMismatch.length === 0,
     priceMismatch.slice(0, 5).join('；'));
 
-  var mismatch = 0;
-  shared.REGIONS.forEach(function (region) {
-    shared.FUELS.forEach(function (fuel) {
-      if (Math.abs(demo.currentPrice(region.code, fuel.id) - shared.currentPrice(region.code, fuel.id)) > 0.0001) {
-        mismatch++;
+  // ⚠️ 以前这里还有一条「服务端与小程序端价格完全一致」：
+  //    小程序端有一份演示源、服务端有一份共享副本，两边比的是同一套算法。
+  //    演示数据删除后只剩一份实现（测试夹具里），比的东西没有了 —— 那条断言已删。
+
+  // 夹具的日期平移：种子数据必须一直「新鲜」
+  //
+  // ⚠️ 夹具的调价节点按「今天 - 锚点」整体平移（scripts/test-fixtures.js）。
+  //    不平移的话，几周后种子就停在 2026-11-10：调价节点全在过去、
+  //    下一轮窗口早就过期，窗口倒计时与进度相关的断言会随日期漂。
+  // 这里伪造几个未来时点，断言「下一轮窗口」一直在未来。
+  console.log('\n--- 夹具日期平移（未来不会退化）---');
+  var degradeProblems = [];
+  [0, 30, 60, 120, 240].forEach(function (offsetDays) {
+    var RealDate = Date;
+    var shifted = new RealDate(RealDate.now() + offsetDays * 86400000);
+    function FakeDate() {
+      var args = Array.prototype.slice.call(arguments);
+      if (args.length === 0) return new RealDate(shifted.getTime());
+      return new (Function.prototype.bind.apply(RealDate, [null].concat(args)))();
+    }
+    FakeDate.prototype = RealDate.prototype;
+    FakeDate.now = function () { return shifted.getTime(); };
+    FakeDate.parse = RealDate.parse;
+    FakeDate.UTC = RealDate.UTC;
+    global.Date = FakeDate;
+    var fixturePath = require.resolve(path.join(ROOT, 'scripts', 'test-fixtures.js'));
+    try {
+      // 换时间必须重新加载夹具：levels 里有缓存
+      delete require.cache[fixturePath];
+      var fresh = require(fixturePath);
+      var list = fresh.levels('92');
+      var last = list[list.length - 1];
+      var next = new Date(new Date(last.date + 'T00:00:00Z').getTime() + 10 * 86400000);
+      var nextDate = next.toISOString().slice(0, 10);
+      var daysLeft = Math.round((Date.parse(nextDate + 'T00:00:00Z') -
+        Date.parse(fresh.today() + 'T00:00:00Z')) / 86400000);
+      if (daysLeft <= 0) {
+        degradeProblems.push('+' + offsetDays + '天：下一轮窗口在过去（剩 ' + daysLeft + ' 天）');
       }
-    });
+    } finally {
+      global.Date = RealDate;
+      delete require.cache[fixturePath];
+    }
   });
-  check('服务端与小程序端价格完全一致', mismatch === 0, mismatch + ' 组不一致');
+  check('夹具日期平移：任意未来时点下一轮窗口都在未来', degradeProblems.length === 0,
+    degradeProblems.join('；'));
 
   // 经纬度 → 省份：小程序「自动定位所在省」的基础。
   // 这里钉住每个省的省会坐标，省界数据被误改时会立刻暴露。

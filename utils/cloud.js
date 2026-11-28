@@ -48,7 +48,7 @@ function initCloud(app) {
   if (config.apiBaseUrl) {
     backend = 'server';
     initError = null;
-    // 自建后端要先登录换 token，失败不影响后续取数（api.js 会回落演示源）
+    // 自建后端要先登录换 token，失败不影响后续取数（接口会返回 401，页面显示失败态）
     ensureLogin();
     return true;
   }
@@ -87,7 +87,7 @@ function backendName() {
 
 /**
  * wx.login() 换 code → 服务端换 token。
- * 失败不抛：取数时如果没 token，服务端会返回 401，api.js 照样回落演示源。
+ * 失败不抛：取数时如果没 token，服务端会返回 401，页面显示失败态。
  *
  * 注意这是异步的：onLaunch 里发起登录时，页面可能已经在取数了。
  * 所以用户类接口要等登录完成 —— 下面的 loginReady 就是干这个的。

@@ -117,7 +117,7 @@ function regionNameOf(regionCode) {
 /**
  * 服务器「今天」（按 UTC+8 日历日）。
  *
- * ⚠️ 不能用 shared.clock.today()：那是**演示数据**的平移日期，
+ * ⚠️ 不能用演示数据的平移日期（那个 shared.clock 已随演示数据一起删除）：
  * 线上真实场景拿来当今天会算错日期。
  */
 function todayCN() {
