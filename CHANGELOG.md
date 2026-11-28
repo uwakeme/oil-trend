@@ -6,6 +6,10 @@
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
 ## [Unreleased]
+
+## [1.0.6] - 2026-11-28
+### Added
+- 国际行情接入真实源：纽约原油走东方财富（快照 + 5 分钟线与日线历史），布伦特原油走新浪财经（场外差价合约 CFD 报价）；国际页写明品种口径，布伦特与 ICE 结算价的基差不再让人误以为「数和网上搜的对不上」
 ### Removed
 - 国际行情的演示数据：以前服务端没采到行情时回落的是写死的 78.42 / 74.16 加伪随机曲线（时间戳却按「现在」打），看着像刚更新的实时行情。现在服务端查不到记录就返回空态，页面显示「还没有采集到行情」；后端连不上就是失败态加重试按钮
 - 国内油价的本地兜底演示数据：后端不可用时不再回落内置演示数据，五个页面一律显示失败态与「重新加载」按钮 —— 宁可告诉用户读不到，也不给一份看着正常、其实是编出来的价格（内置演示数据集、演示调价时间线、演示时钟与 `dataSource` 配置项一并删除）
@@ -28,7 +32,8 @@
 ### Added
 - 首页「数据来源与说明」底部展示小程序备案号与工信部查询地址，点一下即可复制到剪贴板
 
-[Unreleased]: https://github.com/uwakeme/oil-trend/compare/v1.0.5...HEAD
+[Unreleased]: https://github.com/uwakeme/oil-trend/compare/v1.0.6...HEAD
+[1.0.6]: https://github.com/uwakeme/oil-trend/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/uwakeme/oil-trend/compare/v1.0.4...v1.0.5
 [1.0.4]: https://github.com/uwakeme/oil-trend/compare/v1.0.3...v1.0.4
 [1.0.3]: https://github.com/uwakeme/oil-trend/compare/v1.0.2...v1.0.3
