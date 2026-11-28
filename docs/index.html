@@ -270,7 +270,7 @@ img { max-width: 100%; display: block; }
 }
 .model-grid {
   margin-top: 40px;
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px;
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px;
   background: var(--line);
   border: 1px solid var(--line);
   border-radius: 3px; overflow: hidden;
@@ -506,10 +506,10 @@ img { max-width: 100%; display: block; }
     </div>
     <figure class="chart-card reveal">
       <figcaption class="chart-head">
-        <span class="chart-title">全国 92# 均价（元/升）</span>
+        <span class="chart-title">全国 92# 价格阶梯（模型校验样例）</span>
         <span class="chart-tag">阶梯线</span>
       </figcaption>
-      <svg class="chart-svg" viewBox="0 0 660 300" role="img" aria-label="全国 92# 汽油均价阶梯线，2025 年 10 月至 2026 年 11 月共 24 次调价节点，末次 8.94 元每升">
+      <svg class="chart-svg" viewBox="0 0 660 300" role="img" aria-label="全国 92# 汽油价格阶梯线样例，2025 年 10 月至 2026 年 11 月共 24 次调价节点，末次 8.94 元每升，取自仓库测试夹具">
         <path d="M48 258.6h594M48 204.7h594M48 150.8h594M48 96.9h594M48 43h594" stroke="rgba(245,242,233,.13)" stroke-width="1" fill="none"/>
         <g fill="#8fa99c" font-family="Bahnschrift, DIN Alternate, Helvetica Neue, Arial, sans-serif" font-size="11" text-anchor="end">
           <text x="40" y="262.6">8.85</text><text x="40" y="208.7">8.95</text><text x="40" y="154.8">9.05</text><text x="40" y="100.9">9.15</text><text x="40" y="47">9.25</text>
@@ -525,7 +525,7 @@ img { max-width: 100%; display: block; }
         </g>
       </svg>
       <p class="chart-note">横段是价格不变的调价周期，竖线是调价那一刻的跳变。国内油价 30 天不动一次，所以走势画的是<b>阶梯线</b>，不是折线。
-        <br>24 个节点，取自仓库 <code>server/scripts/test-fixtures.js</code>
+        <br>24 个节点，取自仓库 <code>server/scripts/test-fixtures.js</code> 的测试夹具 —— 用来演示阶梯线怎么画，不是线上行情
       </p>
     </figure>
   </div>
@@ -577,11 +577,11 @@ img { max-width: 100%; display: block; }
     <header class="sec-head reveal">
       <div class="sec-rail"><i></i><p class="eyebrow">算法</p></div>
       <h2>全国价 + 地区价差</h2>
-      <p class="sec-sub">国内成品油价格有两条规矩：调价幅度全国统一，落地零售价按地区定价。所以价格拆成两层算。</p>
+      <p class="sec-sub">国内成品油价格有两条规矩：调价幅度全国统一，落地零售价按地区定价。所以价格能拆成两层核对。</p>
     </header>
     <div class="formula reveal">
       某地某油品价格 = 全国价<span class="op">（累加所有调价幅度）</span>+ 地区价差<span class="op">（该地区、该油品）</span>
-      <p class="formula-sub">全国价来自调价时间线；地区价差按油品分别存，覆盖 31 个省级行政区。</p>
+      <p class="formula-sub">全国价来自调价时间线；地区价差按油品分别存，覆盖 31 个省级行政区。<br>⚠️ 这一层现在是<b>校验模型</b>，不是线上算法：小程序显示的价格来自采集器抓到的各省发改委最高零售价，这套模型只留在测试夹具里，用来验证地区价差口径。</p>
     </div>
     <div class="model-grid">
       <div class="model-card reveal">
@@ -599,6 +599,11 @@ img { max-width: 100%; display: block; }
         <h4>124 个基准值盯着</h4>
         <p>基准价存各省真实挂牌价，自检时逐省比对 124 个值。算错了会当场对不上，不会悄悄发出去。</p>
       </div>
+      <div class="model-card reveal">
+        <div class="mark">04 / 线上口径</div>
+        <h4>展示的价格另有来路</h4>
+        <p>线上价格由采集器定时抓各省挂牌价入库，走势图与价格表都读这一份。本页的模型只用来校验，不参与对外发布。</p>
+      </div>
     </div>
     <div class="spread">
       <div class="spread-item reveal">
@@ -615,7 +620,7 @@ img { max-width: 100%; display: block; }
     <div class="example reveal">
       <span class="who">广东·广州 92#</span>
       <span class="calc">全国价 <em>8.94</em> + 地区价差 <em>(−0.03)</em> = <b>8.91 元/升</b></span>
-      <span class="tag">演示数据集中的算例</span>
+      <span class="tag">价格模型的校验算例</span>
     </div>
   </div>
 </section>
@@ -663,7 +668,7 @@ img { max-width: 100%; display: block; }
       <ul class="rules reveal">
         <li><span class="n">01</span><p>解析不出结构化字段就进人工核对队列，<b>绝不把猜测值发布成正式结果</b>。</p></li>
         <li><span class="n">02</span><p>预测类信息一律标「非官方」；来源只说方向没给幅度时，<b>幅度留空而不是填 0</b>。</p></li>
-        <li><span class="n">03</span><p>后端不可用时前端自动回落本地演示源，<b>界面写明当前拿的是哪一种</b>，不把演示数据说成实时行情。</p></li>
+        <li><span class="n">03</span><p>后端不可用时前端<b>如实显示失败态并给重试按钮</b>，不拿任何兜底数据顶上 —— 读不到就说读不到。</p></li>
       </ul>
     </div>
   </div>
@@ -688,9 +693,9 @@ cd oil-trend</code><button class="copy" data-copy-target="#cmd-clone">复制</bu
         <p>微信开发者工具 2.02.2609250 或更新，基础库 3.8.10，打开这个目录直接编译就能跑。</p>
       </li>
       <li class="step reveal">
-        <div class="n">03 / 后端（可选）</div>
-        <h3>不配也能跑</h3>
-        <p>不配后端地址时走本地演示源，全部交互都跑得通。</p>
+        <div class="n">03 / 后端（必需）</div>
+        <h3>先起后端</h3>
+        <p>小程序的一切取数都走后端，不配地址就没有数据 —— 页面会显示失败态，不会编一份假价格给你。</p>
         <div class="code"><span class="prompt">$</span> <code id="cmd-server">cd server
 npm install
 cp .env.example .env
@@ -701,7 +706,7 @@ npm start</code><button class="copy" data-copy-target="#cmd-server">复制</butt
       <div class="reveal">
         <h3>接上自己的后端</h3>
         <p>后端是 Node 18 + Express + PostgreSQL。改后端地址只动 <code>config/index.js</code> 的 <code>apiBaseUrl</code> 一处，页面与数据层一行不用动。</p>
-        <div class="warn"><b>域名要先进白名单。</b>公众平台的「服务器域名 → request 合法域名」里没配，请求会被直接拦掉，页面就一直显示演示数据。</div>
+        <div class="warn"><b>域名要先进白名单。</b>公众平台的「服务器域名 → request 合法域名」里没配，请求会被直接拦掉，页面就一直显示失败态。</div>
       </div>
       <div class="reveal">
         <h3>改完先跑这几条</h3>
@@ -735,7 +740,7 @@ npm start</code><button class="copy" data-copy-target="#cmd-server">复制</butt
       <a href="https://github.com/uwakeme/oil-trend/tags" target="_blank" rel="noopener">标签</a>
       <a href="https://github.com/uwakeme/oil-trend/blob/main/LICENSE" target="_blank" rel="noopener">许可证</a>
     </nav>
-    <p class="foot-note">页面上的调价节点与地区价差取自仓库 data 目录里的真实文件；小程序界面里的价格随演示数据平移，不代表实时行情。</p>
+    <p class="foot-note">页面上的调价节点与地区价差取自仓库 data 目录里的真实文件；小程序界面里的价格由服务端定时采集各省挂牌价后给出，不代表实时成交价。</p>
   </div>
 </footer>
 <script>

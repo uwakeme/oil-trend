@@ -524,8 +524,8 @@ async function loadPricesByRegion() {
 
 /**
  * 该地区是否在新鲜期内。
- * 只认同来源的真实采集时间 —— seed 演示数据的 updatedAt 不算，
- * 否则演示库会让真实采集永远跳过。
+ * 只认同来源的真实采集时间 —— 测试种子（source=seed）的 updatedAt 不算，
+ * 否则种子数据会让真实采集永远跳过。
  */
 function regionFresh(docs, sourceId, freshHours) {
   if (!docs) return false;
@@ -781,7 +781,7 @@ function referenceCheck(region, fuelId, price) {
 /**
  * 入库一个地区的四油品当前价。
  *
- * 涨跌只跟同来源旧价比：seed 演示价不是真实旧价，差值没有意义。
+ * 涨跌只跟同来源旧价比：测试种子价不是真实旧价，差值没有意义。
  * 首次真实采集 changeAmount 记 0、changeAt 留空（不知道上次调价日），
  * 界面据此显示「暂无调价对比」，不假装成持平。
  *

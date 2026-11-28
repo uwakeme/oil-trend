@@ -158,7 +158,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 执行日期要认「…24时起」的生效语义 | 不限语境直接取第一个匹配，「上次调价自11月1日24时起」会被当成本轮生效日 | 日期必须带「24时/24:00」，并剔除被「上次/上轮/此前/前次」修饰的那一个 |
 | 机器判定 `approved` 的门槛定太低 = 人工关卡被取消 | 只解析出 1~2 个油品也判 approved，等于替公告补了缺失的幅度 | 门槛：**四油品齐全 + 方向明确 + 执行日期明确 + 无自相矛盾**；否则 pending 进 `needsReview` 队列，`listPublic` 只发 approved |
 | 发送失败永久占住 `dedupKey` | 占位行插了不删，下一轮 `reserve()` 唯一键冲突恒失败 —— 网络抖动这类**可重试**失败被永久跳过 | 可重试失败**释放占位行**（不消费用户额度），不可重试失败保留记录并消费额度；`listByUser` 过滤「sent=FALSE 且 fail_reason IS NULL」的僵尸行 |
-| 契约测试 stub `utils/api.js` 的 `module.exports` = 没测传输层 | `fetchWithFallback` / `hasExpected` / `stampSource` 一次都没跑，页面吃的是后端原始响应 —— 字段漂了也照样全绿 | 在 **`wx.request` 层**打本地测试服务，让 `utils/cloud.js` 与 `utils/api.js` 一行不改地真跑；通知用夹具正文驱动 `collectFromSource` 产出，**禁止手插 approved 夹具** |
+| 契约测试 stub `utils/api.js` 的 `module.exports` = 没测传输层 | `fetchBackend` / `hasExpected` / `stampSource` 一次都没跑，页面吃的是后端原始响应 —— 字段漂了也照样全绿 | 在 **`wx.request` 层**打本地测试服务，让 `utils/cloud.js` 与 `utils/api.js` 一行不改地真跑；通知用夹具正文驱动 `collectFromSource` 产出，**禁止手插 approved 夹具** |
 | 「合法为空」与「后端没给成」要分开 | 两者都兜一份演示数据，会让用户看到假价格，还以为服务正常 | 后端在合法为空时返回顶层 `empty:true`，前端 `hasExpected` 见到它就放行（显示空态）；真失败则 reject，页面显示失败态 |
 | `scroll-view` 光有 `max-height` 滚不动 | 项目自己的 AGENTS.md 就记着这条，但代码里只给了 `max-height` + `flex:1 1 auto` | 父容器给**确定高度**，滚动区 `flex: 1 1 0; min-height: 0`（basis 0 + min-height 0 才有确定高度） |
 | 发改委公告只给吨价，不给每升四油品幅度 | 正文写「国内汽、柴油（标准品）价格每吨分别下调645元、625元」—— 只有吨价、只分汽/柴油两类，附表还是 JPG 图片 | 每升四油品幅度靠各地挂牌价的**前后快照差值**测算（`server/src/services/measure.js`），界面必须写清口径（`utils/format.js` 的 `MEASURED_NOTE`），不能让人把测算值当官方公布值；测算值不能写进官方字段 |
@@ -196,7 +196,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 | 推导节点的日期是**生效日**，不是执行日 | 官方公告的 `executeAt` 是执行日，`oil_adjust_events` 的 date 是挂牌价生效日（新价从执行日次日 00:00 才开始挂） | 推算基准要把推导节点**减一天**（`server/src/services/query.js` 的 `latestAdjustDate`）；不减的话下一轮整体多推一天（11-26 变 11-27） |
 | 公告发布日 ≠ 采集入库时刻 | `publishedAt` 是采集入库时间，列表里 4 条公告全显示成入库那天的日期，看着像刚发的 | 展示层读 `announcedAt`（发改委公告的 PubDate）；实测 35 条公告的**发布日与调价执行日全部同一天**（提前天数分布：提前 0 天 35 条），发布时刻 09:15~16:59 |
 | 「下次通知时间」跟「下次调价日」是同一天 | 发改委公告在**调价执行当天**发布，不是提前几天 —— 写成「提前 N 天收到通知」就是错的 | 下次通知日 = 下次调价日（同一天），差别只在时刻：公告上午发，24:00 才调价。口径写进 `data/adjust-cycle.js` 的 `NOTICE_TIME_NOTE` |
-| 国际页显示的是**写死的演示常量**，不是真实行情 | `market-quote` 源默认 `enabled:false`（`server/src/services/sources.js`），`oil_markets` 表一直是空的 → 接口回落共享模块的演示载荷：78.42 / 74.16 是 `data/markets.js` 里的常量，曲线是 mulberry32 伪随机生成，时间戳却按「现在」打 —— 看着像刚更新的实时行情 | 2026-11-28 已接真实源；**演示行情已删**，服务端查不到记录就返回 `empty:true` 空态。`source.mode='demo'` 这条退路没有了 —— 宁可空着也不能造一条假曲线 |
+| 国际页显示的是**写死的演示常量**，不是真实行情 | 当时 `market-quote` 源默认 `enabled:false`（现已拆成 `market-wti` / `market-brent` 两个真实源，见 `server/src/services/sources.js`），`oil_markets` 表一直是空的 → 接口回落共享模块的演示载荷：78.42 / 74.16 是 `data/markets.js` 里的常量，曲线是 mulberry32 伪随机生成，时间戳却按「现在」打 —— 看着像刚更新的实时行情 | 2026-11-28 已接真实源；**演示行情已删**，服务端查不到记录就返回 `empty:true` 空态。`source.mode='demo'` 这条退路没有了 —— 宁可空着也不能造一条假曲线 |
 | 空态还挂着「真实数据 · 服务端定时采集」 | 后端返回 `empty:true`（还没采到行情），前端照样套通用来源文案 → 页面同时写着「还没有采集到行情」和「真实数据」，等于骗用户 | 空态时来源条改用后端给的 `note`，不套通用文案；`scripts/verify-contract.js` 有断言钉住 |
 | 行情 `quoteTime` 是 `MM-DD HH:mm:ss`（缺年份） | `Date.parse` 把缺年份的补成 **2001 年** → 「现在 - 报价时刻」= 1300 多万分钟（线上接口实际吐过 `delayMinutes: 13148652`） | 用 `notices.js` 的 `parseQuoteTime()`：无时区标注按 UTC+8 解释、缺年份补当前年；`server/scripts/selftest.js` 有断言钉住 |
 | 行情曲线切片把**点对象**丢给 `seriesTime` | `list.map(seriesTime)` 的回调收到的是 `{date, value}` 整个对象，`String(对象)` = `'[object Object]'` → 全部解析失败 → `last` 为 null → **曲线永远只剩最后一个点**，真实行情入库后国际页画不出线 | 必须传 `p.date`：`list.map(function (p) { return seriesTime(p && p.date); })`；自检里用「库里真有一条行情」的行钉住四个周期都能切出多个点 |
@@ -245,7 +245,7 @@ node scripts/verify-in-devtools.js   # 逐页截图 + 运行时异常捕获（2.
 
 - 改完页面/WXML/组件，**必须**跑 `node scripts/lint-wxml.js`（0 错误 0 警告才算过）和 `node scripts/check-modules.js`（模块加载期异常静态检查查不出来）
 - 改数据层或算法，跑 `node scripts/verify-data.js` 对照输出值
-- **改了前后端之间的字段**，跑 `node scripts/verify-contract.js` —— 它在 `wx.request` 层打本地测试服务，让前端**真走** `fetchWithFallback`（不是 stub api 层），字段漂移、空值冒充 0.00、来源标错、回落与竞态都靠它挡
+- **改了前后端之间的字段**，跑 `node scripts/verify-contract.js` —— 它在 `wx.request` 层打本地测试服务，让前端**真走** `fetchBackend`（不是 stub api 层），字段漂移、空值冒充 0.00、来源标错、失败态与竞态都靠它挡
 - **改了服务端的解析器或可信度判定**，跑 `node scripts/verify-collector.js`（解析回归）与 `verify-contract.js`（采集链路 → 入库 `review_status` → 对外可见性）
 - **改了公告解析或测算**，拿 `scripts/fixtures/ndrc-*.html`（发改委真实公告原文）做回归；
   改动公告解析器时必须覆盖三类：普通调价、调控类（取「实际上调」）、搁浅（不作调整）

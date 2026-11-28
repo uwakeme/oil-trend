@@ -38,7 +38,7 @@
 }
 .save-hint.saved .micro { color: var(--green); }
 .save-hint.failed .micro { color: var(--red); }
-/* 只存在本机（演示模式）：存上了，但不是服务器确认，用中性色 */
+/* 只存在本机（后端未配置 / 保存失败）：存上了，但不是服务器确认，用中性色 */
 .save-hint.offline .micro { color: var(--muted); }
 .save-retry {
   margin: 0 !important;
@@ -281,7 +281,7 @@
 /* ---------- 来源提示条 ---------- */
 /*
  * 五页统一显示「这次数据从哪来」。
- * 后端挂了回落演示数据时必须看得见 —— 静默换成演示数据装没事，
+ * 后端不可用时必须看得见 —— 静默换一份假数据装没事，
  * 等于骗用户以为看到的是真实油价。
  */
 .source-bar {

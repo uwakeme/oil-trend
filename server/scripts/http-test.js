@@ -75,7 +75,7 @@ async function main() {
   dbModule.pool.query = function (text, params) { return pgPool.query(text, params); };
   await db.public.query(fs.readFileSync(path.join(ROOT, 'schema.sql'), 'utf8'));
 
-  // 灌演示数据（测试夹具，不在生产代码里）
+  // 灌测试数据（测试夹具，不在生产代码里）
   var fixtures = require(path.join(ROOT, 'scripts', 'test-fixtures.js'));
   await fixtures.seed();
 

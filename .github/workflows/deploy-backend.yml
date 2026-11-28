@@ -155,10 +155,10 @@ jobs:
             # 配置不全就在旧进程还活着的时候退出，天然就是回滚。
             node -e "var c=require('./src/config');var r=c.validate();r.warnings.forEach(function(w){console.warn('⚠ '+w)});if(r.errors.length){console.error('配置不完整：');r.errors.forEach(function(e){console.error('  - '+e)});process.exit(1)}console.log('配置检查通过')"
 
-            echo "跳过演示数据灌入..."
-            # 生产库不灌演示数据。
-            # 之前这里是「库空就自动灌」，结果每次部署都会把演示数据
+            # 生产库不灌任何种子数据。
+            # 之前这里是「库空就自动灌演示数据」，结果每次部署都会把演示数据
             # 重新灌回去 —— 手动清理完，下一次部署又白清了。
+            # 演示数据已从小程序端删除（2026-11-28），这里不再有灌数据的动作。
 
             echo "重启 PM2 进程..."
             if [ ! -f "${DEPLOY_DIR}/server/oil-trend-pm2.json" ]; then

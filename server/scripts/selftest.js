@@ -4,7 +4,7 @@
  *
  * 为什么用 pg-mem 而不是真库：
  *   本机不一定装了 PostgreSQL，而这个项目最需要守住的不是「能连上库」，
- *   而是「返回结构对不对」—— 结构不对前端会静默回落到演示数据，
+ *   而是「返回结构对不对」—— 结构不对前端会 reject，页面显示失败态，
  *   页面看着正常但实际没走后端。pg-mem 能验证 SQL 与结构。
  *
  * 用法：node scripts/selftest.js
@@ -65,8 +65,8 @@ async function main() {
     check('表 ' + t + ' 已创建', names.indexOf(t) !== -1);
   });
 
-  // 灌演示数据（测试夹具，不在生产代码里）
-  console.log('\n--- 灌演示数据 ---');
+  // 灌测试数据（测试夹具，不在生产代码里）
+  console.log('\n--- 灌测试数据 ---');
   var fixtures = require(path.join(ROOT, 'scripts', 'test-fixtures.js'));
   var seedResult = await fixtures.seed();
   check('seed 返回成功', !!(seedResult && seedResult.ok));
@@ -224,7 +224,7 @@ async function main() {
     source: 'market-wti'
   });
   var liveMarket = await notices.actionMarket({ symbol: 'wti', period: '1d' });
-  check('真实行情：来源是真实数据（不是演示回落）',
+  check('真实行情：来源是真实数据（不是兜底数据）',
     liveMarket.source && liveMarket.source.mode === 'server', JSON.stringify(liveMarket.source));
   check('真实行情：axis 是三档数组（给字符串的话小程序 wx:for 会拆成字符）',
     Array.isArray(liveMarket.axis) && liveMarket.axis.length === 3, JSON.stringify(liveMarket.axis));

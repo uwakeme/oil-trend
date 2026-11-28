@@ -127,7 +127,7 @@ function seriesTime(dateStr) {
   return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), h, mi, se) - 8 * 3600000;
 }
 
-/** 'YYYY-MM-DD HH:mm:ss' → 'MM-DD HH:mm:ss'（展示用，与演示源同格式） */
+/** 'YYYY-MM-DD HH:mm:ss' → 'MM-DD HH:mm:ss'（展示用） */
 function shortQuoteTime(value) {
   var s = String(value || '');
   if (/^\d{4}-\d{2}-\d{2} /.test(s)) return s.slice(5);
@@ -170,7 +170,7 @@ function sliceSeries(series, period) {
  * 解析行情报价时刻 → 时间戳（毫秒）；解析不出来返回 null。
  *
  * ⚠️ 报价时刻有两种写法，两种都不能直接交给 Date.parse：
- *   'MM-DD HH:mm:ss'     —— 缺年份（演示源与部分行情源的写法）。
+ *   'MM-DD HH:mm:ss'     —— 缺年份（部分行情源的写法）。
  *     Date.parse 把缺年份的补成 2001 年，「现在 - 报价时刻」算出来是
  *     1300 多万分钟（≈25 年），线上接口实际吐出的是 13148652 分钟。
  *   'YYYY-MM-DD HH:mm:ss' —— 服务端共享模块的写法。
@@ -247,7 +247,7 @@ function actionMarket(payload) {
       var emptyInstrument = shared.MARKET_INSTRUMENTS[symbol] || {};
       return {
         // empty=true 是给前端的信号：这是「真的没数据」，不是「接口坏了」，
-        // 前端据此显示空态，既不回落演示数据，也不显示加载失败。
+        // 前端据此显示空态：既不当成失败，也不拿别的数据顶上。
         empty: true,
         symbol: symbol,
         name: emptyInstrument.name || symbol,
@@ -297,7 +297,7 @@ function actionMarket(payload) {
       changeAmount: changeAmount,
       changePercent: doc.changePercent || 0,
       // direction 是前端 trend-chart 的必传属性（String），
-      // 演示源 data/markets.js 也有，这里必须补上，否则前端拿到 null。
+      // data/markets.js 里也定义了这套字段，这里必须补上，否则前端拿到 null。
       // 三态：涨跌额为 0 是「持平」，不能染成上涨。
       direction: changeAmount < 0 ? 'down' : (changeAmount > 0 ? 'up' : 'flat'),
       open: doc.open,

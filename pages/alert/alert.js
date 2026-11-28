@@ -62,7 +62,7 @@ function historyTime(value) {
  * 历史记录 → 统一的展示结构。
  *
  * 后端返回的记录是 {userId,dedupKey,sent,failReason,time,payload}，
- * 本地演示记录是 {id,title,time,channel,priceText} —— 字段不一样，
+ * 本机留存的记录是 {id,title,time,channel,priceText} —— 字段不一样，
  * 直接渲染的话后端记录会是一片空白。
  */
 function historyView(item, index) {
@@ -84,7 +84,7 @@ function historyView(item, index) {
     time: item.time || '',
     channel: item.channel || '',
     priceText: item.priceText || '',
-    // 本地演示记录没有 sent 字段，按既有的成功记录语义展示。
+    // 本机留存的记录没有 sent 字段，按既有的成功记录语义展示。
     sent: item.sent !== false
   };
 }
@@ -180,7 +180,7 @@ Page({
       if (seq !== self._reqSeq) return;
       var home = res[0] || {};
       var rulesRes = res[1];
-      // ⚠️ 规则可能来自本地副本（后端读失败 / 演示模式）——
+      // ⚠️ 规则可能来自本地副本（后端读失败 / 未配置后端）——
       // 那不是服务端确认过的状态，订阅卡片不能据此显示「已开启」。
       var rules = Array.isArray(rulesRes) ? rulesRes : ((rulesRes && rulesRes.rules) || []);
       var rulesConfirmed = Array.isArray(rulesRes) ? true : !!(rulesRes && rulesRes.confirmed);
@@ -230,8 +230,8 @@ Page({
       // 来源：提醒页的当前价来自 home，home.source 原来被整份丢掉了，
       // 现在存下来如实展示 —— 后端读不到时也要有记录可看。
       var sourceLine = fmt.sourceLine(home.source, '目标价以此为基准');
-      // 历史记录是不是演示的：后端返回的记录带 dedupKey，
-      // 本地演示记录没有这个字段（{id,title,time,channel,priceText}）。
+      // 历史记录是不是后端的：后端返回的记录带 dedupKey，
+      // 本机留存的记录没有这个字段（{id,title,time,channel,priceText}）。
       // ⚠️ 不看模块级全局来源状态：那种状态被 home / rules / history
       self.setData({
         loading: false,
@@ -306,7 +306,7 @@ Page({
         buttonText: '查看说明'
       };
     }
-    // ⚠️ 规则只存在本机（后端读失败 / 演示模式）：
+    // ⚠️ 规则只存在本机（后端读失败 / 未配置后端）：
     // 本地副本不能当成「提醒已经开着」—— 服务端没有这条规则，提醒不会来。
     if (this._rulesConfirmed === false) {
       return {
@@ -421,7 +421,7 @@ Page({
     this._saveChain = next.then(function () {}, function () {});
     return next.then(function (res) {
       // 只有真的写到服务器才敢说「已保存到服务器」：
-      // 演示模式与离线只是存了本机副本，不能当成服务端已确认。
+      // 未配置后端与离线只是存了本机副本，不能当成服务端已确认。
       var online = !!(res && res.ok && !res.offline);
       if (online) {
         self._pendingGrant = false;
@@ -432,8 +432,8 @@ Page({
         self._pendingGrant = true;
       }
       // 三态：已存到服务器 / 只存在本机 / 保存失败。
-      // ⚠️ 演示模式（没配后端）规则**已经存到本机**了，
-      //   写成「失败」会弹出「重试保存」按钮，而重试在演示模式下毫无意义。
+      // ⚠️ 没配后端时规则**已经存到本机**了，
+      //   写成「失败」会弹出「重试保存」按钮，而没配后端时重试毫无意义。
       var offline = !!(res && res.ok && res.offline);
       self.setData({
         saveState: online ? 'saved' : (offline ? 'offline' : 'failed'),

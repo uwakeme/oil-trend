@@ -5,7 +5,7 @@
  * 页面完全不知道后端是云开发还是自建服务器。
  *
  * 后端只有自建服务器（server/）：填了 config.apiBaseUrl 就走 wx.request，
- * 没填就当作「没有后端」，所有取数回落到本地演示数据。
+ * 没填就当作「没有后端」，所有取数都会失败（页面显示失败态）。
  *（微信云开发那套已下线，云函数目录也删了 —— 见 git 历史）
  *
  * ⚠️ 上层仍按「函数名 + action」调用，REST 按路径调用，
@@ -42,7 +42,8 @@ var ACTION_MAP = {
 
 /**
  * 决定用哪个后端。
- * 有 apiBaseUrl 就走自建服务器，否则走云开发。
+ * 有 apiBaseUrl 就走自建服务器，否则就是「没有后端」
+ * （云开发那套早已下线，见 git 历史）。
  */
 function initCloud(app) {
   if (config.apiBaseUrl) {
@@ -52,7 +53,7 @@ function initCloud(app) {
     ensureLogin();
     return true;
   }
-  // 没配后端地址就当「没有后端」：取数一律回落本地演示数据
+  // 没配后端地址就当「没有后端」：取数一律失败，页面显示失败态
   backend = 'none';
   initError = 'NO_API_BASE_URL';
   return false;

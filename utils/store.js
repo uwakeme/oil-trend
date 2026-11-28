@@ -103,6 +103,12 @@ function getHistory() {
   return Array.isArray(history) ? history : [];
 }
 
+/**
+ * 写本机提醒记录。
+ *
+ * ⚠️ 目前**没有调用方** —— 提醒记录只从后端取，
+ *    这里留着是为将来「本机留一份离线记录」用。
+ */
 function saveHistory(history) {
   write(HISTORY_KEY, history || []);
   return history;

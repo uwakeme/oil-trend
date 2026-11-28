@@ -5,7 +5,7 @@
  *   { ok: true,  data: {...} }
  *   { ok: false, message: '...', code: '...' }
  *
- * 前端 utils/cloud.js 按这个约定解析，ok === false 会 reject 并回落演示源。
+ * 前端 utils/cloud.js 按这个约定解析，ok === false 会 reject，页面显示失败态。
  */
 const express = require('express');
 const query = require('../services/query');

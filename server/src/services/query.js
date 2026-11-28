@@ -3,7 +3,7 @@
  *
  * ⚠️ 返回结构必须与小程序端的期望完全一致 ——
  * 小程序端 utils/api.js 的 hasExpected() 会检查必需字段，
- * 结构对不上就会静默回落到演示数据，页面看着正常但实际没走服务端。
+ * 结构对不上前端就会 reject，页面显示失败态，而不是假装拿到了数据。
  *
  * 查询逻辑与早期云函数实现一致（云函数已下线，见 git 历史），算法部分没改。
  */
@@ -372,7 +372,7 @@ function actionHome(payload) {
         region: { code: region.code, fullName: region.name + ' · ' + region.city },
         prices: priceList,
         // 合法为空要标出来：这个地区还没采到价，不是「后端没给成」。
-        // 前端据此显示空态，而不是回落演示数据。
+        // 前端据此显示空态，而不是当成失败。
         empty: priceList.length === 0,
         window: buildWindow(win, lastAdjustDate),
         trend30: trend30,

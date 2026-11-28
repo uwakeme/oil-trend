@@ -3,15 +3,15 @@
  *
  * 为什么要有这个：
  *   现有自检都是「各数据源自证」——
- *   selftest.js 比的是 data/ 演示源 vs 服务端生成物（数值，不是接口结构），
+ *   selftest.js 比的是测试夹具算出的价格 vs 各省基准价（数值，不是接口结构），
  *   check-openapi.js 用 pg-mem 直插 approved 夹具（绕过了真实产出链路）。
  *   两边都盖不住「前端消费后端响应」这一层：
  *   字段名漂一个（latestNotice / notice）、空值当 0（0.00 元）、
- *   来源标错（演示数据说成实时），这些 bug 静态检查一个都查不出来。
+ *   来源标错（空态说成实时），这些 bug 静态检查一个都查不出来。
  *
  * ⚠️ 上一版的做法是错的（复审 R1-1）：
  *   stubApi() 直接覆盖 utils/api.js 的 module.exports，
- *   于是 fetchWithFallback / hasExpected / stampSource **一次都没跑过**；
+ *   于是 fetchBackend / hasExpected / stampSource **一次都没跑过**；
  *   通知还是手插 reviewStatus:'approved' 夹具，把整条机器判定链路绕开了。
  *   那样测出来的「契约一致」是假的一致 —— 字段漂了也照样全绿。
  *
@@ -19,7 +19,7 @@
  *   1. pg-mem 起真库、真灌数据、真起 Express，真发 HTTP 请求；
  *   2. wx.request 桩**把请求转发到本地测试服务**（只换 origin），
  *      utils/cloud.js 与 utils/api.js 一行不改地真跑：
- *      action→路径映射、超时、错误分支、来源归一、回落演示源全是真的；
+ *      action→路径映射、超时、错误分支、来源归一、失败态全是真的；
  *   3. 正式通知由**采集链路**产出：
  *      sources.PARSERS.ndrcNotice(正文) → collector.saveNotice →
  *      机器判定 review_status → 对外可见性。不再手插 approved 夹具；
@@ -357,7 +357,7 @@ var FIXED_TODAY = '2026-11-18';
  * 把系统时间钉在 FIXED_TODAY。
  *
  * 装上之后不摘 —— 这个脚本跑完就结束，摘不摘没有区别；
- * 但必须**在灌数据之前**装：演示数据集的日期是按「今天 - 锚点」平移的，
+ * 但必须**在灌数据之前**装：测试夹具的日期是按「今天 - 锚点」平移的，
  * 钉住时钟才能让夹具里的每个日期都固定下来。
  */
 function installFixedClock(dateStr) {
@@ -653,7 +653,7 @@ async function main() {
     // ⚠️ 这条是「api 层真的跑过」的证据：
     // 后端给的 mode 是 'server'，只有 stampSource 归一成 'live' 才会是这句文案。
     // 页面直接吃后端原始响应时这里是「数据来源待确认」。
-    check('来源被归一成 live（说明 fetchWithFallback/stampSource 真跑了）',
+    check('来源被归一成 live（说明 fetchBackend/stampSource 真跑了）',
       indexPage.data.sourceText === '真实数据 · 服务端定时采集',
       indexPage.data.sourceText);
     check('首页来源不报警（真实数据）', indexPage.data.sourceWarn === false);
@@ -1107,8 +1107,8 @@ async function main() {
     check('fmt.priceValue(null) 是 null（区别于 0）', fmt.priceValue(null) === null);
     check('fmt.priceValue(0) 是 0', fmt.priceValue(0) === 0);
 
-    /* ===== 五、后端「合法为空」不该回落演示源 ===== */
-    console.log('\n--- 合法为空：显示空态，不回落演示数据 ---');
+    /* ===== 五、后端「合法为空」不该当成失败 ===== */
+    console.log('\n--- 合法为空：显示空态，不当成失败 ---');
     // 模拟「这个地区还没采到挂牌价」：把该地区的当前价删掉
     await dbModule.pool.query('DELETE FROM oil_prices WHERE region_code = $1', ['440000']);
     var emptyPage = makeInstance(loadPageDef('pages/index/index.js'));
@@ -1116,7 +1116,7 @@ async function main() {
     check('没采到价时首页进入空态', emptyPage.data.dataEmpty === true);
     check('没采到价时不显示 0.00 的假价格',
       allText(emptyPage.data).indexOf('0.00') < 0, allText(emptyPage.data).slice(0, 200));
-    check('没采到价时来源仍是真实数据（没有回落演示源）',
+    check('没采到价时来源仍是真实数据（不是兜底数据）',
       emptyPage.data.sourceText === '真实数据 · 服务端定时采集',
       emptyPage.data.sourceText);
     check('没采到价时不报警', emptyPage.data.sourceWarn === false);

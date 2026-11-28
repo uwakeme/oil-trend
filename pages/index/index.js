@@ -357,7 +357,7 @@ Page({
       trendDirection = diff > 0 ? 'up' : (diff < 0 ? 'down' : 'flat');
     }
 
-    // 演示源给 latestNotice，后端给 notice —— 两个字段名都认
+    // 后端同时给 notice 与 latestNotice —— 两个字段名都认
     var latest = payload.latestNotice || payload.notice || {};
     // 没有 id 也没有标题 = 压根没有正式通知（不是「有通知但内容缺了」）。
     // 这种时候不能再拼「--」日期和「调价幅度待公布」那种半吊子文案。
