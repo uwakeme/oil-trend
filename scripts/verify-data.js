@@ -148,14 +148,30 @@ Object.keys(markets.MARKET_INSTRUMENTS).forEach(function (symbol) {
   out.push('  ' + inst.code + ' ' + inst.name + '  口径: ' + inst.basis);
   if (!inst.basis || !inst.note) problems.push(inst.code + ' 缺口径说明');
 });
+// 真实行情的曲线形状：老数据是隔几天的日线，最近两天全是分钟线。
+// 中档标签必须取**时间中点**：按序号取会落在图最右边那个点上 ——
+// 标签画在图的正中间，说的却是图右边那个点的时刻，看着像标错，其实是指错了点。
 var axisSample = [
-  { date: '2026-11-28 09:30:00', value: 83.1 },
-  { date: '2026-11-28 15:00:00', value: 83.3 }
+  { date: '2026-11-20 07:00:00', value: 88.0 },
+  { date: '2026-11-22 07:00:00', value: 88.5 },
+  { date: '2026-11-24 07:00:00', value: 89.0 },
+  { date: '2026-11-26 07:00:00', value: 89.5 },
+  { date: '2026-11-28 07:00:00', value: 90.1 },
+  { date: '2026-11-28 07:05:00', value: 90.2 },
+  { date: '2026-11-28 07:10:00', value: 90.3 },
+  { date: '2026-11-28 07:15:00', value: 90.4 }
 ];
 out.push('  轴标签(1日): ' + markets.marketAxisLabels(axisSample, '1d').join(' / '));
 out.push('  轴标签(1月): ' + markets.marketAxisLabels(axisSample, '1m').join(' / '));
 if (markets.marketAxisLabels(axisSample, '1d').length !== 3) {
   problems.push('行情轴标签不是三档');
+}
+var axisMonth = markets.marketAxisLabels(axisSample, '1m');
+if (axisMonth[0] !== '11-20' || axisMonth[2] !== '11-28') {
+  problems.push('行情轴标签首尾不是首尾点：' + axisMonth.join(' / '));
+}
+if (axisMonth[1] !== '11-24') {
+  problems.push('行情轴标签中档没取时间中点（应 11-24，按序号取会错成 11-28）：' + axisMonth.join(' / '));
 }
 
 /* ============================================================
